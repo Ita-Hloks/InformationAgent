@@ -5,7 +5,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from ..analysis import LLMAnalyst, evaluate_analysis
-from ..collection import fetch_feed
+from ..collection import fetch_feed, normalize_evidence
 from ..contracts import Analysis, Evidence, Report, RunStatus
 from ..processing import filter_evidence
 
@@ -40,7 +40,8 @@ def run(
         except Exception as exc:
             errors.append(f"{feed_url}：{exc}")
 
-    evidence = filter_evidence(topic, collected, limit=limit)
+    normalized = normalize_evidence(collected)
+    evidence = filter_evidence(topic, normalized, limit=limit)
     if not evidence:
         analysis = Analysis(
             summary="没有找到与主题匹配的 RSS 内容。",

@@ -22,7 +22,8 @@ class Evidence:
     source_url: str
     title: str
     content: str
-    published_at: str | None = None
+    published_at: datetime | None = None
+    content_truncated: bool = False
     collected_at: datetime = field(default_factory=utc_now)
     id: int | None = None
 

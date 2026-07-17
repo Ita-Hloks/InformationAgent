@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 import feedparser
 
 from ..contracts import Evidence
+from .normalization import normalize_url, parse_published_at
 
 MAX_FEED_BYTES = 5 * 1024 * 1024
 
@@ -37,15 +38,15 @@ def fetch_feed(url: str, timeout: float = 15) -> list[Evidence]:
 
     items: list[Evidence] = []
     for entry in feed.entries:
-        source_url = str(entry.get("link") or entry.get("id") or "").strip()
-        if not source_url:
+        source_url = normalize_url(str(entry.get("link") or entry.get("id") or ""))
+        if source_url is None:
             continue
         items.append(
             Evidence(
                 source_url=source_url,
                 title=_plain_text(str(entry.get("title") or "无标题")),
                 content=_entry_content(entry),
-                published_at=entry.get("published") or entry.get("updated"),
+                published_at=parse_published_at(entry.get("published") or entry.get("updated")),
             )
         )
     return items

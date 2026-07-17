@@ -21,8 +21,16 @@ def test_run_filters_deduplicates_and_evaluates() -> None:
     def collector(_: str, timeout: float) -> list[Evidence]:
         assert timeout > 0
         return [
-            Evidence("https://example.com/1", "AI 芯片发布", "新芯片用于推理"),
-            Evidence("https://example.com/1", "重复文章", "AI 芯片"),
+            Evidence(
+                "https://example.com/1?utm_source=first",
+                "AI 芯片发布",
+                "新芯片用于人工智能模型的高性能推理计算任务。",
+            ),
+            Evidence(
+                "https://example.com/1?utm_source=duplicate",
+                "重复文章",
+                "这是一篇需要通过规范化 URL 去重的 AI 芯片重复文章。",
+            ),
             Evidence("https://example.com/2", "天气", "今天晴天"),
         ]
 
@@ -44,7 +52,13 @@ def test_run_keeps_evidence_when_one_feed_and_model_fail() -> None:
     def collector(feed: str, _: float) -> list[Evidence]:
         if feed == "broken":
             raise RuntimeError("连接失败")
-        return [Evidence("https://example.com/ok", "RSS 技术", "RSS 订阅")]
+        return [
+            Evidence(
+                "https://example.com/ok",
+                "RSS 技术",
+                "RSS 订阅可以持续提供结构化的信息来源和文章摘要。",
+            )
+        ]
 
     report = run(
         "RSS",

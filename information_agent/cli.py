@@ -26,6 +26,8 @@ def main() -> None:
     payload["status"] = report.status.value
     for item in payload["evidence"]:
         item["collected_at"] = item["collected_at"].isoformat()
+        if item["published_at"] is not None:
+            item["published_at"] = item["published_at"].isoformat()
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
