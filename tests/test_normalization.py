@@ -36,3 +36,9 @@ def test_normalize_evidence_filters_short_content_and_truncates_long_content() -
     assert len(normalized[0].content) == 500
     assert normalized[0].content_truncated is True
     assert normalized[0].published_at == datetime(2026, 7, 17, 2, 30, tzinfo=UTC)
+
+
+def test_published_time_is_normalized_to_utc_seconds() -> None:
+    parsed = parse_published_at("2026-07-17T10:30:45.123456+08:00")
+
+    assert parsed == datetime(2026, 7, 17, 2, 30, 45, tzinfo=UTC)

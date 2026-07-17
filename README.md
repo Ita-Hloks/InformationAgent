@@ -29,6 +29,7 @@ information_agent/
 │   └── evaluation.py         # 引用链评估
 ├── orchestration/
 │   └── workflow.py           # 总时限与固定执行顺序
+├── serialization.py          # 统一报告 JSON 数据契约
 └── cli.py                    # 命令行参数和 JSON 输出
 ```
 
@@ -52,11 +53,15 @@ cli
 
 - 只保留 HTTP(S) 文章链接，移除 URL 片段、`utm_*` 和常见点击跟踪参数
 - 正文少于 20 字时丢弃；超过 500 字时截断并设置 `content_truncated`
-- 将可识别的发布时间转换为 UTC `datetime`，JSON 输出时使用 ISO 8601 字符串
+- 将可识别的发布时间转换为 UTC `datetime`，内部精度固定到秒
 - 规范化 URL 后再去重，避免跟踪参数导致同一文章被重复处理
 - 相关度分数使用标题命中数乘以 2，再加正文命中数
 
 截断不会删除来源 URL，后续网页采集器可以根据 URL 二次获取正文；当前 LLM 调用本身不会访问网页。
+
+报告中的 `published_at` 和 `collected_at` 统一使用 RFC 3339 UTC 字符串，固定精确到秒，
+例如 `2026-07-17T02:30:45+00:00`。缺失的 `published_at` 输出为 `null`，不使用空字符串；
+无时区的内部 `datetime` 会在序列化时被拒绝。
 
 ## 安装与运行
 

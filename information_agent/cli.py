@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict
 
 from dotenv import load_dotenv
 
 from .orchestration import run
+from .serialization import report_to_payload
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -22,12 +22,7 @@ def main() -> None:
     load_dotenv()
     args = build_parser().parse_args()
     report = run(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
-    payload = asdict(report)
-    payload["status"] = report.status.value
-    for item in payload["evidence"]:
-        item["collected_at"] = item["collected_at"].isoformat()
-        if item["published_at"] is not None:
-            item["published_at"] = item["published_at"].isoformat()
+    payload = report_to_payload(report)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 

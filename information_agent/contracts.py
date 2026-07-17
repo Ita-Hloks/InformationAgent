@@ -8,7 +8,7 @@ from enum import StrEnum
 
 
 def utc_now() -> datetime:
-    return datetime.now(UTC)
+    return datetime.now(UTC).replace(microsecond=0)
 
 
 class RunStatus(StrEnum):

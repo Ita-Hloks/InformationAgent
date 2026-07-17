@@ -71,7 +71,7 @@ def parse_published_at(value: str | datetime | None) -> datetime | None:
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+    return parsed.astimezone(UTC).replace(microsecond=0)
 
 
 def normalize_evidence(
