@@ -1,6 +1,6 @@
 # Information Agent
 
-输入研究主题和 RSS 地址，获取真实内容，筛选相关证据，调用 LLM 生成带引用的中文结论，最后验证引用链并输出 JSON
+输入研究主题和 RSS 地址，可以只采集并筛选文章，也可以继续调用 LLM 生成带引用的中文结论
 
 ```text
 主题 + 一个或多个 RSS 地址
@@ -10,9 +10,8 @@
   → 将完整正文拆分为每批最多 500 字
   → 按主题加权筛选并按 URL 去重
   → 分配证据编号
-  → LLM 生成结构化结论
-  → 校验引用编号和文字支持
-  → JSON 报告
+  ├→ collect：输出文章后结束
+  └→ analyze：LLM 生成结构化结论并校验引用
 ```
 
 ## 项目结构
@@ -29,7 +28,8 @@ information_agent/
 │   ├── llm.py           	 # LLM 调用及 JSON 解析
 │   └── evaluation.py         # 引用链评估
 ├── orchestration/
-│   └── workflow.py           # 总时限与固定执行顺序
+│   ├── collection.py         # 独立非 LLM 采集工作流
+│   └── workflow.py           # 采集后继续执行 LLM 分析
 ├── serialization.py          # 统一报告 JSON 数据契约
 └── cli.py                    # 命令行参数和 JSON 输出
 ```
@@ -82,19 +82,38 @@ python -m venv .venv
 Copy-Item .env.example .env
 ```
 
-`.env` 并填写
+只有 `analyze` 命令需要填写 `.env` 中的 LLM 配置。
 
-运行 RSS：
+只运行非 LLM 采集、规范化和筛选：
 
 ```powershell
 .\.venv\Scripts\python.exe -m information_agent.cli `
+  collect `
   "AI" `
   "https://hnrss.org/frontpage" `
   --timeout 60 `
   --limit 5
 ```
 
-最终 JSON 包含：
+`collect` 输出：
+
+- `topic`：研究主题
+- `status`：采集状态；无匹配文章但来源正常时仍为 `completed`
+- `articles`：规范化并按相关度排序的文章
+- `errors`：RSS 采集错误
+
+采集后继续运行 LLM 分析：
+
+```powershell
+.\.venv\Scripts\python.exe -m information_agent.cli `
+  analyze `
+  "AI" `
+  "https://hnrss.org/frontpage" `
+  --timeout 60 `
+  --limit 5
+```
+
+`analyze` 输出：
 
 - `status`：完成程度
 - `analysis`：总述、带引用结论和不确定性
@@ -103,6 +122,14 @@ Copy-Item .env.example .env
 - `errors`：RSS 或模型错误
 
 ## 开发与验收
+
+只验证非 LLM 采集流程：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider tests\test_collection.py
+```
+
+运行完整测试和编译检查：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest --basetemp .test-tmp -p no:cacheprovider

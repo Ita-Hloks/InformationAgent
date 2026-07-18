@@ -68,6 +68,14 @@ class Evaluation:
 
 
 @dataclass(slots=True)
+class CollectionReport:
+    topic: str
+    status: RunStatus
+    articles: list[Evidence]
+    errors: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class Report:
     topic: str
     status: RunStatus

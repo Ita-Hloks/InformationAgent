@@ -4,7 +4,7 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 
-from .contracts import PROJECT_TIMEZONE, Report
+from .contracts import PROJECT_TIMEZONE, CollectionReport, Report
 
 
 def format_json_datetime(value: datetime) -> str:
@@ -16,8 +16,19 @@ def format_json_datetime(value: datetime) -> str:
 def report_to_payload(report: Report) -> dict[str, Any]:
     payload = asdict(report)
     payload["status"] = report.status.value
-    for item in payload["evidence"]:
+    _serialize_articles(payload["evidence"])
+    return payload
+
+
+def collection_report_to_payload(report: CollectionReport) -> dict[str, Any]:
+    payload = asdict(report)
+    payload["status"] = report.status.value
+    _serialize_articles(payload["articles"])
+    return payload
+
+
+def _serialize_articles(articles: list[dict[str, Any]]) -> None:
+    for item in articles:
         item["collected_at"] = format_json_datetime(item["collected_at"])
         if item["published_at"] is not None:
             item["published_at"] = format_json_datetime(item["published_at"])
-    return payload
