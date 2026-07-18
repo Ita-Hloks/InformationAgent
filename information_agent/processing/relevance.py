@@ -4,6 +4,8 @@ import re
 
 from ..contracts import Evidence
 
+TITLE_TERM_WEIGHT = 2
+
 
 def _terms(text: str) -> set[str]:
     terms = set(re.findall(r"[A-Za-z0-9_-]{2,}", text.casefold()))
@@ -22,8 +24,12 @@ def filter_evidence(topic: str, items: list[Evidence], limit: int = 20) -> list[
         if item.source_url in seen_urls:
             continue
         seen_urls.add(item.source_url)
-        score = len(topic_terms & _terms(f"{item.title} {item.content}"))
+        title_score = len(topic_terms & _terms(item.title))
+        content_score = len(topic_terms & _terms(item.content))
+        score = TITLE_TERM_WEIGHT * title_score + content_score
         if score:
+            maximum_score = (TITLE_TERM_WEIGHT + 1) * len(topic_terms)
+            item.relevance_score = round(score / maximum_score, 4)
             ranked.append((score, -position, item))
 
     ranked.sort(key=lambda value: (value[0], value[1]), reverse=True)
