@@ -28,6 +28,8 @@ def filter_evidence(topic: str, items: list[Evidence], limit: int = 20) -> list[
         content_score = len(topic_terms & _terms(item.content))
         score = TITLE_TERM_WEIGHT * title_score + content_score
         if score:
+            maximum_score = (TITLE_TERM_WEIGHT + 1) * len(topic_terms)
+            item.relevance_score = round(score / maximum_score, 4)
             ranked.append((score, -position, item))
 
     ranked.sort(key=lambda value: (value[0], value[1]), reverse=True)

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 
+PROJECT_TIMEZONE = timezone(timedelta(hours=8), name="UTC+08:00")
 
-def utc_now() -> datetime:
-    return datetime.now(UTC).replace(microsecond=0)
+
+def project_now() -> datetime:
+    return datetime.now(PROJECT_TIMEZONE).replace(microsecond=0)
 
 
 class RunStatus(StrEnum):
@@ -17,14 +19,30 @@ class RunStatus(StrEnum):
     FAILED = "failed"
 
 
+class ContentType(StrEnum):
+    RSS_CONTENT = "rss_content"
+    RSS_SUMMARY = "rss_summary"
+    UNKNOWN = "unknown"
+
+
 @dataclass(slots=True)
 class Evidence:
     source_url: str
     title: str
     content: str
+    article_id: str = ""
+    feed_url: str | None = None
+    site_url: str | None = None
+    source_type: str = "rss"
+    author: str | None = None
+    categories: list[str] = field(default_factory=list)
+    language: str | None = None
+    content_type: ContentType = ContentType.UNKNOWN
+    relevance_score: float = 0.0
+    processing_warnings: list[str] = field(default_factory=list)
+    content_chunks: list[str] = field(default_factory=list)
     published_at: datetime | None = None
-    content_truncated: bool = False
-    collected_at: datetime = field(default_factory=utc_now)
+    collected_at: datetime = field(default_factory=project_now)
     id: int | None = None
 
 

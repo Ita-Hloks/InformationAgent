@@ -7,7 +7,7 @@ from information_agent.contracts import Analysis, Evaluation, Evidence, Report, 
 from information_agent.serialization import format_json_datetime, report_to_payload
 
 
-def test_report_payload_uses_utc_minute_precision() -> None:
+def test_report_payload_uses_project_timezone_minute_precision() -> None:
     source_timezone = timezone(timedelta(hours=8))
     evidence = Evidence(
         "https://example.com/article",
@@ -26,8 +26,8 @@ def test_report_payload_uses_utc_minute_precision() -> None:
 
     payload = report_to_payload(report)
 
-    assert payload["evidence"][0]["published_at"] == "2026-07-17T02:30+00:00"
-    assert payload["evidence"][0]["collected_at"] == "2026-07-17T03:00+00:00"
+    assert payload["evidence"][0]["published_at"] == "2026-07-17T10:30+08:00"
+    assert payload["evidence"][0]["collected_at"] == "2026-07-17T11:00+08:00"
     json.dumps(payload)
 
 

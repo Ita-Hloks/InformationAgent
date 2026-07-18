@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
-from .contracts import Report
+from .contracts import PROJECT_TIMEZONE, Report
 
 
 def format_json_datetime(value: datetime) -> str:
     if value.tzinfo is None:
         raise ValueError("JSON 时间必须包含时区")
-    return value.astimezone(UTC).isoformat(timespec="minutes")
+    return value.astimezone(PROJECT_TIMEZONE).isoformat(timespec="minutes")
 
 
 def report_to_payload(report: Report) -> dict[str, Any]:

@@ -26,8 +26,8 @@ class LLMAnalyst:
         evidence_text = "\n\n".join(
             f'<evidence id="{item.id}">\n'
             f"标题：{item.title}\n来源：{item.source_url}\n"
-            f"内容状态：{'已截断' if item.content_truncated else '完整'}\n"
-            f"内容：{item.content[:500]}\n"
+            f"内容批次：1/{len(item.content_chunks) or 1}\n"
+            f"内容：{item.content_chunks[0] if item.content_chunks else item.content[:500]}\n"
             "</evidence>"
             for item in evidence
         )
