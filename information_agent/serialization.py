@@ -10,7 +10,7 @@ from .contracts import Report
 def format_json_datetime(value: datetime) -> str:
     if value.tzinfo is None:
         raise ValueError("JSON 时间必须包含时区")
-    return value.astimezone(UTC).isoformat(timespec="seconds")
+    return value.astimezone(UTC).isoformat(timespec="minutes")
 
 
 def report_to_payload(report: Report) -> dict[str, Any]:
