@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 
 import aiohttp
 
-from ..collection import fetch_feed, fetch_feed_async, normalize_evidence
+from ..collection import augment_evidence, fetch_feed, fetch_feed_async, normalize_evidence
 from ..contracts import CollectionReport, Evidence, RunStatus
 from ..processing import filter_evidence
 
@@ -125,7 +125,12 @@ async def _execute_collection_async(
         collected.extend(source_items)
         successful_sources += 1
 
-    articles = filter_evidence(topic, normalize_evidence(collected), limit=limit)
+    remaining_after_feeds = max(0.0, deadline - time.monotonic())
+    if remaining_after_feeds <= 0:
+        augmented = collected
+    else:
+        augmented = augment_evidence(collected, timeout=min(15.0, remaining_after_feeds))
+    articles = filter_evidence(topic, normalize_evidence(augmented), limit=limit)
     status = _collection_status(errors, successful_sources)
     report = CollectionReport(topic, status, articles, errors)
     return _CollectionExecution(report, max(0.0, deadline - time.monotonic()))
