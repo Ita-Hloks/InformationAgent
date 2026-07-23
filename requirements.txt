@@ -1,3 +1,4 @@
 feedparser>=6.0,<7
 openai>=2.0,<3
 python-dotenv>=1.0,<2
+trafilatura>=2.0,<3
