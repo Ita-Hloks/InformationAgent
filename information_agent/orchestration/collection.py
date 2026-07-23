@@ -101,7 +101,10 @@ def _execute_collection(
             successful_sources += 1
 
     remaining_after_feeds = max(0.0, deadline - time.monotonic())
-    augmented = augment_evidence(collected, timeout=min(15.0, remaining_after_feeds) if remaining_after_feeds > 0 else 15.0)
+    if remaining_after_feeds <= 0:
+        augmented = collected
+    else:
+        augmented = augment_evidence(collected, timeout=min(15.0, remaining_after_feeds))
     articles = filter_evidence(topic, normalize_evidence(augmented), limit=limit)
     status = _collection_status(errors, successful_sources)
     report = CollectionReport(topic, status, articles, errors)
