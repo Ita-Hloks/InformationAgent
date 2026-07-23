@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -47,13 +48,13 @@ def fetch_article(
             if content_length and int(content_length) > MAX_PAGE_BYTES:
                 return None
             payload = response.read(MAX_PAGE_BYTES + 1)
+            guessed = _guess_encoding(response)
     except (URLError, OSError, ValueError):
         return None
 
     if len(payload) > MAX_PAGE_BYTES:
         return None
 
-    guessed = _guess_encoding(response)
     for encoding in (guessed, "utf-8", "gbk", "gb2312", "latin-1"):
         if encoding is None:
             continue
@@ -71,23 +72,43 @@ def fetch_article(
     return text
 
 
+DEFAULT_MAX_WORKERS = 6
+
+
+def _augment_item(item: Evidence, timeout: float) -> Evidence:
+    content = fetch_article(item.source_url, timeout=timeout)
+    if content is None:
+        return item
+    warnings = list(item.processing_warnings)
+    warnings.append("正文从网页抓取补充")
+    return replace(
+        item, content=content, content_type=ContentType.RSS_CONTENT, processing_warnings=warnings
+    )
+
+
 def augment_evidence(
     items: list[Evidence],
     *,
     timeout: float = 15,
+    max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> list[Evidence]:
-    augmented: list[Evidence] = []
-    for item in items:
+    to_fetch: list[tuple[int, Evidence]] = []
+    results: dict[int, Evidence] = {}
+
+    for i, item in enumerate(items):
         if item.content_type != ContentType.RSS_SUMMARY:
-            augmented.append(item)
-            continue
+            results[i] = item
+        else:
+            to_fetch.append((i, item))
 
-        content = fetch_article(item.source_url, timeout=timeout)
-        if content is None:
-            augmented.append(item)
-            continue
+    if not to_fetch:
+        return items
 
-        augmented.append(
-            replace(item, content=content, content_type=ContentType.RSS_CONTENT)
-        )
-    return augmented
+    worker_count = min(max_workers, len(to_fetch))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map = {executor.submit(_augment_item, item, timeout): i for i, item in to_fetch}
+        for future in as_completed(future_map):
+            i = future_map[future]
+            results[i] = future.result()
+
+    return [results[i] for i in range(len(items))]

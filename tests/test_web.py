@@ -177,6 +177,7 @@ def test_augment_evidence_skips_non_summary_items() -> None:
     assert len(result) == 1
     assert result[0].content_type is ContentType.RSS_CONTENT
     assert result[0].content == "这是完整的正文内容。"
+    assert result[0].processing_warnings == []
 
 
 def test_augment_evidence_fetches_for_summary_items(monkeypatch) -> None:
@@ -197,6 +198,7 @@ def test_augment_evidence_fetches_for_summary_items(monkeypatch) -> None:
     assert len(result) == 1
     assert result[0].content == "这是从网页抓取到的完整正文内容。"
     assert result[0].content_type is ContentType.RSS_CONTENT
+    assert "正文从网页抓取补充" in result[0].processing_warnings
 
 
 def test_augment_evidence_preserves_other_fields(monkeypatch) -> None:
@@ -229,6 +231,7 @@ def test_augment_evidence_preserves_other_fields(monkeypatch) -> None:
     assert item.categories == ["科技"]
     assert item.language == "zh-cn"
     assert item.content_type is ContentType.RSS_CONTENT
+    assert "正文从网页抓取补充" in item.processing_warnings
 
 
 def test_augment_evidence_falls_back_when_fetch_fails(monkeypatch) -> None:
@@ -249,6 +252,7 @@ def test_augment_evidence_falls_back_when_fetch_fails(monkeypatch) -> None:
     assert len(result) == 1
     assert result[0].content == "原始摘要内容"
     assert result[0].content_type is ContentType.RSS_SUMMARY
+    assert result[0].processing_warnings == []
 
 
 def test_augment_evidence_mixed_items(monkeypatch) -> None:
@@ -263,15 +267,20 @@ def test_augment_evidence_mixed_items(monkeypatch) -> None:
     monkeypatch.setattr("information_agent.collection.web.fetch_article", fake_fetch)
 
     items = [
-        Evidence("https://example.com/has-content", "A", "已有正文", content_type=ContentType.RSS_CONTENT),
+        Evidence(
+            "https://example.com/has-content", "A", "已有正文", content_type=ContentType.RSS_CONTENT
+        ),
         Evidence("https://example.com/success", "B", "摘要", content_type=ContentType.RSS_SUMMARY),
         Evidence("https://example.com/fail", "C", "摘要", content_type=ContentType.RSS_SUMMARY),
     ]
     result = augment_evidence(items)
     assert len(result) == 3
     assert result[0].content == "已有正文"
+    assert result[0].processing_warnings == []
     assert result[1].content == "来自 https://example.com/success 的正文。"
     assert result[1].content_type is ContentType.RSS_CONTENT
+    assert "正文从网页抓取补充" in result[1].processing_warnings
     assert result[2].content == "摘要"
     assert result[2].content_type is ContentType.RSS_SUMMARY
-    assert fetched_urls == ["https://example.com/success", "https://example.com/fail"]
+    assert result[2].processing_warnings == []
+    assert set(fetched_urls) == {"https://example.com/success", "https://example.com/fail"}
