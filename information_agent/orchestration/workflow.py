@@ -5,7 +5,13 @@ from typing import Protocol
 from ..analysis import LLMAnalyst, evaluate_analysis
 from ..collection import fetch_feed
 from ..contracts import Analysis, Evidence, Report, RunStatus
-from .collection import Collector, _execute_collection
+from .collection import (
+    DEFAULT_MAX_ATTEMPTS,
+    DEFAULT_MAX_WORKERS,
+    DEFAULT_SOURCE_TIMEOUT_SECONDS,
+    Collector,
+    _execute_collection,
+)
 
 
 class Analyst(Protocol):
@@ -20,6 +26,9 @@ def run(
     limit: int = 20,
     collector: Collector = fetch_feed,
     analyst: Analyst | None = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
 ) -> Report:
     execution = _execute_collection(
         topic,
@@ -27,6 +36,9 @@ def run(
         timeout_seconds=timeout_seconds,
         limit=limit,
         collector=collector,
+        max_workers=max_workers,
+        max_attempts=max_attempts,
+        source_timeout_seconds=source_timeout_seconds,
     )
     collection_report = execution.report
     evidence = collection_report.articles
