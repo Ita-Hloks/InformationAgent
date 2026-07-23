@@ -6,15 +6,33 @@ from information_agent.contracts import ContentType, Evidence
 
 def test_extract_text_strips_script_and_style() -> None:
     html = (
-        "<html><script>alert('xss')</script>"
-        "<style>.color{}</style>"
-        "<body><p>正文 &amp; 内容</p></body></html>"
+        "<html><head>"
+        "<script>alert('xss')</script>"
+        "<style>.nav{color:red}</style>"
+        "</head><body>"
+        "<article><p>正文 &amp; 内容。这篇正文用于测试提取功能是否正常工作。</p></article>"
+        "</body></html>"
     )
-    assert _extract_text(html) == "正文 & 内容"
+    result = _extract_text(html)
+    assert result is not None
+    assert "正文" in result
+    assert "&" in result
+    assert "内容" in result
+    assert "xss" not in result
+    assert "nav" not in result
 
 
 def test_extract_text_decodes_html_entities() -> None:
-    assert _extract_text("&lt;tag&gt; &amp; &quot;text&quot;") == '<tag> & "text"'
+    html = (
+        "<html><body><article>"
+        "<p>&lt;tag&gt; &amp; &quot;text&quot; 这篇正文用于测试实体解码功能。</p>"
+        "</article></body></html>"
+    )
+    result = _extract_text(html)
+    assert result is not None
+    assert "<tag>" in result
+    assert "&" in result
+    assert '"text"' in result
 
 
 def test_fetch_article_returns_text_for_valid_html(monkeypatch) -> None:
@@ -29,7 +47,7 @@ def test_fetch_article_returns_text_for_valid_html(monkeypatch) -> None:
 
         def read(self, _: int) -> bytes:
             return (
-                b"<html><body><p>"
+                b"<html><body><article><p>"
                 b"\xe8\xbf\x99\xe6\x98\xaf\xe4\xb8\x80\xe7\xaf\x87"
                 b"\xe7\x94\xa8\xe4\xba\x8e\xe6\xb5\x8b\xe8\xaf\x95"
                 b"\xe6\x96\x87\xe7\xab\xa0\xe6\xad\xa3\xe6\x96\x87"
@@ -40,7 +58,7 @@ def test_fetch_article_returns_text_for_valid_html(monkeypatch) -> None:
                 b"\xe4\xbb\xa5\xe9\x80\x9a\xe8\xbf\x87\xe6\x9c\x80"
                 b"\xe5\xb0\x8f\xe5\xad\x97\xe6\x95\xb0\xe9\x99\x90"
                 b"\xe5\x88\xb6\xe7\x9a\x84\xe9\xaa\x8c\xe8\xaf\x81"
-                b"\xe3\x80\x82</p></body></html>"
+                b"\xe3\x80\x82</p></article></body></html>"
             )
 
     def fake_urlopen(request, timeout: float) -> FakeResponse:
@@ -67,8 +85,8 @@ def test_fetch_article_decodes_gbk(monkeypatch) -> None:
 
         def read(self, _: int) -> bytes:
             return (
-                "<html><body><p>这是一篇用于测试中文编码的完整文章正文内容"
-                "包含足够长度以通过最小字数限制的验证。</p></body></html>"
+                "<html><body><article><p>这是一篇用于测试中文编码的完整文章正文内容"
+                "包含足够长度以通过最小字数限制的验证。</p></article></body></html>"
             ).encode("gbk")
 
     def fake_urlopen(request, timeout: float) -> FakeResponse:
@@ -92,7 +110,7 @@ def test_fetch_article_returns_none_for_short_content(monkeypatch) -> None:
             return None
 
         def read(self, _: int) -> bytes:
-            return b"<html><body><p>a</p></body></html>"
+            return b"<html><body><article><p>a</p></article></body></html>"
 
     def fake_urlopen(request, timeout: float) -> FakeResponse:
         return FakeResponse()

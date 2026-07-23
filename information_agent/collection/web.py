@@ -1,12 +1,12 @@
-"""网页正文抓取。与 rss.py 配合：RSS 只给摘要时，用此模块补全文。"""
+"""Web article fetching. Fetches full text for RSS summary items."""
 
 from __future__ import annotations
 
-import re
 from dataclasses import replace
-from html import unescape
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+
+import trafilatura
 
 from ..contracts import ContentType, Evidence
 from .normalization import normalize_url
@@ -15,12 +15,17 @@ MAX_PAGE_BYTES = 2 * 1024 * 1024
 MIN_CONTENT_CHARS = 20
 
 
-def _extract_text(html: str) -> str:
-    text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = unescape(text)
-    return re.sub(r"\s+", " ", text).strip()
+def _guess_encoding(response) -> str | None:
+    content_type = response.headers.get("Content-Type", "")
+    for part in content_type.split(";"):
+        part = part.strip()
+        if part.startswith("charset="):
+            return part.removeprefix("charset=").strip()
+    return None
+
+
+def _extract_text(html: str) -> str | None:
+    return trafilatura.extract(html)
 
 
 def fetch_article(
@@ -48,17 +53,20 @@ def fetch_article(
     if len(payload) > MAX_PAGE_BYTES:
         return None
 
-    for encoding in ("utf-8", "gbk", "gb2312", "latin-1"):
+    guessed = _guess_encoding(response)
+    for encoding in (guessed, "utf-8", "gbk", "gb2312", "latin-1"):
+        if encoding is None:
+            continue
         try:
             html = payload.decode(encoding)
             break
-        except UnicodeDecodeError:
+        except (UnicodeDecodeError, LookupError):
             continue
     else:
         return None
 
     text = _extract_text(html)
-    if len(text) < MIN_CONTENT_CHARS:
+    if text is None or len(text) < MIN_CONTENT_CHARS:
         return None
     return text
 
