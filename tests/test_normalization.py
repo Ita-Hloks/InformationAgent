@@ -1,12 +1,9 @@
 from datetime import datetime
 
 from information_agent.collection import RawFeedEntry
-from information_agent.collection.normalization import (
-    normalize_evidence,
-    normalize_url,
-    parse_published_at,
-)
+from information_agent.common import normalize_url
 from information_agent.contracts import PROJECT_TIMEZONE
+from information_agent.normalization import normalize_evidence, parse_published_at
 
 
 def test_normalize_url_removes_tracking_and_rejects_non_http() -> None:

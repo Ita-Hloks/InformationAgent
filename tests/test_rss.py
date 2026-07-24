@@ -1,6 +1,6 @@
-from information_agent.collection.normalization import normalize_evidence
 from information_agent.collection.rss import _plain_text, fetch_feed
 from information_agent.contracts import ContentType
+from information_agent.normalization import normalize_evidence
 
 
 def test_plain_text_removes_html_and_decodes_entities() -> None:

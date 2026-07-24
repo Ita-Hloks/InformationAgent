@@ -1,6 +1,6 @@
 from information_agent.collection import RawFeedEntry
-from information_agent.collection.normalization import normalize_evidence
-from information_agent.processing.relevance import filter_evidence
+from information_agent.normalization import normalize_evidence
+from information_agent.selection import filter_evidence
 
 
 def normalized(source_url: str, title: str, content: str):

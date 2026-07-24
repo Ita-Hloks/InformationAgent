@@ -8,9 +8,9 @@ from urllib.request import Request, urlopen
 import aiohttp
 import feedparser
 
+from ..common import normalize_url
 from ..contracts import ContentType
 from .models import RawFeedEntry
-from .normalization import normalize_url, parse_published_at
 
 MAX_FEED_BYTES = 5 * 1024 * 1024
 
@@ -99,7 +99,7 @@ def _parse_feed(payload: bytes, normalized_feed_url: str) -> list[RawFeedEntry]:
                 categories=tuple(_entry_categories(entry)),
                 language=_normalize_language(str(entry.get("language") or "")) or feed_language,
                 content_type=content_type,
-                published_at=parse_published_at(entry.get("published") or entry.get("updated")),
+                published_at=entry.get("published") or entry.get("updated"),
             )
         )
     return items

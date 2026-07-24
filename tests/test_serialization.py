@@ -4,8 +4,8 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 
 from information_agent.collection import RawFeedEntry
-from information_agent.collection.normalization import normalize_evidence
 from information_agent.contracts import Analysis, Evaluation, Report, RunStatus
+from information_agent.normalization import normalize_evidence
 from information_agent.selection import SelectedEvidence
 from information_agent.serialization import format_json_datetime, report_to_payload
 

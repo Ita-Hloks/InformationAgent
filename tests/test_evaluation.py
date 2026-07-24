@@ -1,7 +1,7 @@
 from information_agent.analysis.evaluation import evaluate_analysis
 from information_agent.collection import RawFeedEntry
-from information_agent.collection.normalization import normalize_evidence
 from information_agent.contracts import Analysis, Claim
+from information_agent.normalization import normalize_evidence
 from information_agent.selection import SelectedEvidence
 
 

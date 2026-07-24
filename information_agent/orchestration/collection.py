@@ -8,9 +8,10 @@ from urllib.error import HTTPError, URLError
 
 import aiohttp
 
-from ..collection import RawFeedEntry, fetch_feed, fetch_feed_async, normalize_evidence
+from ..collection import RawFeedEntry, fetch_feed, fetch_feed_async
 from ..contracts import CollectionReport, RunStatus
-from ..processing import filter_evidence
+from ..normalization import normalize_evidence
+from ..selection import filter_evidence
 
 Collector = Callable[[str, float], list[RawFeedEntry]]
 SourceResult = tuple[str, list[RawFeedEntry], Exception | None]

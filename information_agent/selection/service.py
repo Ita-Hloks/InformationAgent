@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 from ..normalization import NormalizedArticle
-from ..selection import SelectedEvidence
+from .models import SelectedEvidence
 
 TITLE_TERM_WEIGHT = 2
 

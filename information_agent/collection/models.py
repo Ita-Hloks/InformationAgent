@@ -20,5 +20,5 @@ class RawFeedEntry:
     categories: tuple[str, ...] = field(default_factory=tuple)
     language: str | None = None
     content_type: ContentType = ContentType.UNKNOWN
-    published_at: datetime | None = None
+    published_at: str | datetime | None = None
     collected_at: datetime = field(default_factory=project_now)

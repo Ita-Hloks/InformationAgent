@@ -4,54 +4,14 @@ import hashlib
 import re
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from ..collection.models import RawFeedEntry
+from ..common import normalize_url
 from ..contracts import PROJECT_TIMEZONE
-from ..normalization import NormalizedArticle
-from .models import RawFeedEntry
+from .models import NormalizedArticle
 
 MIN_CONTENT_CHARS = 20
 CONTENT_BATCH_CHARS = 500
-TRACKING_QUERY_KEYS = {
-    "dclid",
-    "fbclid",
-    "gclid",
-    "igshid",
-    "mc_cid",
-    "mc_eid",
-    "mkt_tok",
-    "msclkid",
-}
-
-
-def normalize_url(value: str) -> str | None:
-    try:
-        parsed = urlsplit(value.strip())
-        port = parsed.port
-    except ValueError:
-        return None
-
-    scheme = parsed.scheme.casefold()
-    if scheme not in {"http", "https"} or not parsed.hostname:
-        return None
-    if parsed.username or parsed.password:
-        return None
-
-    hostname = parsed.hostname.casefold()
-    if ":" in hostname:
-        hostname = f"[{hostname}]"
-    if port and not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
-        hostname = f"{hostname}:{port}"
-
-    query = urlencode(
-        [
-            (key, query_value)
-            for key, query_value in parse_qsl(parsed.query, keep_blank_values=True)
-            if not _is_tracking_key(key)
-        ],
-        doseq=True,
-    )
-    return urlunsplit((scheme, hostname, parsed.path or "/", query, ""))
 
 
 def parse_published_at(value: str | datetime | None) -> datetime | None:
@@ -101,11 +61,9 @@ def normalize_evidence(
         content_chunks = _split_content(content, content_batch_chars)
         processing_warnings: list[str] = []
         if len(content_chunks) > 1:
-            batch_warning = (
+            processing_warnings.append(
                 f"正文已拆分为 {len(content_chunks)} 个批次，每批最多 {content_batch_chars} 字"
             )
-            if batch_warning not in processing_warnings:
-                processing_warnings.append(batch_warning)
 
         normalized.append(
             NormalizedArticle(
@@ -127,11 +85,6 @@ def normalize_evidence(
             )
         )
     return normalized
-
-
-def _is_tracking_key(key: str) -> bool:
-    normalized = key.casefold()
-    return normalized.startswith("utm_") or normalized in TRACKING_QUERY_KEYS
 
 
 def _normalize_text(value: str) -> str:
