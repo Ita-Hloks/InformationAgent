@@ -56,7 +56,7 @@ def test_fetch_feed_populates_article_and_source_fields(monkeypatch) -> None:
     assert item.feed_url == "https://example.com/rss.xml"
     assert item.site_url == "https://example.com/"
     assert item.author == "示例作者"
-    assert item.categories == ["人工智能"]
+    assert item.categories == ("人工智能",)
     assert item.language == "zh-cn"
     assert item.content_type is ContentType.RSS_CONTENT
     assert item.article_id.startswith("article-")

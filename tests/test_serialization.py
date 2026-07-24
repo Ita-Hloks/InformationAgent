@@ -3,13 +3,21 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from information_agent.contracts import Analysis, Evaluation, Evidence, Report, RunStatus
+from information_agent.collection import RawFeedEntry
+from information_agent.collection.normalization import normalize_evidence
+from information_agent.contracts import Analysis, Evaluation, Report, RunStatus
+from information_agent.selection import SelectedEvidence
 from information_agent.serialization import format_json_datetime, report_to_payload
+
+
+def selected_evidence(source_url: str, title: str, content: str, **metadata) -> SelectedEvidence:
+    article = normalize_evidence([RawFeedEntry(source_url, title, content, **metadata)])[0]
+    return SelectedEvidence(article=article, evidence_id=1, relevance_score=1.0)
 
 
 def test_report_payload_uses_project_timezone_minute_precision() -> None:
     source_timezone = timezone(timedelta(hours=8))
-    evidence = Evidence(
+    evidence = selected_evidence(
         "https://example.com/article",
         "时间格式",
         "这是一段长度超过二十个字符并用于验证时间序列化格式的正文内容。",
@@ -32,7 +40,7 @@ def test_report_payload_uses_project_timezone_minute_precision() -> None:
 
 
 def test_report_payload_preserves_missing_published_time() -> None:
-    evidence = Evidence(
+    evidence = selected_evidence(
         "https://example.com/article",
         "缺少发布时间",
         "这是一段长度超过二十个字符并且没有发布时间的正文内容。",

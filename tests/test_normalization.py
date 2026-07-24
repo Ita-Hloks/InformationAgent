@@ -1,11 +1,12 @@
 from datetime import datetime
 
+from information_agent.collection import RawFeedEntry
 from information_agent.collection.normalization import (
     normalize_evidence,
     normalize_url,
     parse_published_at,
 )
-from information_agent.contracts import PROJECT_TIMEZONE, Evidence
+from information_agent.contracts import PROJECT_TIMEZONE
 
 
 def test_normalize_url_removes_tracking_and_rejects_non_http() -> None:
@@ -20,8 +21,8 @@ def test_normalize_url_removes_tracking_and_rejects_non_http() -> None:
 
 def test_normalize_evidence_filters_short_content_and_batches_long_content() -> None:
     items = [
-        Evidence("https://example.com/short", "短内容", "不足二十字"),
-        Evidence(
+        RawFeedEntry("https://example.com/short", "短内容", "不足二十字"),
+        RawFeedEntry(
             "https://example.com/long?utm_medium=rss",
             " 长文章 ",
             "正文 " * 200,
@@ -38,10 +39,8 @@ def test_normalize_evidence_filters_short_content_and_batches_long_content() -> 
     assert len(normalized[0].content_chunks) == 2
     assert all(len(chunk) <= 500 for chunk in normalized[0].content_chunks)
     assert "".join(normalized[0].content_chunks) == normalized[0].content
-    assert normalized[0].processing_warnings == ["正文已拆分为 2 个批次，每批最多 500 字"]
+    assert normalized[0].processing_warnings == ("正文已拆分为 2 个批次，每批最多 500 字",)
 
-    renormalized = normalize_evidence(normalized)
-    assert renormalized[0].processing_warnings == normalized[0].processing_warnings
     assert normalized[0].published_at == datetime(2026, 7, 17, 10, 30, tzinfo=PROJECT_TIMEZONE)
 
 

@@ -8,7 +8,8 @@ from urllib.request import Request, urlopen
 import aiohttp
 import feedparser
 
-from ..contracts import ContentType, Evidence
+from ..contracts import ContentType
+from .models import RawFeedEntry
 from .normalization import normalize_url, parse_published_at
 
 MAX_FEED_BYTES = 5 * 1024 * 1024
@@ -19,7 +20,7 @@ def _plain_text(value: str) -> str:
     return re.sub(r"\s+", " ", unescape(without_tags)).strip()
 
 
-def fetch_feed(feed_url: str, timeout: float = 15) -> list[Evidence]:
+def fetch_feed(feed_url: str, timeout: float = 15) -> list[RawFeedEntry]:
     normalized_feed_url = normalize_url(feed_url)
     if normalized_feed_url is None:
         raise ValueError("RSS 地址必须使用 http 或 https")
@@ -44,7 +45,7 @@ async def fetch_feed_async(
     timeout: float,
     *,
     session: aiohttp.ClientSession,
-) -> list[Evidence]:
+) -> list[RawFeedEntry]:
     """Fetch one RSS feed with an aiohttp total request timeout."""
     normalized_feed_url = normalize_url(feed_url)
     if normalized_feed_url is None:
@@ -74,12 +75,12 @@ async def _read_feed_payload(response: aiohttp.ClientResponse) -> bytes:
     return bytes(payload)
 
 
-def _parse_feed(payload: bytes, normalized_feed_url: str) -> list[Evidence]:
+def _parse_feed(payload: bytes, normalized_feed_url: str) -> list[RawFeedEntry]:
     feed = feedparser.parse(payload)
     if getattr(feed, "bozo", False) and not feed.entries:
         raise ValueError(f"RSS 解析失败：{feed.bozo_exception}")
 
-    items: list[Evidence] = []
+    items: list[RawFeedEntry] = []
     site_url = normalize_url(str(feed.feed.get("link") or ""))
     feed_language = _normalize_language(str(feed.feed.get("language") or ""))
     for entry in feed.entries:
@@ -88,14 +89,14 @@ def _parse_feed(payload: bytes, normalized_feed_url: str) -> list[Evidence]:
             continue
         content, content_type = _entry_content(entry)
         items.append(
-            Evidence(
+            RawFeedEntry(
                 source_url=source_url,
                 title=_plain_text(str(entry.get("title") or "无标题")),
                 content=content,
                 feed_url=normalized_feed_url,
                 site_url=site_url,
                 author=_optional_text(entry.get("author") or entry.get("dc_creator")),
-                categories=_entry_categories(entry),
+                categories=tuple(_entry_categories(entry)),
                 language=_normalize_language(str(entry.get("language") or "")) or feed_language,
                 content_type=content_type,
                 published_at=parse_published_at(entry.get("published") or entry.get("updated")),

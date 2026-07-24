@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .selection import SelectedEvidence
 
 PROJECT_TIMEZONE = timezone(timedelta(hours=8), name="UTC+08:00")
 
@@ -23,27 +27,6 @@ class ContentType(StrEnum):
     RSS_CONTENT = "rss_content"
     RSS_SUMMARY = "rss_summary"
     UNKNOWN = "unknown"
-
-
-@dataclass(slots=True)
-class Evidence:
-    source_url: str
-    title: str
-    content: str
-    article_id: str = ""
-    feed_url: str | None = None
-    site_url: str | None = None
-    source_type: str = "rss"
-    author: str | None = None
-    categories: list[str] = field(default_factory=list)
-    language: str | None = None
-    content_type: ContentType = ContentType.UNKNOWN
-    relevance_score: float = 0.0
-    processing_warnings: list[str] = field(default_factory=list)
-    content_chunks: list[str] = field(default_factory=list)
-    published_at: datetime | None = None
-    collected_at: datetime = field(default_factory=project_now)
-    id: int | None = None
 
 
 @dataclass(slots=True)
@@ -71,7 +54,7 @@ class Evaluation:
 class CollectionReport:
     topic: str
     status: RunStatus
-    articles: list[Evidence]
+    articles: list[SelectedEvidence]
     errors: list[str] = field(default_factory=list)
 
 
@@ -80,6 +63,6 @@ class Report:
     topic: str
     status: RunStatus
     analysis: Analysis
-    evidence: list[Evidence]
+    evidence: list[SelectedEvidence]
     evaluation: Evaluation
     errors: list[str] = field(default_factory=list)

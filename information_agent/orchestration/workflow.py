@@ -4,7 +4,8 @@ from typing import Protocol
 
 from ..analysis import LLMAnalyst, evaluate_analysis
 from ..collection import fetch_feed
-from ..contracts import Analysis, Evidence, Report, RunStatus
+from ..contracts import Analysis, Report, RunStatus
+from ..selection import SelectedEvidence
 from .collection import (
     DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_WORKERS,
@@ -15,7 +16,7 @@ from .collection import (
 
 
 class Analyst(Protocol):
-    def analyze(self, topic: str, evidence: list[Evidence], timeout: float) -> Analysis: ...
+    def analyze(self, topic: str, evidence: list[SelectedEvidence], timeout: float) -> Analysis: ...
 
 
 def run(

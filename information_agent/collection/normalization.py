@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import replace
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from ..contracts import PROJECT_TIMEZONE, Evidence
+from ..contracts import PROJECT_TIMEZONE
+from ..normalization import NormalizedArticle
+from .models import RawFeedEntry
 
 MIN_CONTENT_CHARS = 20
 CONTENT_BATCH_CHARS = 500
@@ -76,15 +77,15 @@ def parse_published_at(value: str | datetime | None) -> datetime | None:
 
 
 def normalize_evidence(
-    items: list[Evidence],
+    items: list[RawFeedEntry],
     *,
     min_content_chars: int = MIN_CONTENT_CHARS,
     content_batch_chars: int = CONTENT_BATCH_CHARS,
-) -> list[Evidence]:
+) -> list[NormalizedArticle]:
     if min_content_chars <= 0 or content_batch_chars <= 0:
         raise ValueError("正文长度限制无效")
 
-    normalized: list[Evidence] = []
+    normalized: list[NormalizedArticle] = []
     for item in items:
         source_url = normalize_url(item.source_url)
         if source_url is None:
@@ -98,7 +99,7 @@ def normalize_evidence(
             continue
 
         content_chunks = _split_content(content, content_batch_chars)
-        processing_warnings = list(item.processing_warnings)
+        processing_warnings: list[str] = []
         if len(content_chunks) > 1:
             batch_warning = (
                 f"正文已拆分为 {len(content_chunks)} 个批次，每批最多 {content_batch_chars} 字"
@@ -107,19 +108,22 @@ def normalize_evidence(
                 processing_warnings.append(batch_warning)
 
         normalized.append(
-            replace(
-                item,
-                article_id=item.article_id or _article_id(source_url),
+            NormalizedArticle(
+                article_id=_article_id(source_url),
                 source_url=source_url,
                 feed_url=feed_url,
                 site_url=site_url,
                 source_type=item.source_type.strip().casefold() or "rss",
                 title=title,
                 content=content,
-                content_chunks=content_chunks,
+                author=item.author,
+                categories=tuple(item.categories),
+                language=item.language,
+                content_type=item.content_type,
+                content_chunks=tuple(content_chunks),
                 published_at=parse_published_at(item.published_at),
                 collected_at=parse_published_at(item.collected_at) or item.collected_at,
-                processing_warnings=processing_warnings,
+                processing_warnings=tuple(processing_warnings),
             )
         )
     return normalized

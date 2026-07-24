@@ -1,9 +1,11 @@
-from information_agent.contracts import Analysis, Claim, Evidence, RunStatus
+from information_agent.collection import RawFeedEntry
+from information_agent.contracts import Analysis, Claim, RunStatus
 from information_agent.orchestration import run
+from information_agent.selection import SelectedEvidence
 
 
 class FakeAnalyst:
-    def analyze(self, topic: str, evidence: list[Evidence], timeout: float) -> Analysis:
+    def analyze(self, topic: str, evidence: list[SelectedEvidence], timeout: float) -> Analysis:
         assert topic == "AI 芯片"
         assert timeout > 0
         return Analysis(
@@ -13,25 +15,25 @@ class FakeAnalyst:
 
 
 class FailingAnalyst:
-    def analyze(self, topic: str, evidence: list[Evidence], timeout: float) -> Analysis:
+    def analyze(self, topic: str, evidence: list[SelectedEvidence], timeout: float) -> Analysis:
         raise RuntimeError("模型不可用")
 
 
 def test_run_filters_deduplicates_and_evaluates() -> None:
-    def collector(_: str, timeout: float) -> list[Evidence]:
+    def collector(_: str, timeout: float) -> list[RawFeedEntry]:
         assert timeout > 0
         return [
-            Evidence(
+            RawFeedEntry(
                 "https://example.com/1?utm_source=first",
                 "AI 芯片发布",
                 "新芯片用于人工智能模型的高性能推理计算任务。",
             ),
-            Evidence(
+            RawFeedEntry(
                 "https://example.com/1?utm_source=duplicate",
                 "重复文章",
                 "这是一篇需要通过规范化 URL 去重的 AI 芯片重复文章。",
             ),
-            Evidence("https://example.com/2", "天气", "今天晴天"),
+            RawFeedEntry("https://example.com/2", "天气", "今天晴天"),
         ]
 
     report = run(
@@ -49,11 +51,11 @@ def test_run_filters_deduplicates_and_evaluates() -> None:
 
 
 def test_run_keeps_evidence_when_one_feed_and_model_fail() -> None:
-    def collector(feed: str, _: float) -> list[Evidence]:
+    def collector(feed: str, _: float) -> list[RawFeedEntry]:
         if feed == "broken":
             raise RuntimeError("连接失败")
         return [
-            Evidence(
+            RawFeedEntry(
                 "https://example.com/ok",
                 "RSS 技术",
                 "RSS 订阅可以持续提供结构化的信息来源和文章摘要。",
@@ -75,8 +77,8 @@ def test_run_keeps_evidence_when_one_feed_and_model_fail() -> None:
 
 
 def test_run_skips_analyst_without_matching_evidence() -> None:
-    def collector(_: str, __: float) -> list[Evidence]:
-        return [Evidence("https://example.com/weather", "天气", "今天晴天")]
+    def collector(_: str, __: float) -> list[RawFeedEntry]:
+        return [RawFeedEntry("https://example.com/weather", "天气", "今天晴天")]
 
     report = run("AI", ["feed"], collector=collector, analyst=FailingAnalyst())
 
