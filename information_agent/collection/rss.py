@@ -5,6 +5,7 @@ from html import unescape
 from typing import Any
 from urllib.request import Request, urlopen
 
+import aiohttp
 import feedparser
 
 from ..contracts import ContentType, Evidence
@@ -35,6 +36,45 @@ def fetch_feed(feed_url: str, timeout: float = 15) -> list[Evidence]:
     if len(payload) > MAX_FEED_BYTES:
         raise ValueError("RSS 响应超过 5 MiB 限制")
 
+    return _parse_feed(payload, normalized_feed_url)
+
+
+async def fetch_feed_async(
+    feed_url: str,
+    timeout: float,
+    *,
+    session: aiohttp.ClientSession,
+) -> list[Evidence]:
+    """Fetch one RSS feed with an aiohttp total request timeout."""
+    normalized_feed_url = normalize_url(feed_url)
+    if normalized_feed_url is None:
+        raise ValueError("RSS 地址必须使用 http 或 https")
+
+    request_timeout = aiohttp.ClientTimeout(total=timeout)
+    async with session.get(
+        normalized_feed_url,
+        headers={"User-Agent": "InformationAgent/0.1 RSS-MVP"},
+        timeout=request_timeout,
+    ) as response:
+        response.raise_for_status()
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > MAX_FEED_BYTES:
+            raise ValueError("RSS 响应超过 5 MiB 限制")
+        payload = await _read_feed_payload(response)
+
+    return _parse_feed(payload, normalized_feed_url)
+
+
+async def _read_feed_payload(response: aiohttp.ClientResponse) -> bytes:
+    payload = bytearray()
+    async for chunk in response.content.iter_chunked(64 * 1024):
+        payload.extend(chunk)
+        if len(payload) > MAX_FEED_BYTES:
+            raise ValueError("RSS 响应超过 5 MiB 限制")
+    return bytes(payload)
+
+
+def _parse_feed(payload: bytes, normalized_feed_url: str) -> list[Evidence]:
     feed = feedparser.parse(payload)
     if getattr(feed, "bozo", False) and not feed.entries:
         raise ValueError(f"RSS 解析失败：{feed.bozo_exception}")
