@@ -26,7 +26,10 @@ def _guess_encoding(response) -> str | None:
 
 
 def _extract_text(html: str) -> str | None:
-    return trafilatura.extract(html)
+    try:
+        return trafilatura.extract(html)
+    except Exception:
+        return None
 
 
 def fetch_article(
