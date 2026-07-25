@@ -1,9 +1,19 @@
 from information_agent.analysis.evaluation import evaluate_analysis
-from information_agent.contracts import Analysis, Claim, Evidence
+from information_agent.collection import RawFeedEntry
+from information_agent.contracts import Analysis, Claim
+from information_agent.normalization import normalize_evidence
+from information_agent.selection import SelectedEvidence
+
+
+def selected_evidence(
+    source_url: str, title: str, content: str, evidence_id: int
+) -> SelectedEvidence:
+    article = normalize_evidence([RawFeedEntry(source_url, title, content)], min_content_chars=1)[0]
+    return SelectedEvidence(article=article, evidence_id=evidence_id, relevance_score=1.0)
 
 
 def test_evaluation_detects_invalid_and_unsupported_citations() -> None:
-    evidence = Evidence("https://example.com/1", "AI 芯片", "用于模型推理", id=1)
+    evidence = selected_evidence("https://example.com/1", "AI 芯片", "用于模型推理", 1)
     analysis = Analysis(
         summary="测试",
         claims=[

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 
-from ..contracts import Analysis, Evaluation, Evidence
+from ..contracts import Analysis, Evaluation
+from ..selection import SelectedEvidence
 
 
 def _terms(text: str) -> set[str]:
@@ -13,11 +14,11 @@ def _terms(text: str) -> set[str]:
     return latin | chinese
 
 
-def evaluate_analysis(analysis: Analysis, evidence: list[Evidence]) -> Evaluation:
+def evaluate_analysis(analysis: Analysis, evidence: list[SelectedEvidence]) -> Evaluation:
     if not analysis.claims:
         return Evaluation(0.0, 0.0, 0.0, ["没有可评估的分析结论"])
 
-    evidence_by_id = {item.id: item for item in evidence if item.id is not None}
+    evidence_by_id = {item.id: item for item in evidence}
     cited_claims = 0
     citation_count = 0
     valid_citations = 0
