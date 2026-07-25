@@ -9,8 +9,9 @@ from urllib.request import Request, urlopen
 
 import trafilatura
 
-from ..contracts import ContentType, Evidence
-from .normalization import normalize_url
+from ..common import normalize_url
+from ..contracts import ContentType
+from .models import RawFeedEntry
 
 MAX_PAGE_BYTES = 2 * 1024 * 1024
 MIN_CONTENT_CHARS = 20
@@ -78,25 +79,21 @@ def fetch_article(
 DEFAULT_MAX_WORKERS = 6
 
 
-def _augment_item(item: Evidence, timeout: float) -> Evidence:
+def _augment_item(item: RawFeedEntry, timeout: float) -> RawFeedEntry:
     content = fetch_article(item.source_url, timeout=timeout)
     if content is None:
         return item
-    warnings = list(item.processing_warnings)
-    warnings.append("正文从网页抓取补充")
-    return replace(
-        item, content=content, content_type=ContentType.RSS_CONTENT, processing_warnings=warnings
-    )
+    return replace(item, content=content, content_type=ContentType.RSS_CONTENT)
 
 
 def augment_evidence(
-    items: list[Evidence],
+    items: list[RawFeedEntry],
     *,
     timeout: float = 15,
     max_workers: int = DEFAULT_MAX_WORKERS,
-) -> list[Evidence]:
-    to_fetch: list[tuple[int, Evidence]] = []
-    results: dict[int, Evidence] = {}
+) -> list[RawFeedEntry]:
+    to_fetch: list[tuple[int, RawFeedEntry]] = []
+    results: dict[int, RawFeedEntry] = {}
 
     for i, item in enumerate(items):
         if item.content_type != ContentType.RSS_SUMMARY:
