@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
-from ..collection.models import RawFeedEntry
+from ..collection import RawFeedEntry
 from ..common import normalize_url
 from ..contracts import PROJECT_TIMEZONE
 from .models import NormalizedArticle
