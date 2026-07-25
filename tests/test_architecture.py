@@ -9,8 +9,16 @@ ALLOWED_EXTERNAL_DEPENDENCIES = {
     "collection": {"common"},
     "normalization": {"common", "collection"},
     "selection": {"common", "normalization"},
+    "investigation": {"common", "selection"},
     "analysis": {"common", "selection"},
-    "orchestration": {"common", "collection", "normalization", "selection", "analysis"},
+    "orchestration": {
+        "common",
+        "collection",
+        "investigation",
+        "normalization",
+        "selection",
+        "analysis",
+    },
 }
 
 

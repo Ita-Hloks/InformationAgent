@@ -5,7 +5,11 @@ import json
 
 from dotenv import load_dotenv
 
-from .serialization import collection_report_to_payload, report_to_payload
+from .serialization import (
+    collection_report_to_payload,
+    planning_report_to_payload,
+    report_to_payload,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -15,14 +19,25 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_arguments(collect_parser, limit_help="最多输出的文章数")
     analyze_parser = commands.add_parser("analyze", help="采集后继续调用 LLM 分析")
     _add_common_arguments(analyze_parser, limit_help="最多送入模型的证据数")
+    plan_parser = commands.add_parser("plan", help="从筛选后的文章生成搜索计划")
+    _add_common_arguments(
+        plan_parser,
+        limit_help="最多检查的文章数（上限 5）",
+        default_limit=5,
+    )
     return parser
 
 
-def _add_common_arguments(parser: argparse.ArgumentParser, *, limit_help: str) -> None:
+def _add_common_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    limit_help: str,
+    default_limit: int = 20,
+) -> None:
     parser.add_argument("topic", help="研究主题，例如：AI Agent")
     parser.add_argument("feeds", nargs="+", help="一个或多个 RSS/Atom 地址")
     parser.add_argument("--timeout", type=float, default=60, help="总时限（秒）")
-    parser.add_argument("--limit", type=int, default=20, help=limit_help)
+    parser.add_argument("--limit", type=int, default=default_limit, help=limit_help)
 
 
 def main() -> None:
@@ -32,12 +47,18 @@ def main() -> None:
 
         report = collect(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
         payload = collection_report_to_payload(report)
-    else:
+    elif args.command == "analyze":
         from .orchestration import run
 
         load_dotenv()
         report = run(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
         payload = report_to_payload(report)
+    else:
+        from .orchestration import plan
+
+        load_dotenv()
+        report = plan(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
+        payload = planning_report_to_payload(report)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 

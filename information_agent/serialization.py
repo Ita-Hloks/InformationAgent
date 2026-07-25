@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .contracts import PROJECT_TIMEZONE, CollectionReport, Report
 from .selection import SelectedEvidence
+
+if TYPE_CHECKING:
+    from .investigation import PlanningReport
 
 
 def format_json_datetime(value: datetime) -> str:
@@ -26,6 +29,28 @@ def collection_report_to_payload(report: CollectionReport) -> dict[str, Any]:
     payload["status"] = report.status.value
     payload["articles"] = [_selected_evidence_to_payload(item) for item in report.articles]
     return payload
+
+
+def planning_report_to_payload(report: PlanningReport) -> dict[str, Any]:
+    return {
+        "topic": report.topic,
+        "status": report.status.value,
+        "articles": [_selected_evidence_to_payload(item) for item in report.articles],
+        "plans": [
+            {
+                "evidence_id": item.evidence_id,
+                "trigger_quote": item.trigger_quote,
+                "question": item.question,
+                "kind": item.kind.value,
+                "priority": item.priority,
+                "queries": [
+                    {"query": query.query, "purpose": query.purpose} for query in item.queries
+                ],
+            }
+            for item in report.plans
+        ],
+        "errors": report.errors,
+    }
 
 
 def _selected_evidence_to_payload(item: SelectedEvidence) -> dict[str, Any]:
