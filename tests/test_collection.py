@@ -7,7 +7,8 @@ from threading import Barrier, Thread
 from urllib.error import HTTPError, URLError
 
 from information_agent.cli import main
-from information_agent.contracts import CollectionReport, Evidence, RunStatus
+from information_agent.collection import RawFeedEntry
+from information_agent.contracts import CollectionReport, RunStatus
 from information_agent.orchestration.collection import collect
 from information_agent.serialization import collection_report_to_payload
 
@@ -15,9 +16,9 @@ from information_agent.serialization import collection_report_to_payload
 def test_collect_succeeds_without_llm_configuration(monkeypatch) -> None:
     monkeypatch.delenv("LLM_API_KEY", raising=False)
 
-    def collector(_: str, __: float) -> list[Evidence]:
+    def collector(_: str, __: float) -> list[RawFeedEntry]:
         return [
-            Evidence(
+            RawFeedEntry(
                 "https://example.com/article",
                 "AI 芯片发布",
                 "这是一篇长度超过二十个字符并与 AI 芯片主题相关的文章正文。",
@@ -33,7 +34,7 @@ def test_collect_succeeds_without_llm_configuration(monkeypatch) -> None:
 
 
 def test_collect_reports_partial_and_failed_sources() -> None:
-    def partly_working_collector(feed: str, _: float) -> list[Evidence]:
+    def partly_working_collector(feed: str, _: float) -> list[RawFeedEntry]:
         if feed == "broken":
             raise RuntimeError("连接失败")
         return []
@@ -48,9 +49,9 @@ def test_collect_reports_partial_and_failed_sources() -> None:
 
 
 def test_collect_with_no_matches_is_completed() -> None:
-    def collector(_: str, __: float) -> list[Evidence]:
+    def collector(_: str, __: float) -> list[RawFeedEntry]:
         return [
-            Evidence(
+            RawFeedEntry(
                 "https://example.com/weather",
                 "天气预报",
                 "这是一篇长度超过二十个字符但与研究主题完全无关的天气文章。",
@@ -66,10 +67,10 @@ def test_collect_with_no_matches_is_completed() -> None:
 def test_collect_fetches_six_sources_concurrently() -> None:
     all_sources_started = Barrier(6)
 
-    def collector(feed: str, _: float) -> list[Evidence]:
+    def collector(feed: str, _: float) -> list[RawFeedEntry]:
         all_sources_started.wait(timeout=2)
         return [
-            Evidence(
+            RawFeedEntry(
                 f"https://example.com/{feed}",
                 "AI source update",
                 "This AI source contains enough content to survive normalization.",
@@ -90,13 +91,13 @@ def test_collect_fetches_six_sources_concurrently() -> None:
 def test_collect_retries_transient_timeout_until_source_succeeds() -> None:
     attempts = 0
 
-    def collector(_: str, __: float) -> list[Evidence]:
+    def collector(_: str, __: float) -> list[RawFeedEntry]:
         nonlocal attempts
         attempts += 1
         if attempts < 3:
             raise TimeoutError("temporary timeout")
         return [
-            Evidence(
+            RawFeedEntry(
                 "https://example.com/recovered",
                 "AI source recovered",
                 "This AI source recovered and returned enough article content.",
@@ -120,7 +121,7 @@ def test_collect_applies_an_independent_timeout_to_each_source() -> None:
     both_sources_started = Barrier(2)
     observed_timeouts: dict[str, float] = {}
 
-    def collector(feed: str, timeout: float) -> list[Evidence]:
+    def collector(feed: str, timeout: float) -> list[RawFeedEntry]:
         observed_timeouts[feed] = timeout
         both_sources_started.wait(timeout=1)
         return []
@@ -142,14 +143,14 @@ def test_collect_applies_an_independent_timeout_to_each_source() -> None:
 def test_collect_retries_only_transient_http_errors() -> None:
     attempts: Counter[str] = Counter()
 
-    def collector(feed: str, _: float) -> list[Evidence]:
+    def collector(feed: str, _: float) -> list[RawFeedEntry]:
         attempts[feed] += 1
         if feed == "temporarily-unavailable" and attempts[feed] == 1:
             raise HTTPError(feed, 503, "Service Unavailable", {}, None)
         if feed == "missing":
             raise HTTPError(feed, 404, "Not Found", {}, None)
         return [
-            Evidence(
+            RawFeedEntry(
                 "https://example.com/recovered-http",
                 "AI service recovered",
                 "This AI service recovered after a transient HTTP failure.",
@@ -173,13 +174,13 @@ def test_collect_retries_only_transient_http_errors() -> None:
 def test_collect_retries_transient_network_errors() -> None:
     attempts = 0
 
-    def collector(_: str, __: float) -> list[Evidence]:
+    def collector(_: str, __: float) -> list[RawFeedEntry]:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             raise URLError("connection reset")
         return [
-            Evidence(
+            RawFeedEntry(
                 "https://example.com/recovered-network",
                 "AI network recovered",
                 "This AI source recovered after a transient network failure.",
@@ -202,7 +203,7 @@ def test_collect_retries_transient_network_errors() -> None:
 def test_collect_stops_retrying_when_total_deadline_expires() -> None:
     attempts = 0
 
-    def collector(_: str, __: float) -> list[Evidence]:
+    def collector(_: str, __: float) -> list[RawFeedEntry]:
         nonlocal attempts
         attempts += 1
         raise TimeoutError("still unavailable")

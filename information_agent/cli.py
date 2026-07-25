@@ -28,12 +28,12 @@ def _add_common_arguments(parser: argparse.ArgumentParser, *, limit_help: str) -
 def main() -> None:
     args = build_parser().parse_args()
     if args.command == "collect":
-        from .orchestration.collection import collect
+        from .orchestration import collect
 
         report = collect(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
         payload = collection_report_to_payload(report)
     else:
-        from .orchestration.workflow import run
+        from .orchestration import run
 
         load_dotenv()
         report = run(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)

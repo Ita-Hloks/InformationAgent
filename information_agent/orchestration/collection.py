@@ -8,12 +8,13 @@ from urllib.error import HTTPError, URLError
 
 import aiohttp
 
-from ..collection import augment_evidence, fetch_feed, fetch_feed_async, normalize_evidence
-from ..contracts import CollectionReport, Evidence, RunStatus
-from ..processing import filter_evidence
+from ..collection import RawFeedEntry, augment_evidence, fetch_feed, fetch_feed_async
+from ..contracts import CollectionReport, RunStatus
+from ..normalization import normalize_evidence
+from ..selection import filter_evidence
 
-Collector = Callable[[str, float], list[Evidence]]
-SourceResult = tuple[str, list[Evidence], Exception | None]
+Collector = Callable[[str, float], list[RawFeedEntry]]
+SourceResult = tuple[str, list[RawFeedEntry], Exception | None]
 DEFAULT_MAX_WORKERS = 6
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_SOURCE_TIMEOUT_SECONDS = 15.0
@@ -116,7 +117,7 @@ async def _execute_collection_async(
         source_results = await _await_source_results(tasks, deadline, timeout_error)
 
     errors: list[str] = []
-    collected: list[Evidence] = []
+    collected: list[RawFeedEntry] = []
     successful_sources = 0
     for feed_url, source_items, error in source_results:
         if error is not None:

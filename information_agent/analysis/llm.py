@@ -6,7 +6,8 @@ from typing import Any
 
 from openai import OpenAI
 
-from ..contracts import Analysis, Claim, Evidence
+from ..contracts import Analysis, Claim
+from ..selection import SelectedEvidence
 
 
 class LLMAnalyst:
@@ -19,7 +20,7 @@ class LLMAnalyst:
             base_url=os.getenv("LLM_BASE_URL", "https://api.openai.com/v1"),
         )
 
-    def analyze(self, topic: str, evidence: list[Evidence], timeout: float) -> Analysis:
+    def analyze(self, topic: str, evidence: list[SelectedEvidence], timeout: float) -> Analysis:
         if not evidence:
             raise ValueError("没有证据可供分析")
 
