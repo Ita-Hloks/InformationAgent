@@ -24,14 +24,7 @@ class LLMAnalyst:
         if not evidence:
             raise ValueError("没有证据可供分析")
 
-        evidence_text = "\n\n".join(
-            f'<evidence id="{item.id}">\n'
-            f"标题：{item.title}\n来源：{item.source_url}\n"
-            f"内容批次：1/{len(item.content_chunks) or 1}\n"
-            f"内容：{item.content_chunks[0] if item.content_chunks else item.content[:500]}\n"
-            "</evidence>"
-            for item in evidence
-        )
+        evidence_text = _analysis_input(evidence)
         response = self.client.with_options(timeout=timeout).chat.completions.create(
             model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
             response_format={"type": "json_object"},
@@ -78,6 +71,21 @@ def parse_analysis(raw: str) -> Analysis:
         claims=claims,
         uncertainties=[str(item).strip() for item in uncertainties_payload if str(item).strip()],
     )
+
+
+def _analysis_input(evidence: list[SelectedEvidence]) -> str:
+    batches: list[str] = []
+    for item in evidence:
+        content_chunks = item.content_chunks or (item.content[:500],)
+        total_chunks = len(content_chunks)
+        batches.extend(
+            f'<evidence id="{item.id}" batch="{index}/{total_chunks}">\n'
+            f"标题：{item.title}\n来源：{item.source_url}\n"
+            f"内容批次：{index}/{total_chunks}\n内容：{content}\n"
+            "</evidence>"
+            for index, content in enumerate(content_chunks, start=1)
+        )
+    return "\n\n".join(batches)
 
 
 def _parse_claim(item: dict[str, Any]) -> Claim:

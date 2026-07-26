@@ -2,7 +2,10 @@ import json
 
 import pytest
 
-from information_agent.analysis.llm import parse_analysis
+from information_agent.analysis.llm import _analysis_input, parse_analysis
+from information_agent.collection import RawFeedEntry
+from information_agent.normalization import normalize_evidence
+from information_agent.selection import SelectedEvidence
 
 
 def test_parse_analysis_validates_and_clamps_values() -> None:
@@ -25,3 +28,20 @@ def test_parse_analysis_validates_and_clamps_values() -> None:
 def test_parse_analysis_rejects_wrong_shape() -> None:
     with pytest.raises(ValueError, match="claims"):
         parse_analysis('{"claims": {}, "uncertainties": []}')
+
+
+def test_analysis_input_includes_each_content_batch_once() -> None:
+    content = "甲" * 500 + "乙" * 500 + "丙" * 500
+    article = normalize_evidence(
+        [RawFeedEntry("https://example.com/article", "分批文章", content)]
+    )[0]
+
+    prompt = _analysis_input([SelectedEvidence(article, evidence_id=1, relevance_score=1.0)])
+
+    assert prompt.count('<evidence id="1"') == 3
+    assert 'batch="1/3"' in prompt
+    assert 'batch="2/3"' in prompt
+    assert 'batch="3/3"' in prompt
+    assert article.content_chunks[0] in prompt
+    assert article.content_chunks[1] in prompt
+    assert article.content_chunks[2] in prompt
