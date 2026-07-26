@@ -83,6 +83,7 @@ Copy-Item .env.example .env
 ```
 
 只有 `analyze` 命令需要填写 `.env` 中的 LLM 配置。
+每次调用 LLM 时，请求消息、模型名以及响应或错误会备份到本地 `log/` 目录；该目录已被 Git 忽略。
 
 只运行非 LLM 采集、规范化和筛选：
 

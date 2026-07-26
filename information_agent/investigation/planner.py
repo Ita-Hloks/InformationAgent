@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from openai import OpenAI
 
+from ..common import request_json_completion
 from ..selection import SelectedEvidence
 from .models import QuestionKind, SearchPlan, SearchQuery
 
@@ -49,15 +50,17 @@ class LLMQuestionPlanner:
         if not selected:
             return []
 
-        response = self.client.with_options(timeout=timeout).chat.completions.create(
+        raw = request_json_completion(
+            client=self.client,
             model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
-            response_format={"type": "json_object"},
+            timeout=timeout,
+            stage="planning",
             messages=[
                 {"role": "system", "content": _system_prompt()},
                 {"role": "user", "content": _planning_input(topic, selected)},
             ],
         )
-        return parse_search_plans(response.choices[0].message.content or "{}", selected)
+        return parse_search_plans(raw, selected)
 
 
 def parse_search_plans(raw: str, evidence: list[SelectedEvidence]) -> list[SearchPlan]:

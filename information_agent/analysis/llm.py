@@ -6,6 +6,7 @@ from typing import Any
 
 from openai import OpenAI
 
+from ..common import request_json_completion
 from ..contracts import Analysis, Claim
 from ..selection import SelectedEvidence
 
@@ -25,9 +26,11 @@ class LLMAnalyst:
             raise ValueError("没有证据可供分析")
 
         evidence_text = _analysis_input(evidence)
-        response = self.client.with_options(timeout=timeout).chat.completions.create(
+        raw = request_json_completion(
+            client=self.client,
             model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
-            response_format={"type": "json_object"},
+            timeout=timeout,
+            stage="analysis",
             messages=[
                 {
                     "role": "system",
@@ -42,7 +45,7 @@ class LLMAnalyst:
                 {"role": "user", "content": f"研究主题：{topic}\n\n{evidence_text}"},
             ],
         )
-        return parse_analysis(response.choices[0].message.content or "{}")
+        return parse_analysis(raw)
 
 
 def parse_analysis(raw: str) -> Analysis:
