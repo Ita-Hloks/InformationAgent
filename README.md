@@ -66,7 +66,7 @@ cli
 
 每篇文章包含稳定 `article_id`、来源类型、作者、分类、语言、内容类型、相关度分数和处理警告。
 `content_type` 使用 `rss_content`、`rss_summary` 或 `unknown`。多批次正文不会被删除；
-当前 LLM 调用只读取第一批，后续 LLM 分批处理不属于本阶段。
+LLM 调用会按批次顺序传入完整正文，并标明每一批的编号。
 
 报告中的 `published_at` 和 `collected_at` 统一使用 RFC 3339 UTC+8 字符串，固定精确到分钟，
 例如 `2026-07-17T10:30+08:00`。缺失的 `published_at` 输出为 `null`，不使用空字符串；
@@ -83,6 +83,7 @@ Copy-Item .env.example .env
 ```
 
 只有 `analyze` 命令需要填写 `.env` 中的 LLM 配置。
+每次调用 LLM 时，请求消息、模型名以及响应或错误会备份到本地 `log/` 目录；该目录已被 Git 忽略。
 
 只运行非 LLM 采集、规范化和筛选：
 

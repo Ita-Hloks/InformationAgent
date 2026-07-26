@@ -6,6 +6,7 @@ from typing import Any
 
 from openai import OpenAI
 
+from ..common import request_json_completion
 from ..contracts import Analysis, Claim
 from ..selection import SelectedEvidence
 
@@ -24,17 +25,12 @@ class LLMAnalyst:
         if not evidence:
             raise ValueError("没有证据可供分析")
 
-        evidence_text = "\n\n".join(
-            f'<evidence id="{item.id}">\n'
-            f"标题：{item.title}\n来源：{item.source_url}\n"
-            f"内容批次：1/{len(item.content_chunks) or 1}\n"
-            f"内容：{item.content_chunks[0] if item.content_chunks else item.content[:500]}\n"
-            "</evidence>"
-            for item in evidence
-        )
-        response = self.client.with_options(timeout=timeout).chat.completions.create(
+        evidence_text = _analysis_input(evidence)
+        raw = request_json_completion(
+            client=self.client,
             model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
-            response_format={"type": "json_object"},
+            timeout=timeout,
+            stage="analysis",
             messages=[
                 {
                     "role": "system",
@@ -49,7 +45,7 @@ class LLMAnalyst:
                 {"role": "user", "content": f"研究主题：{topic}\n\n{evidence_text}"},
             ],
         )
-        return parse_analysis(response.choices[0].message.content or "{}")
+        return parse_analysis(raw)
 
 
 def parse_analysis(raw: str) -> Analysis:
@@ -78,6 +74,21 @@ def parse_analysis(raw: str) -> Analysis:
         claims=claims,
         uncertainties=[str(item).strip() for item in uncertainties_payload if str(item).strip()],
     )
+
+
+def _analysis_input(evidence: list[SelectedEvidence]) -> str:
+    batches: list[str] = []
+    for item in evidence:
+        content_chunks = item.content_chunks or (item.content[:500],)
+        total_chunks = len(content_chunks)
+        batches.extend(
+            f'<evidence id="{item.id}" batch="{index}/{total_chunks}">\n'
+            f"标题：{item.title}\n来源：{item.source_url}\n"
+            f"内容批次：{index}/{total_chunks}\n内容：{content}\n"
+            "</evidence>"
+            for index, content in enumerate(content_chunks, start=1)
+        )
+    return "\n\n".join(batches)
 
 
 def _parse_claim(item: dict[str, Any]) -> Claim:
