@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 
 import aiohttp
@@ -12,6 +10,7 @@ from ..collection import RawFeedEntry, augment_evidence, fetch_feed, fetch_feed_
 from ..contracts import CollectionReport, RunStatus
 from ..normalization import normalize_evidence
 from ..selection import filter_evidence
+from .execution import ExecutionBudget
 
 Collector = Callable[[str, float], list[RawFeedEntry]]
 SourceResult = tuple[str, list[RawFeedEntry], Exception | None]
@@ -19,12 +18,6 @@ DEFAULT_MAX_WORKERS = 6
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_SOURCE_TIMEOUT_SECONDS = 15.0
 INITIAL_RETRY_DELAY_SECONDS = 0.1
-
-
-@dataclass(slots=True)
-class _CollectionExecution:
-    report: CollectionReport
-    remaining_seconds: float
 
 
 def collect(
@@ -38,33 +31,35 @@ def collect(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
 ) -> CollectionReport:
-    return _execute_collection(
-        topic,
-        feeds,
+    from .runner import WorkflowRunner
+
+    return WorkflowRunner(
+        topic=topic,
+        feeds=feeds,
         timeout_seconds=timeout_seconds,
         limit=limit,
         collector=collector,
         max_workers=max_workers,
         max_attempts=max_attempts,
         source_timeout_seconds=source_timeout_seconds,
-    ).report
+    ).collect()
 
 
 def _execute_collection(
     topic: str,
     feeds: list[str],
     *,
-    timeout_seconds: float,
+    budget: ExecutionBudget,
     limit: int,
     collector: Collector,
     max_workers: int = DEFAULT_MAX_WORKERS,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
-) -> _CollectionExecution:
+) -> CollectionReport:
     _validate_input(
         topic,
         feeds,
-        timeout_seconds,
+        budget.total_seconds,
         limit,
         max_workers,
         max_attempts,
@@ -74,7 +69,7 @@ def _execute_collection(
         _execute_collection_async(
             topic,
             feeds,
-            timeout_seconds=timeout_seconds,
+            budget=budget,
             limit=limit,
             collector=collector,
             max_workers=max_workers,
@@ -88,14 +83,13 @@ async def _execute_collection_async(
     topic: str,
     feeds: list[str],
     *,
-    timeout_seconds: float,
+    budget: ExecutionBudget,
     limit: int,
     collector: Collector,
     max_workers: int,
     max_attempts: int,
     source_timeout_seconds: float,
-) -> _CollectionExecution:
-    deadline = time.monotonic() + timeout_seconds
+) -> CollectionReport:
     semaphore = asyncio.Semaphore(max_workers)
     timeout_error = TimeoutError("任务在完成 RSS 采集前超时")
 
@@ -104,7 +98,7 @@ async def _execute_collection_async(
             asyncio.create_task(
                 _collect_source(
                     feed_url,
-                    deadline=deadline,
+                    budget=budget,
                     collector=collector,
                     session=session,
                     semaphore=semaphore,
@@ -114,7 +108,7 @@ async def _execute_collection_async(
             ): feed_url
             for feed_url in feeds
         }
-        source_results = await _await_source_results(tasks, deadline, timeout_error)
+        source_results = await _await_source_results(tasks, budget, timeout_error)
 
     errors: list[str] = []
     collected: list[RawFeedEntry] = []
@@ -126,21 +120,20 @@ async def _execute_collection_async(
         collected.extend(source_items)
         successful_sources += 1
 
-    remaining_after_feeds = max(0.0, deadline - time.monotonic())
-    if remaining_after_feeds <= 0:
+    augmentation_timeout = budget.timeout_for(15.0)
+    if augmentation_timeout <= 0:
         augmented = collected
     else:
-        augmented = augment_evidence(collected, timeout=min(15.0, remaining_after_feeds))
+        augmented = augment_evidence(collected, timeout=augmentation_timeout)
     articles = filter_evidence(topic, normalize_evidence(augmented), limit=limit)
     status = _collection_status(errors, successful_sources)
-    report = CollectionReport(topic, status, articles, errors)
-    return _CollectionExecution(report, max(0.0, deadline - time.monotonic()))
+    return CollectionReport(topic, status, articles, errors)
 
 
 async def _collect_source(
     feed_url: str,
     *,
-    deadline: float,
+    budget: ExecutionBudget,
     collector: Collector,
     session: aiohttp.ClientSession,
     semaphore: asyncio.Semaphore,
@@ -149,11 +142,10 @@ async def _collect_source(
 ) -> SourceResult:
     async with semaphore:
         for attempt in range(max_attempts):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            request_timeout = budget.timeout_for(source_timeout_seconds)
+            if request_timeout <= 0:
                 return feed_url, [], TimeoutError("任务在完成 RSS 采集前超时")
             try:
-                request_timeout = min(source_timeout_seconds, remaining)
                 if collector is fetch_feed:
                     items = await fetch_feed_async(
                         feed_url,
@@ -171,7 +163,7 @@ async def _collect_source(
                     return feed_url, [], exc
                 retry_delay = min(
                     INITIAL_RETRY_DELAY_SECONDS * (2**attempt),
-                    max(0.0, deadline - time.monotonic()),
+                    budget.remaining(),
                 )
                 if retry_delay <= 0:
                     return feed_url, [], TimeoutError("任务在完成 RSS 采集前超时")
@@ -181,12 +173,12 @@ async def _collect_source(
 
 async def _await_source_results(
     tasks: dict[asyncio.Task[SourceResult], str],
-    deadline: float,
+    budget: ExecutionBudget,
     timeout_error: TimeoutError,
 ) -> list[SourceResult]:
     """Return completed source results and turn unfinished tasks into timeout errors."""
     try:
-        async with asyncio.timeout(max(0.0, deadline - time.monotonic())):
+        async with asyncio.timeout(budget.remaining()):
             return list(await asyncio.gather(*tasks))
     except TimeoutError:
         for task in tasks:

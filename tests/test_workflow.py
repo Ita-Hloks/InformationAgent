@@ -85,3 +85,23 @@ def test_run_skips_analyst_without_matching_evidence() -> None:
     assert report.status is RunStatus.PARTIAL
     assert report.analysis.summary == "没有找到与主题匹配的 RSS 内容。"
     assert report.errors == []
+
+
+def test_run_preserves_source_errors_when_every_feed_fails() -> None:
+    def collector(feed: str, _: float) -> list[RawFeedEntry]:
+        raise RuntimeError(f"{feed} 连接失败")
+
+    report = run(
+        "AI",
+        ["feed-a", "feed-b"],
+        collector=collector,
+        analyst=FailingAnalyst(),
+    )
+
+    assert report.status is RunStatus.PARTIAL
+    assert report.evidence == []
+    assert report.analysis.summary == "没有找到与主题匹配的 RSS 内容。"
+    assert report.errors == [
+        "feed-a：feed-a 连接失败",
+        "feed-b：feed-b 连接失败",
+    ]
