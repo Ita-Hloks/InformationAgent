@@ -42,8 +42,8 @@ def test_request_json_completion_backs_up_request_and_response(tmp_path, monkeyp
     assert len(backups) == 1
     payload = json.loads(backups[0].read_text(encoding="utf-8"))
     assert payload["status"] == "completed"
-    assert payload["model"] == "test-model"
-    assert payload["messages"] == messages
+    assert payload["request"]["model"] == "test-model"
+    assert payload["request"]["messages"] == messages
     assert payload["response"] == '{"plans": []}'
 
 
