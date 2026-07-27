@@ -10,6 +10,7 @@ from .serialization import (
     planning_report_to_payload,
     report_to_payload,
     search_answer_to_payload,
+    search_report_to_payload,
 )
 
 
@@ -23,6 +24,12 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser = commands.add_parser("plan", help="从筛选后的文章生成搜索计划")
     _add_common_arguments(
         plan_parser,
+        limit_help="最多检查的文章数（上限 5）",
+        default_limit=5,
+    )
+    search_parser = commands.add_parser("search", help="采集、生成问题并联网回答")
+    _add_common_arguments(
+        search_parser,
         limit_help="最多检查的文章数（上限 5）",
         default_limit=5,
     )
@@ -65,6 +72,12 @@ def main() -> None:
         load_dotenv()
         report = plan(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
         payload = planning_report_to_payload(report)
+    elif args.command == "search":
+        from .orchestration import search
+
+        load_dotenv()
+        report = search(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
+        payload = search_report_to_payload(report)
     else:
         from .search import verify_connection
 

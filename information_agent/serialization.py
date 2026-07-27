@@ -9,6 +9,7 @@ from .selection import SelectedEvidence
 
 if TYPE_CHECKING:
     from .investigation import PlanningReport
+    from .orchestration.search import SearchReport
     from .search import SearchAnswer
 
 
@@ -37,19 +38,7 @@ def planning_report_to_payload(report: PlanningReport) -> dict[str, Any]:
         "topic": report.topic,
         "status": report.status.value,
         "articles": [_selected_evidence_to_payload(item) for item in report.articles],
-        "plans": [
-            {
-                "evidence_id": item.evidence_id,
-                "trigger_quote": item.trigger_quote,
-                "question": item.question,
-                "kind": item.kind.value,
-                "priority": item.priority,
-                "queries": [
-                    {"query": query.query, "purpose": query.purpose} for query in item.queries
-                ],
-            }
-            for item in report.plans
-        ],
+        "plans": [_search_plan_to_payload(item) for item in report.plans],
         "errors": report.errors,
     }
 
@@ -59,6 +48,28 @@ def search_answer_to_payload(answer: SearchAnswer) -> dict[str, Any]:
     payload["status"] = answer.status.value
     payload["sources"] = [asdict(source) for source in answer.sources]
     return payload
+
+
+def search_report_to_payload(report: SearchReport) -> dict[str, Any]:
+    return {
+        "topic": report.topic,
+        "status": report.status.value,
+        "articles": [_selected_evidence_to_payload(item) for item in report.articles],
+        "plans": [_search_plan_to_payload(item) for item in report.plans],
+        "answers": [search_answer_to_payload(item) for item in report.answers],
+        "errors": report.errors,
+    }
+
+
+def _search_plan_to_payload(item: Any) -> dict[str, Any]:
+    return {
+        "evidence_id": item.evidence_id,
+        "trigger_quote": item.trigger_quote,
+        "question": item.question,
+        "kind": item.kind.value,
+        "priority": item.priority,
+        "queries": [{"query": query.query, "purpose": query.purpose} for query in item.queries],
+    }
 
 
 def _selected_evidence_to_payload(item: SelectedEvidence) -> dict[str, Any]:
