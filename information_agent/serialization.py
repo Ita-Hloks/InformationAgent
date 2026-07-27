@@ -9,6 +9,7 @@ from .selection import SelectedEvidence
 
 if TYPE_CHECKING:
     from .investigation import PlanningReport
+    from .search import SearchAnswer
 
 
 def format_json_datetime(value: datetime) -> str:
@@ -51,6 +52,13 @@ def planning_report_to_payload(report: PlanningReport) -> dict[str, Any]:
         ],
         "errors": report.errors,
     }
+
+
+def search_answer_to_payload(answer: SearchAnswer) -> dict[str, Any]:
+    payload = asdict(answer)
+    payload["status"] = answer.status.value
+    payload["sources"] = [asdict(source) for source in answer.sources]
+    return payload
 
 
 def _selected_evidence_to_payload(item: SelectedEvidence) -> dict[str, Any]:

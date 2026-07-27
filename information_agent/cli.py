@@ -9,6 +9,7 @@ from .serialization import (
     collection_report_to_payload,
     planning_report_to_payload,
     report_to_payload,
+    search_answer_to_payload,
 )
 
 
@@ -25,6 +26,11 @@ def build_parser() -> argparse.ArgumentParser:
         limit_help="最多检查的文章数（上限 5）",
         default_limit=5,
     )
+    verification_parser = commands.add_parser(
+        "verify-search",
+        help="验证联网搜索配置、请求和来源返回",
+    )
+    verification_parser.add_argument("--timeout", type=float, default=60, help="验证时限（秒）")
     return parser
 
 
@@ -53,12 +59,18 @@ def main() -> None:
         load_dotenv()
         report = run(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
         payload = report_to_payload(report)
-    else:
+    elif args.command == "plan":
         from .orchestration import plan
 
         load_dotenv()
         report = plan(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
         payload = planning_report_to_payload(report)
+    else:
+        from .search import verify_connection
+
+        load_dotenv()
+        answer = verify_connection(args.timeout)
+        payload = search_answer_to_payload(answer)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 

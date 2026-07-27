@@ -48,7 +48,12 @@ def _plan() -> SearchPlan:
 
 
 def _config() -> HostedSearchConfig:
-    return HostedSearchConfig(api_key="secret", model="search-model", timeout_seconds=30)
+    return HostedSearchConfig(
+        api_key="secret",
+        model="search-model",
+        base_url="https://api.example.com/v1",
+        timeout_seconds=30,
+    )
 
 
 def test_hosted_search_answerer_returns_answer_with_sources(tmp_path, monkeypatch) -> None:
@@ -103,3 +108,19 @@ def test_hosted_search_answerer_requires_sources(tmp_path, monkeypatch) -> None:
     assert result.status is SearchAnswerStatus.INSUFFICIENT_EVIDENCE
     assert result.answer == "未能获得带有可验证来源的搜索结果。"
     assert result.sources == ()
+
+
+def test_hosted_search_answerer_creates_a_client_when_not_injected(monkeypatch) -> None:
+    client = FakeClient(FakeResponse(answer="", web_search=[]))
+    observed_configs: list[HostedSearchConfig] = []
+
+    def fake_factory(config: HostedSearchConfig) -> FakeClient:
+        observed_configs.append(config)
+        return client
+
+    monkeypatch.setattr("information_agent.search.hosted.create_search_client", fake_factory)
+
+    answerer = HostedSearchAnswerer(_config())
+
+    assert answerer.client is client
+    assert observed_configs == [_config()]

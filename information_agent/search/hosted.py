@@ -5,6 +5,7 @@ from typing import Any
 
 from ..common import CallBackup, normalize_url
 from ..investigation import SearchPlan
+from .client import create_search_client
 from .config import HostedSearchConfig
 from .models import SearchAnswer, SearchAnswerStatus, SearchSource
 
@@ -18,9 +19,7 @@ class HostedSearchAnswerer:
         client: Any | None = None,
     ) -> None:
         self.config = config or HostedSearchConfig.from_env()
-        if client is None:
-            raise RuntimeError("必须注入兼容的联网搜索客户端")
-        self.client = client
+        self.client = client or create_search_client(self.config)
 
     def answer(self, plan: SearchPlan, timeout: float) -> SearchAnswer:
         if timeout <= 0:
@@ -61,8 +60,6 @@ def _web_search_tool(config: HostedSearchConfig) -> dict[str, Any]:
         "count": config.result_count,
         "content_size": config.content_size,
     }
-    if config.search_engine is not None:
-        options["search_engine"] = config.search_engine
     return {
         "type": "web_search",
         "web_search": options,

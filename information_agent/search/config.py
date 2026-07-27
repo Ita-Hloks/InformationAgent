@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 DEFAULT_RESULT_COUNT = 5
 DEFAULT_CONTENT_SIZE = "medium"
@@ -15,7 +16,7 @@ SUPPORTED_CONTENT_SIZES = {"low", "medium", "high"}
 class HostedSearchConfig:
     api_key: str
     model: str
-    search_engine: str | None = None
+    base_url: str
     result_count: int = DEFAULT_RESULT_COUNT
     content_size: str = DEFAULT_CONTENT_SIZE
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
@@ -25,6 +26,11 @@ class HostedSearchConfig:
             raise RuntimeError("缺少环境变量 SEARCH_LLM_API_KEY")
         if not self.model.strip():
             raise ValueError("SEARCH_LLM_MODEL 不能为空")
+        parsed_base_url = urlparse(self.base_url)
+        if parsed_base_url.scheme not in {"http", "https"} or not parsed_base_url.netloc:
+            raise ValueError("SEARCH_LLM_BASE_URL 必须是有效的 HTTP(S) 地址")
+        if parsed_base_url.path.rstrip("/").endswith("/chat/completions"):
+            raise ValueError("SEARCH_LLM_BASE_URL 应填写服务根地址，不应包含 chat/completions")
         if not 1 <= self.result_count <= 50:
             raise ValueError("SEARCH_LLM_RESULT_COUNT 必须在 1 到 50 之间")
         if self.content_size not in SUPPORTED_CONTENT_SIZES:
@@ -38,7 +44,7 @@ class HostedSearchConfig:
         return cls(
             api_key=values.get("SEARCH_LLM_API_KEY", ""),
             model=values.get("SEARCH_LLM_MODEL", ""),
-            search_engine=values.get("SEARCH_LLM_SEARCH_ENGINE") or None,
+            base_url=values.get("SEARCH_LLM_BASE_URL", "").strip(),
             result_count=_parse_int(
                 values.get("SEARCH_LLM_RESULT_COUNT"),
                 "SEARCH_LLM_RESULT_COUNT",

@@ -7,10 +7,15 @@ from information_agent.search import HostedSearchConfig
 
 def test_hosted_search_config_reads_defaults() -> None:
     config = HostedSearchConfig.from_env(
-        {"SEARCH_LLM_API_KEY": "secret", "SEARCH_LLM_MODEL": "search-model"}
+        {
+            "SEARCH_LLM_API_KEY": "secret",
+            "SEARCH_LLM_MODEL": "search-model",
+            "SEARCH_LLM_BASE_URL": "https://api.example.com/v1",
+        }
     )
 
     assert config.model == "search-model"
+    assert config.base_url == "https://api.example.com/v1"
     assert config.search_engine is None
     assert config.result_count == 5
     assert config.content_size == "medium"
@@ -19,12 +24,22 @@ def test_hosted_search_config_reads_defaults() -> None:
 
 def test_hosted_search_config_requires_api_key() -> None:
     with pytest.raises(RuntimeError, match="SEARCH_LLM_API_KEY"):
-        HostedSearchConfig.from_env({"SEARCH_LLM_MODEL": "search-model"})
+        HostedSearchConfig.from_env(
+            {
+                "SEARCH_LLM_MODEL": "search-model",
+                "SEARCH_LLM_BASE_URL": "https://api.example.com/v1",
+            }
+        )
 
 
 def test_hosted_search_config_requires_model() -> None:
     with pytest.raises(ValueError, match="SEARCH_LLM_MODEL"):
-        HostedSearchConfig.from_env({"SEARCH_LLM_API_KEY": "secret"})
+        HostedSearchConfig.from_env(
+            {
+                "SEARCH_LLM_API_KEY": "secret",
+                "SEARCH_LLM_BASE_URL": "https://api.example.com/v1",
+            }
+        )
 
 
 @pytest.mark.parametrize(
@@ -44,8 +59,29 @@ def test_hosted_search_config_rejects_invalid_values(
     environ = {
         "SEARCH_LLM_API_KEY": "secret",
         "SEARCH_LLM_MODEL": "search-model",
+        "SEARCH_LLM_BASE_URL": "https://api.example.com/v1",
         name: value,
     }
 
     with pytest.raises((RuntimeError, ValueError), match=message):
         HostedSearchConfig.from_env(environ)
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "",
+        "api.example.com",
+        "ftp://api.example.com",
+        "https://api.example.com/v1/chat/completions",
+    ],
+)
+def test_hosted_search_config_requires_http_base_url(base_url: str) -> None:
+    with pytest.raises(ValueError, match="SEARCH_LLM_BASE_URL"):
+        HostedSearchConfig.from_env(
+            {
+                "SEARCH_LLM_API_KEY": "secret",
+                "SEARCH_LLM_MODEL": "search-model",
+                "SEARCH_LLM_BASE_URL": base_url,
+            }
+        )
