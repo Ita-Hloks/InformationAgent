@@ -9,7 +9,7 @@ ALLOWED_EXTERNAL_DEPENDENCIES = {
     "collection": {"common"},
     "normalization": {"common", "collection"},
     "selection": {"common", "normalization"},
-    "storage": {"normalization", "selection"},
+    "storage": {"collection", "normalization", "selection"},
     "investigation": {"common", "selection"},
     "search": {"common", "investigation"},
     "analysis": {"common", "selection"},

@@ -21,4 +21,17 @@ class RawFeedEntry:
     language: str | None = None
     content_type: ContentType = ContentType.UNKNOWN
     published_at: str | datetime | None = None
+    entry_id: str | None = None
+    updated_at: str | datetime | None = None
     collected_at: datetime = field(default_factory=project_now)
+
+
+@dataclass(frozen=True, slots=True)
+class FeedFetchResult:
+    """RSS 请求结果及其 HTTP 缓存元数据。"""
+
+    feed_url: str
+    entries: list[RawFeedEntry]
+    etag: str | None
+    last_modified: str | None
+    not_modified: bool = False

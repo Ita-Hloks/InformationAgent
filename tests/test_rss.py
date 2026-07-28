@@ -1,4 +1,6 @@
-from information_agent.collection.rss import _plain_text, fetch_feed
+from urllib.error import HTTPError
+
+from information_agent.collection.rss import _plain_text, fetch_feed, fetch_feed_with_cache
 from information_agent.contracts import ContentType
 from information_agent.normalization import normalize_evidence
 
@@ -18,6 +20,7 @@ def test_fetch_feed_populates_article_and_source_fields(monkeypatch) -> None:
         <language>zh-CN</language>
         <item>
           <title>人工智能模型发布</title>
+          <guid>article-guid-1</guid>
           <link>https://example.com/article?id=1&amp;utm_source=rss</link>
           <pubDate>Thu, 17 Jul 2025 09:30:00 +0800</pubDate>
           <dc:creator>示例作者</dc:creator>
@@ -48,8 +51,10 @@ def test_fetch_feed_populates_article_and_source_fields(monkeypatch) -> None:
 
     monkeypatch.setattr("information_agent.collection.rss.urlopen", fake_urlopen)
 
-    items = normalize_evidence(fetch_feed("https://example.com/rss.xml?utm_source=test", timeout=5))
+    raw_items = fetch_feed("https://example.com/rss.xml?utm_source=test", timeout=5)
+    items = normalize_evidence(raw_items)
 
+    assert raw_items[0].entry_id == "article-guid-1"
     assert len(items) == 1
     item = items[0]
     assert item.source_url == "https://example.com/article?id=1"
@@ -60,3 +65,24 @@ def test_fetch_feed_populates_article_and_source_fields(monkeypatch) -> None:
     assert item.language == "zh-cn"
     assert item.content_type is ContentType.RSS_CONTENT
     assert item.article_id.startswith("article-")
+
+
+def test_fetch_feed_with_cache_sends_validators_and_handles_not_modified(monkeypatch) -> None:
+    def fake_urlopen(request, timeout: float):
+        assert request.get_header("If-none-match") == '"feed-v1"'
+        assert request.get_header("If-modified-since") == "Thu, 17 Jul 2025 09:30:00 GMT"
+        assert timeout == 5
+        raise HTTPError(request.full_url, 304, "Not Modified", {}, None)
+
+    monkeypatch.setattr("information_agent.collection.rss.urlopen", fake_urlopen)
+
+    result = fetch_feed_with_cache(
+        "https://example.com/rss.xml",
+        timeout=5,
+        etag='"feed-v1"',
+        last_modified="Thu, 17 Jul 2025 09:30:00 GMT",
+    )
+
+    assert result.feed_url == "https://example.com/rss.xml"
+    assert result.not_modified is True
+    assert result.entries == []

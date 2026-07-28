@@ -9,11 +9,13 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
+from ..collection import RawFeedEntry
 from ..contracts import PROJECT_TIMEZONE, CollectionReport, ContentType, project_now
 from ..normalization import NormalizedArticle
 from ..selection import SelectedEvidence
+from .models import FeedObservation, FeedState
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 def default_database_path() -> Path:
@@ -48,12 +50,15 @@ class SQLiteCollectionStore:
         run_id: str,
         report: CollectionReport,
         normalized_articles: list[NormalizedArticle],
+        feed_observations: list[FeedObservation] | None = None,
     ) -> None:
         selected_by_snapshot_key = {_snapshot_key(item.article): item for item in report.articles}
         finished_at = _format_datetime(project_now())
         with self._connect() as connection:
+            article_ids_by_url: dict[str, str] = {}
             for article in normalized_articles:
                 snapshot_id = self._upsert_snapshot(connection, article)
+                article_ids_by_url[article.source_url] = article.article_id
                 selected = selected_by_snapshot_key.get(_snapshot_key(article))
                 connection.execute(
                     """
@@ -74,6 +79,9 @@ class SQLiteCollectionStore:
                     ),
                 )
 
+            for observation in feed_observations or []:
+                self._record_feed_observation(connection, observation, article_ids_by_url)
+
             updated = connection.execute(
                 """
                 UPDATE research_runs
@@ -89,6 +97,40 @@ class SQLiteCollectionStore:
             )
             if updated.rowcount != 1:
                 raise ValueError(f"无法完成不存在或已结束的运行：{run_id}")
+
+    def feed_state(self, feed_url: str) -> FeedState:
+        feed_id = _feed_id(feed_url)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT etag, last_modified FROM feeds WHERE id = ?", (feed_id,)
+            ).fetchone()
+        return FeedState(
+            feed_id=feed_id,
+            feed_url=feed_url,
+            etag=str(row["etag"]) if row and row["etag"] else None,
+            last_modified=str(row["last_modified"]) if row and row["last_modified"] else None,
+        )
+
+    def new_feed_entries(
+        self,
+        state: FeedState,
+        entries: list[RawFeedEntry],
+    ) -> list[RawFeedEntry]:
+        new_entries: list[RawFeedEntry] = []
+        with self._connect() as connection:
+            for entry in entries:
+                entry_key = _entry_key(entry)
+                row = connection.execute(
+                    """
+                    SELECT updated_marker FROM feed_entries
+                    WHERE feed_id = ? AND entry_key = ?
+                    """,
+                    (state.feed_id, entry_key),
+                ).fetchone()
+                marker = _entry_marker(entry)
+                if row is None or (marker is not None and marker != row["updated_marker"]):
+                    new_entries.append(entry)
+        return new_entries
 
     def fail_run(self, run_id: str, error: Exception) -> None:
         finished_at = _format_datetime(project_now())
@@ -165,6 +207,55 @@ class SQLiteCollectionStore:
         )
         return snapshot_id
 
+    def _record_feed_observation(
+        self,
+        connection: sqlite3.Connection,
+        observation: FeedObservation,
+        article_ids_by_url: dict[str, str],
+    ) -> None:
+        state = observation.state
+        observed_at = _format_datetime(project_now())
+        connection.execute(
+            """
+            INSERT INTO feeds (id, feed_url, etag, last_modified, last_success_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                etag = excluded.etag,
+                last_modified = excluded.last_modified,
+                last_success_at = excluded.last_success_at
+            """,
+            (
+                state.feed_id,
+                state.feed_url,
+                observation.etag,
+                observation.last_modified,
+                observed_at,
+            ),
+        )
+        for entry in observation.new_entries:
+            connection.execute(
+                """
+                INSERT INTO feed_entries (
+                    feed_id, entry_key, article_url, article_id, updated_marker,
+                    first_seen_at, last_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(feed_id, entry_key) DO UPDATE SET
+                    article_url = excluded.article_url,
+                    article_id = excluded.article_id,
+                    updated_marker = excluded.updated_marker,
+                    last_seen_at = excluded.last_seen_at
+                """,
+                (
+                    state.feed_id,
+                    _entry_key(entry),
+                    entry.source_url,
+                    article_ids_by_url.get(entry.source_url),
+                    _entry_marker(entry),
+                    observed_at,
+                    observed_at,
+                ),
+            )
+
     def _connect(self) -> sqlite3.Connection:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.database_path)
@@ -185,14 +276,12 @@ class SQLiteCollectionStore:
             )
             """
         )
-        applied = connection.execute(
-            "SELECT 1 FROM schema_migrations WHERE version = ?", (_SCHEMA_VERSION,)
-        ).fetchone()
-        if applied is not None:
-            return
-
-        connection.executescript(
-            """
+        applied_versions = {
+            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
+        }
+        if 1 not in applied_versions:
+            connection.executescript(
+                """
             CREATE TABLE research_runs (
                 id TEXT PRIMARY KEY,
                 topic TEXT NOT NULL,
@@ -232,11 +321,38 @@ class SQLiteCollectionStore:
                 UNIQUE (run_id, evidence_no)
             );
             """
-        )
-        connection.execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-            (_SCHEMA_VERSION, _format_datetime(project_now())),
-        )
+            )
+            connection.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                (1, _format_datetime(project_now())),
+            )
+        if 2 not in applied_versions:
+            connection.executescript(
+                """
+                CREATE TABLE feeds (
+                    id TEXT PRIMARY KEY,
+                    feed_url TEXT NOT NULL UNIQUE,
+                    etag TEXT,
+                    last_modified TEXT,
+                    last_success_at TEXT
+                );
+
+                CREATE TABLE feed_entries (
+                    feed_id TEXT NOT NULL REFERENCES feeds(id),
+                    entry_key TEXT NOT NULL,
+                    article_url TEXT NOT NULL,
+                    article_id TEXT REFERENCES articles(id),
+                    updated_marker TEXT,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    PRIMARY KEY (feed_id, entry_key)
+                );
+                """
+            )
+            connection.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                (2, _format_datetime(project_now())),
+            )
 
 
 def _article_payload(article: NormalizedArticle) -> dict[str, object]:
@@ -259,6 +375,25 @@ def _snapshot_key(article: NormalizedArticle) -> tuple[str, str]:
 
 def _content_hash(article: NormalizedArticle) -> str:
     return hashlib.sha256(article.content.encode("utf-8")).hexdigest()
+
+
+def _feed_id(feed_url: str) -> str:
+    digest = hashlib.sha256(feed_url.encode("utf-8")).hexdigest()
+    return f"feed-{digest}"
+
+
+def _entry_key(entry: RawFeedEntry) -> str:
+    return entry.entry_id or entry.source_url
+
+
+def _entry_marker(entry: RawFeedEntry) -> str | None:
+    value = entry.updated_at or entry.published_at
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return _format_datetime(value)
+    marker = str(value).strip()
+    return marker or None
 
 
 def _article_from_payload(payload: dict[str, object]) -> NormalizedArticle:

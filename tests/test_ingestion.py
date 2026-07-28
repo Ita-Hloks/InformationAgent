@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from information_agent.cli import main
-from information_agent.collection import RawFeedEntry
+from information_agent.collection import FeedFetchResult, RawFeedEntry
 from information_agent.contracts import CollectionReport, RunStatus
 from information_agent.orchestration.ingestion import ingest
 from information_agent.storage import PersistedCollection, SQLiteCollectionStore
@@ -129,6 +129,105 @@ def test_ingest_preserves_partial_collection_errors(tmp_path: Path) -> None:
     assert result.report.status is RunStatus.PARTIAL
     assert status == "partial"
     assert json.loads(errors_json) == result.report.errors
+
+
+def test_ingest_uses_feed_cache_and_skips_seen_entry_ids(monkeypatch, tmp_path: Path) -> None:
+    database_path = tmp_path / "information-agent.db"
+    feed_url = "https://example.com/rss.xml"
+    entry = RawFeedEntry(
+        "https://example.com/ai",
+        "AI 芯片发布",
+        "这是一篇长度超过二十个字符并与 AI 芯片主题相关的文章正文。",
+        feed_url=feed_url,
+        entry_id="guid-1",
+        updated_at="2026-07-28T10:00:00+08:00",
+    )
+    responses = [
+        FeedFetchResult(feed_url, [entry], '"feed-v1"', "Mon, 28 Jul 2026 02:00:00 GMT"),
+        FeedFetchResult(feed_url, [entry], '"feed-v1"', "Mon, 28 Jul 2026 02:00:00 GMT"),
+    ]
+    requests: list[tuple[str | None, str | None]] = []
+
+    def fake_fetch(url: str, timeout: float, *, etag: str | None, last_modified: str | None):
+        assert url == feed_url
+        assert timeout > 0
+        requests.append((etag, last_modified))
+        return responses.pop(0)
+
+    monkeypatch.setattr(
+        "information_agent.orchestration.ingestion.fetch_feed_with_cache",
+        fake_fetch,
+    )
+
+    first = ingest("AI 芯片", [feed_url], database_path=database_path)
+    second = ingest("AI 芯片", [feed_url], database_path=database_path)
+
+    with sqlite3.connect(database_path) as connection:
+        snapshot_count = connection.execute("SELECT COUNT(*) FROM article_snapshots").fetchone()[0]
+        entry_count = connection.execute("SELECT COUNT(*) FROM feed_entries").fetchone()[0]
+        feed = connection.execute("SELECT etag, last_modified FROM feeds").fetchone()
+
+    assert first.report.status is RunStatus.COMPLETED
+    assert len(first.report.articles) == 1
+    assert second.report.status is RunStatus.COMPLETED
+    assert second.report.articles == []
+    assert requests == [
+        (None, None),
+        ('"feed-v1"', "Mon, 28 Jul 2026 02:00:00 GMT"),
+    ]
+    assert snapshot_count == 1
+    assert entry_count == 1
+    assert feed == ('"feed-v1"', "Mon, 28 Jul 2026 02:00:00 GMT")
+
+
+def test_ingest_reprocesses_an_entry_when_its_update_marker_changes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "information-agent.db"
+    feed_url = "https://example.com/rss.xml"
+    first_entry = RawFeedEntry(
+        "https://example.com/ai",
+        "AI 芯片发布",
+        "这是一篇长度超过二十个字符并与 AI 芯片主题相关的第一版文章正文。",
+        feed_url=feed_url,
+        entry_id="guid-1",
+        updated_at="2026-07-28T10:00:00+08:00",
+    )
+    updated_entry = RawFeedEntry(
+        "https://example.com/ai",
+        "AI 芯片发布",
+        "这是一篇长度超过二十个字符并与 AI 芯片主题相关的第二版文章正文。",
+        feed_url=feed_url,
+        entry_id="guid-1",
+        updated_at="2026-07-28T11:00:00+08:00",
+    )
+    responses = [
+        FeedFetchResult(feed_url, [first_entry], '"feed-v1"', None),
+        FeedFetchResult(feed_url, [updated_entry], '"feed-v2"', None),
+    ]
+
+    def fake_fetch(url: str, timeout: float, *, etag: str | None, last_modified: str | None):
+        assert url == feed_url
+        assert timeout > 0
+        return responses.pop(0)
+
+    monkeypatch.setattr(
+        "information_agent.orchestration.ingestion.fetch_feed_with_cache",
+        fake_fetch,
+    )
+
+    first = ingest("AI 芯片", [feed_url], database_path=database_path)
+    second = ingest("AI 芯片", [feed_url], database_path=database_path)
+
+    with sqlite3.connect(database_path) as connection:
+        snapshot_count = connection.execute("SELECT COUNT(*) FROM article_snapshots").fetchone()[0]
+        updated_marker = connection.execute("SELECT updated_marker FROM feed_entries").fetchone()[0]
+
+    assert len(first.report.articles) == 1
+    assert len(second.report.articles) == 1
+    assert snapshot_count == 2
+    assert updated_marker == "2026-07-28T11:00:00+08:00"
 
 
 def test_ingest_cli_does_not_load_llm_configuration(monkeypatch, capsys, tmp_path: Path) -> None:
