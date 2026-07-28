@@ -173,6 +173,9 @@ cython_debug/
 # 本地 LLM 调用备份
 log/
 
+# 本地粗处理数据库
+data/
+
 # PyPI configuration file
 .pypirc
 

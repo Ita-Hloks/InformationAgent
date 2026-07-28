@@ -117,6 +117,16 @@ def test_collect_retries_transient_timeout_until_source_succeeds() -> None:
     assert report.errors == []
 
 
+def test_collect_records_a_readable_message_for_an_empty_timeout() -> None:
+    def collector(_: str, __: float) -> list[RawFeedEntry]:
+        raise TimeoutError()
+
+    report = collect("AI", ["slow-feed"], collector=collector, max_attempts=1)
+
+    assert report.status is RunStatus.FAILED
+    assert report.errors == ["slow-feed：请求超时"]
+
+
 def test_collect_applies_an_independent_timeout_to_each_source() -> None:
     both_sources_started = Barrier(2)
     observed_timeouts: dict[str, float] = {}

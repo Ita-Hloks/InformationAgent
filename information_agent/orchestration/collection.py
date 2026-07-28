@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 
 import aiohttp
 
 from ..collection import RawFeedEntry, augment_evidence, fetch_feed, fetch_feed_async
 from ..contracts import CollectionReport, RunStatus
-from ..normalization import normalize_evidence
+from ..normalization import NormalizedArticle, normalize_evidence
 from ..selection import filter_evidence
 from .execution import ExecutionBudget
 
@@ -18,6 +19,12 @@ DEFAULT_MAX_WORKERS = 6
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_SOURCE_TIMEOUT_SECONDS = 15.0
 INITIAL_RETRY_DELAY_SECONDS = 0.1
+
+
+@dataclass(slots=True)
+class _CollectionExecution:
+    report: CollectionReport
+    normalized_articles: list[NormalizedArticle]
 
 
 def collect(
@@ -56,6 +63,29 @@ def _execute_collection(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
 ) -> CollectionReport:
+    return _execute_collection_with_details(
+        topic,
+        feeds,
+        budget=budget,
+        limit=limit,
+        collector=collector,
+        max_workers=max_workers,
+        max_attempts=max_attempts,
+        source_timeout_seconds=source_timeout_seconds,
+    ).report
+
+
+def _execute_collection_with_details(
+    topic: str,
+    feeds: list[str],
+    *,
+    budget: ExecutionBudget,
+    limit: int,
+    collector: Collector,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
+) -> _CollectionExecution:
     _validate_input(
         topic,
         feeds,
@@ -89,7 +119,7 @@ async def _execute_collection_async(
     max_workers: int,
     max_attempts: int,
     source_timeout_seconds: float,
-) -> CollectionReport:
+) -> _CollectionExecution:
     semaphore = asyncio.Semaphore(max_workers)
     timeout_error = TimeoutError("任务在完成 RSS 采集前超时")
 
@@ -115,7 +145,7 @@ async def _execute_collection_async(
     successful_sources = 0
     for feed_url, source_items, error in source_results:
         if error is not None:
-            errors.append(f"{feed_url}：{error}")
+            errors.append(f"{feed_url}：{_error_message(error)}")
             continue
         collected.extend(source_items)
         successful_sources += 1
@@ -125,9 +155,13 @@ async def _execute_collection_async(
         augmented = collected
     else:
         augmented = augment_evidence(collected, timeout=augmentation_timeout)
-    articles = filter_evidence(topic, normalize_evidence(augmented), limit=limit)
+    normalized_articles = normalize_evidence(augmented)
+    articles = filter_evidence(topic, normalized_articles, limit=limit)
     status = _collection_status(errors, successful_sources)
-    return CollectionReport(topic, status, articles, errors)
+    return _CollectionExecution(
+        report=CollectionReport(topic, status, articles, errors),
+        normalized_articles=normalized_articles,
+    )
 
 
 async def _collect_source(
@@ -204,6 +238,15 @@ def _collection_status(errors: list[str], successful_sources: int) -> RunStatus:
     if successful_sources:
         return RunStatus.PARTIAL
     return RunStatus.FAILED
+
+
+def _error_message(error: Exception) -> str:
+    message = str(error).strip()
+    if message:
+        return message
+    if isinstance(error, TimeoutError):
+        return "请求超时"
+    return type(error).__name__
 
 
 def _is_retryable_error(error: Exception) -> bool:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from html import unescape
 from typing import Any
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import aiohttp
@@ -10,7 +11,7 @@ import feedparser
 
 from ..common import normalize_url
 from ..contracts import ContentType
-from .models import RawFeedEntry
+from .models import FeedFetchResult, RawFeedEntry
 
 MAX_FEED_BYTES = 5 * 1024 * 1024
 
@@ -21,23 +22,56 @@ def _plain_text(value: str) -> str:
 
 
 def fetch_feed(feed_url: str, timeout: float = 15) -> list[RawFeedEntry]:
+    return fetch_feed_with_cache(feed_url, timeout).entries
+
+
+def fetch_feed_with_cache(
+    feed_url: str,
+    timeout: float = 15,
+    *,
+    etag: str | None = None,
+    last_modified: str | None = None,
+) -> FeedFetchResult:
     normalized_feed_url = normalize_url(feed_url)
     if normalized_feed_url is None:
         raise ValueError("RSS 地址必须使用 http 或 https")
 
+    headers = {"User-Agent": "InformationAgent/0.1 RSS-MVP"}
+    if etag:
+        headers["If-None-Match"] = etag
+    if last_modified:
+        headers["If-Modified-Since"] = last_modified
     request = Request(
         normalized_feed_url,
-        headers={"User-Agent": "InformationAgent/0.1 RSS-MVP"},
+        headers=headers,
     )
-    with urlopen(request, timeout=timeout) as response:
-        content_length = response.headers.get("Content-Length")
-        if content_length and int(content_length) > MAX_FEED_BYTES:
-            raise ValueError("RSS 响应超过 5 MiB 限制")
-        payload = response.read(MAX_FEED_BYTES + 1)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            content_length = response.headers.get("Content-Length")
+            if content_length and int(content_length) > MAX_FEED_BYTES:
+                raise ValueError("RSS 响应超过 5 MiB 限制")
+            payload = response.read(MAX_FEED_BYTES + 1)
+            response_etag = _header(response.headers, "ETag")
+            response_last_modified = _header(response.headers, "Last-Modified")
+    except HTTPError as error:
+        if error.code == 304:
+            return FeedFetchResult(
+                normalized_feed_url,
+                [],
+                etag,
+                last_modified,
+                not_modified=True,
+            )
+        raise
     if len(payload) > MAX_FEED_BYTES:
         raise ValueError("RSS 响应超过 5 MiB 限制")
 
-    return _parse_feed(payload, normalized_feed_url)
+    return FeedFetchResult(
+        normalized_feed_url,
+        _parse_feed(payload, normalized_feed_url),
+        response_etag,
+        response_last_modified,
+    )
 
 
 async def fetch_feed_async(
@@ -100,6 +134,8 @@ def _parse_feed(payload: bytes, normalized_feed_url: str) -> list[RawFeedEntry]:
                 language=_normalize_language(str(entry.get("language") or "")) or feed_language,
                 content_type=content_type,
                 published_at=entry.get("published") or entry.get("updated"),
+                entry_id=_entry_id(entry),
+                updated_at=entry.get("updated"),
             )
         )
     return items
@@ -132,3 +168,13 @@ def _normalize_language(value: str) -> str | None:
 def _optional_text(value: Any) -> str | None:
     normalized = _plain_text(str(value or ""))
     return normalized or None
+
+
+def _entry_id(entry: dict[str, Any]) -> str | None:
+    value = str(entry.get("id") or entry.get("guid") or "").strip()
+    return value or None
+
+
+def _header(headers: Any, name: str) -> str | None:
+    value = headers.get(name)
+    return str(value).strip() if value else None

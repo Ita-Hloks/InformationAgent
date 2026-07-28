@@ -19,6 +19,8 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     collect_parser = commands.add_parser("collect", help="只采集、规范化和筛选，不调用 LLM")
     _add_common_arguments(collect_parser, limit_help="最多输出的文章数")
+    ingest_parser = commands.add_parser("ingest", help="采集、规范化、筛选并写入数据库，不调用 LLM")
+    _add_common_arguments(ingest_parser, limit_help="最多输出的文章数")
     analyze_parser = commands.add_parser("analyze", help="采集后继续调用 LLM 分析")
     _add_common_arguments(analyze_parser, limit_help="最多送入模型的证据数")
     plan_parser = commands.add_parser("plan", help="从筛选后的文章生成搜索计划")
@@ -60,6 +62,12 @@ def main() -> None:
 
         report = collect(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
         payload = collection_report_to_payload(report)
+    elif args.command == "ingest":
+        from .orchestration import ingest
+        from .serialization import persisted_collection_to_payload
+
+        result = ingest(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
+        payload = persisted_collection_to_payload(result)
     elif args.command == "analyze":
         from .orchestration import run
 
