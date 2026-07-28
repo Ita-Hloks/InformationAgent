@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+from information_agent.cli import main
+from information_agent.collection import RawFeedEntry
+from information_agent.contracts import CollectionReport, RunStatus
+from information_agent.orchestration.ingestion import ingest
+from information_agent.storage import PersistedCollection, SQLiteCollectionStore
+
+
+def test_ingest_saves_all_normalized_articles_and_selected_evidence(tmp_path: Path) -> None:
+    database_path = tmp_path / "information-agent.db"
+
+    def collector(_: str, __: float) -> list[RawFeedEntry]:
+        return [
+            RawFeedEntry(
+                "https://example.com/ai",
+                "AI 芯片发布",
+                "这是一篇长度超过二十个字符并与 AI 芯片主题相关的文章正文。",
+            ),
+            RawFeedEntry(
+                "https://example.com/weather",
+                "天气预报",
+                "这是一篇长度超过二十个字符但与研究主题无关的天气文章正文。",
+            ),
+        ]
+
+    result = ingest("AI 芯片", ["feed"], database_path=database_path, collector=collector)
+    selected = SQLiteCollectionStore(database_path).load_selected_evidence(result.run_id)
+
+    assert result.report.status is RunStatus.COMPLETED
+    assert [item.source_url for item in selected] == ["https://example.com/ai"]
+    assert selected[0].evidence_id == 1
+    assert selected[0].relevance_score == result.report.articles[0].relevance_score
+
+    with sqlite3.connect(database_path) as connection:
+        snapshot_count = connection.execute("SELECT COUNT(*) FROM article_snapshots").fetchone()[0]
+        evidence_rows = connection.execute(
+            "SELECT selected, evidence_no FROM run_evidence ORDER BY selected DESC"
+        ).fetchall()
+
+    assert snapshot_count == 2
+    assert evidence_rows == [(1, 1), (0, None)]
+
+
+def test_ingest_reuses_unchanged_article_snapshot_across_runs(tmp_path: Path) -> None:
+    database_path = tmp_path / "information-agent.db"
+
+    def collector(_: str, __: float) -> list[RawFeedEntry]:
+        return [
+            RawFeedEntry(
+                "https://example.com/ai",
+                "AI 芯片发布",
+                "这是一篇长度超过二十个字符并与 AI 芯片主题相关的文章正文。",
+            )
+        ]
+
+    first = ingest("AI 芯片", ["feed"], database_path=database_path, collector=collector)
+    second = ingest("AI 芯片", ["feed"], database_path=database_path, collector=collector)
+
+    with sqlite3.connect(database_path) as connection:
+        snapshot_count = connection.execute("SELECT COUNT(*) FROM article_snapshots").fetchone()[0]
+        evidence_count = connection.execute("SELECT COUNT(*) FROM run_evidence").fetchone()[0]
+
+    assert first.run_id != second.run_id
+    assert snapshot_count == 1
+    assert evidence_count == 2
+
+
+def test_ingest_keeps_changed_same_url_snapshot_unselected(tmp_path: Path) -> None:
+    database_path = tmp_path / "information-agent.db"
+
+    def collector(_: str, __: float) -> list[RawFeedEntry]:
+        return [
+            RawFeedEntry(
+                "https://example.com/ai",
+                "AI 芯片发布",
+                "这是一篇长度超过二十个字符并与 AI 芯片主题相关的第一版文章正文。",
+            ),
+            RawFeedEntry(
+                "https://example.com/ai",
+                "AI 芯片发布",
+                "这是一篇长度超过二十个字符并与 AI 芯片主题相关的第二版文章正文。",
+            ),
+        ]
+
+    result = ingest("AI 芯片", ["feed"], database_path=database_path, collector=collector)
+
+    with sqlite3.connect(database_path) as connection:
+        evidence_rows = connection.execute(
+            "SELECT selected, evidence_no FROM run_evidence ORDER BY selected DESC"
+        ).fetchall()
+
+    assert result.report.status is RunStatus.COMPLETED
+    assert evidence_rows == [(1, 1), (0, None)]
+
+
+def test_ingest_preserves_partial_collection_errors(tmp_path: Path) -> None:
+    database_path = tmp_path / "information-agent.db"
+
+    def collector(feed: str, _: float) -> list[RawFeedEntry]:
+        if feed == "broken":
+            raise RuntimeError("连接失败")
+        return [
+            RawFeedEntry(
+                "https://example.com/ai",
+                "AI 芯片发布",
+                "这是一篇长度超过二十个字符并与 AI 芯片主题相关的文章正文。",
+            )
+        ]
+
+    result = ingest(
+        "AI 芯片",
+        ["working", "broken"],
+        database_path=database_path,
+        collector=collector,
+        max_attempts=1,
+    )
+
+    with sqlite3.connect(database_path) as connection:
+        status, errors_json = connection.execute(
+            "SELECT status, errors_json FROM research_runs WHERE id = ?", (result.run_id,)
+        ).fetchone()
+
+    assert result.report.status is RunStatus.PARTIAL
+    assert status == "partial"
+    assert json.loads(errors_json) == result.report.errors
+
+
+def test_ingest_cli_does_not_load_llm_configuration(monkeypatch, capsys, tmp_path: Path) -> None:
+    result = PersistedCollection(
+        run_id="run-123",
+        report=CollectionReport("AI", RunStatus.COMPLETED, []),
+    )
+
+    def fake_ingest(*args, **kwargs) -> PersistedCollection:
+        return result
+
+    def fail_load_dotenv() -> None:
+        raise AssertionError("ingest 命令不应加载 LLM 配置")
+
+    monkeypatch.setattr("information_agent.orchestration.ingestion.ingest", fake_ingest)
+    monkeypatch.setattr("information_agent.cli.load_dotenv", fail_load_dotenv)
+    monkeypatch.setenv("INFORMATION_AGENT_DB_PATH", str(tmp_path / "agent.db"))
+    monkeypatch.setattr(sys, "argv", ["information-agent", "ingest", "AI", "feed"])
+
+    main()
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload == {
+        "run_id": "run-123",
+        "topic": "AI",
+        "status": "completed",
+        "articles": [],
+        "errors": [],
+    }

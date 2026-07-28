@@ -2,7 +2,7 @@
 
 from typing import Any
 
-__all__ = ["collect", "plan", "run", "search"]
+__all__ = ["collect", "ingest", "plan", "run", "search"]
 
 
 def __getattr__(name: str) -> Any:
@@ -10,6 +10,10 @@ def __getattr__(name: str) -> Any:
         from .collection import collect
 
         return collect
+    if name == "ingest":
+        from .ingestion import ingest
+
+        return ingest
     if name == "run":
         from .workflow import run
 
