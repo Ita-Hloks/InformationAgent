@@ -2,7 +2,7 @@
 
 from typing import Any
 
-__all__ = ["collect", "plan", "run"]
+__all__ = ["collect", "plan", "run", "search"]
 
 
 def __getattr__(name: str) -> Any:
@@ -18,4 +18,8 @@ def __getattr__(name: str) -> Any:
         from .planning import plan
 
         return plan
+    if name == "search":
+        from .search_workflow import search
+
+        return search
     raise AttributeError(name)
