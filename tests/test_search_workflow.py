@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import importlib
+
+import information_agent.orchestration as orchestration
 from information_agent.collection import RawFeedEntry
 from information_agent.contracts import RunStatus
 from information_agent.investigation import QuestionKind, SearchPlan, SearchQuery
@@ -54,6 +57,12 @@ def _collector(_: str, __: float) -> list[RawFeedEntry]:
             "新一代 AI 芯片已经发布，厂商称推理成本下降 70%，但尚未披露完整测试条件和比较基线。",
         )
     ]
+
+
+def test_search_export_remains_callable_after_workflow_module_import() -> None:
+    importlib.import_module("information_agent.orchestration.search_workflow")
+
+    assert callable(orchestration.search)
 
 
 def test_search_runs_collection_planning_and_answering() -> None:

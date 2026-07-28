@@ -19,7 +19,7 @@ def __getattr__(name: str) -> Any:
 
         return plan
     if name == "search":
-        from .search import search
+        from .search_workflow import search
 
         return search
     raise AttributeError(name)

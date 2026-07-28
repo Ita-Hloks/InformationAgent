@@ -9,7 +9,7 @@ from .selection import SelectedEvidence
 
 if TYPE_CHECKING:
     from .investigation import PlanningReport
-    from .orchestration.search import SearchReport
+    from .orchestration.search_workflow import SearchReport
     from .search import SearchAnswer
 
 
