@@ -1,4 +1,5 @@
-from urllib.error import URLError
+import time
+from urllib.error import HTTPError, URLError
 
 from information_agent.collection import RawFeedEntry
 from information_agent.collection.web import _extract_text, augment_evidence, fetch_article
@@ -280,3 +281,50 @@ def test_augment_evidence_mixed_items(monkeypatch) -> None:
     assert result[2].content == "摘要"
     assert result[2].content_type is ContentType.RSS_SUMMARY
     assert set(fetched_urls) == {"https://example.com/success", "https://example.com/fail"}
+
+
+def test_fetch_article_returns_none_on_http_403(monkeypatch) -> None:
+    def fake_urlopen(request, timeout: float) -> None:
+        raise HTTPError(request.full_url, 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr("information_agent.collection.web.urlopen", fake_urlopen)
+
+    assert fetch_article("https://example.com/forbidden") is None
+
+
+def test_fetch_article_returns_none_on_http_429(monkeypatch) -> None:
+    def fake_urlopen(request, timeout: float) -> None:
+        raise HTTPError(request.full_url, 429, "Too Many Requests", {}, None)
+
+    monkeypatch.setattr("information_agent.collection.web.urlopen", fake_urlopen)
+
+    assert fetch_article("https://example.com/rate-limited") is None
+
+
+def test_domain_rate_limiter_allows_fast_requests() -> None:
+    from information_agent.collection.web import DomainRateLimiter
+
+    limiter = DomainRateLimiter(requests_per_second=10)
+    for _ in range(10):
+        limiter.wait_if_needed("example.com")
+
+
+def test_domain_rate_limiter_blocks_excessive_requests() -> None:
+    from information_agent.collection.web import DomainRateLimiter
+
+    limiter = DomainRateLimiter(requests_per_second=1)
+    limiter.wait_if_needed("slow.example")
+    start = time.monotonic()
+    limiter.wait_if_needed("slow.example")
+    elapsed = time.monotonic() - start
+    assert elapsed >= 0.5
+
+
+def test_domain_rate_limiter_separates_domains() -> None:
+    from information_agent.collection.web import DomainRateLimiter
+
+    limiter = DomainRateLimiter(requests_per_second=1)
+    limiter.wait_if_needed("a.example")
+    start = time.monotonic()
+    limiter.wait_if_needed("b.example")
+    assert time.monotonic() - start < 0.5
