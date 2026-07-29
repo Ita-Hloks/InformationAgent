@@ -9,7 +9,7 @@ from openai import OpenAI
 
 from ..common import request_json_completion
 from ..selection import SelectedEvidence
-from .models import QuestionKind, SearchPlan, SearchQuery
+from .models import PlanningResult, QuestionKind, SearchPlan, SearchQuery
 
 MAX_ARTICLES = 5
 MAX_ARTICLE_CHARS = 4_000
@@ -30,6 +30,12 @@ class QuestionPlanner(Protocol):
     ) -> list[SearchPlan]: ...
 
 
+class PlanningResponseError(ValueError):
+    def __init__(self, message: str, raw_response: str) -> None:
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
 class LLMQuestionPlanner:
     def __init__(self) -> None:
         api_key = os.getenv("LLM_API_KEY")
@@ -46,9 +52,17 @@ class LLMQuestionPlanner:
         evidence: list[SelectedEvidence],
         timeout: float,
     ) -> list[SearchPlan]:
+        return self.plan_with_result(topic, evidence, timeout).plans
+
+    def plan_with_result(
+        self,
+        topic: str,
+        evidence: list[SelectedEvidence],
+        timeout: float,
+    ) -> PlanningResult:
         selected = evidence[:MAX_ARTICLES]
         if not selected:
-            return []
+            return PlanningResult('{"plans": []}', [])
 
         raw = request_json_completion(
             client=self.client,
@@ -60,7 +74,11 @@ class LLMQuestionPlanner:
                 {"role": "user", "content": _planning_input(topic, selected)},
             ],
         )
-        return parse_search_plans(raw, selected)
+        try:
+            plans = parse_search_plans(raw, selected)
+        except ValueError as exc:
+            raise PlanningResponseError(str(exc), raw) from exc
+        return PlanningResult(raw, plans)
 
 
 def parse_search_plans(raw: str, evidence: list[SelectedEvidence]) -> list[SearchPlan]:
@@ -76,9 +94,8 @@ def parse_search_plans(raw: str, evidence: list[SelectedEvidence]) -> list[Searc
     plans: list[SearchPlan] = []
     plan_counts: dict[int, int] = {}
     seen_anchors: set[tuple[int, str]] = set()
-    seen_queries: set[str] = set()
     for item in raw_plans:
-        plan = _parse_plan(item, evidence_by_id, seen_queries)
+        plan = _parse_plan(item, evidence_by_id, set())
         anchor = (plan.evidence_id, plan.trigger_quote)
         if anchor in seen_anchors:
             raise ValueError("同一文章原文锚点不能生成重复计划")

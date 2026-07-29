@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 
 from dotenv import load_dotenv
 
@@ -29,6 +30,12 @@ def build_parser() -> argparse.ArgumentParser:
         limit_help="最多检查的文章数（上限 5）",
         default_limit=5,
     )
+    plan_run_parser = commands.add_parser(
+        "plan-run",
+        help="从数据库已选证据生成并保存搜索计划",
+    )
+    plan_run_parser.add_argument("run_id", help="ingest 命令返回的研究运行 ID")
+    plan_run_parser.add_argument("--timeout", type=float, default=60, help="规划时限（秒）")
     search_parser = commands.add_parser("search", help="采集、生成问题并联网回答")
     _add_common_arguments(
         search_parser,
@@ -80,6 +87,13 @@ def main() -> None:
         load_dotenv()
         report = plan(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
         payload = planning_report_to_payload(report)
+    elif args.command == "plan-run":
+        from .orchestration import plan_run
+        from .serialization import persisted_planning_to_payload
+
+        load_dotenv()
+        result = plan_run(args.run_id, timeout_seconds=args.timeout)
+        payload = persisted_planning_to_payload(result)
     elif args.command == "search":
         from .orchestration import search
 
@@ -92,6 +106,15 @@ def main() -> None:
         load_dotenv()
         answer = verify_connection(args.timeout)
         payload = search_answer_to_payload(answer)
+    _write_json_output(payload)
+
+
+def _write_json_output(payload: dict[str, object]) -> None:
+    if hasattr(sys.stdout, "reconfigure") and (sys.stdout.encoding or "").lower() not in {
+        "utf-8",
+        "utf8",
+    }:
+        sys.stdout.reconfigure(encoding="utf-8")
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 

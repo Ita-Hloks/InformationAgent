@@ -30,6 +30,14 @@ class SearchPlan:
     queries: tuple[SearchQuery, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class PlanningResult:
+    """一次 Planner 调用的可持久化结果。"""
+
+    raw_response: str
+    plans: list[SearchPlan]
+
+
 @dataclass(slots=True)
 class PlanningReport:
     topic: str
