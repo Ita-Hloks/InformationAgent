@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
-from urllib.error import URLError
+from threading import Lock
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import trafilatura
@@ -15,6 +18,31 @@ from .models import RawFeedEntry
 
 MAX_PAGE_BYTES = 2 * 1024 * 1024
 MIN_CONTENT_CHARS = 20
+DEFAULT_MAX_WORKERS = 6
+DEFAULT_REQUESTS_PER_SECOND = 3
+WINDOW_SECONDS = 1.0
+
+
+class DomainRateLimiter:
+    def __init__(self, requests_per_second: int = DEFAULT_REQUESTS_PER_SECOND):
+        self._requests_per_second = requests_per_second
+        self._windows: dict[str, list[float]] = defaultdict(list)
+        self._lock = Lock()
+
+    def wait_if_needed(self, domain: str) -> None:
+        now = time.monotonic()
+        with self._lock:
+            timestamps = self._windows[domain]
+            cutoff = now - WINDOW_SECONDS
+            timestamps[:] = [t for t in timestamps if t > cutoff]
+            if len(timestamps) >= self._requests_per_second:
+                sleep_for = timestamps[0] + WINDOW_SECONDS - now
+                if sleep_for > 0:
+                    time.sleep(sleep_for)
+            self._windows[domain].append(time.monotonic())
+
+
+_rate_limiter = DomainRateLimiter()
 
 
 def _guess_encoding(response) -> str | None:
@@ -26,9 +54,9 @@ def _guess_encoding(response) -> str | None:
     return None
 
 
-def _extract_text(html: str) -> str | None:
+def _extract_text(html: str, **kwargs) -> str | None:
     try:
-        return trafilatura.extract(html)
+        return trafilatura.extract(html, **kwargs)
     except Exception:
         return None
 
@@ -42,6 +70,12 @@ def fetch_article(
     if normalized_url is None:
         return None
 
+    try:
+        domain = normalized_url.split("/")[2]
+    except IndexError:
+        domain = "unknown"
+    _rate_limiter.wait_if_needed(domain)
+
     request = Request(
         normalized_url,
         headers={"User-Agent": "InformationAgent/0.1 Web-Extractor"},
@@ -53,6 +87,8 @@ def fetch_article(
                 return None
             payload = response.read(MAX_PAGE_BYTES + 1)
             guessed = _guess_encoding(response)
+    except HTTPError:
+        return None
     except (URLError, OSError, ValueError):
         return None
 
@@ -74,9 +110,6 @@ def fetch_article(
     if text is None or len(text) < MIN_CONTENT_CHARS:
         return None
     return text
-
-
-DEFAULT_MAX_WORKERS = 6
 
 
 def _augment_item(item: RawFeedEntry, timeout: float) -> RawFeedEntry:
