@@ -2,7 +2,7 @@
 
 from typing import Any
 
-__all__ = ["collect", "ingest", "plan", "run", "search"]
+__all__ = ["collect", "ingest", "plan", "plan_run", "run", "search"]
 
 
 def __getattr__(name: str) -> Any:
@@ -22,6 +22,10 @@ def __getattr__(name: str) -> Any:
         from .planning import plan
 
         return plan
+    if name == "plan_run":
+        from .database_planning import plan_run
+
+        return plan_run
     if name == "search":
         from .search_workflow import search
 

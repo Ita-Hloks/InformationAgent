@@ -11,11 +11,12 @@ from uuid import uuid4
 
 from ..collection import RawFeedEntry
 from ..contracts import PROJECT_TIMEZONE, CollectionReport, ContentType, project_now
+from ..investigation import SearchPlan
 from ..normalization import NormalizedArticle
 from ..selection import SelectedEvidence
 from .models import FeedObservation, FeedState
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 def default_database_path() -> Path:
@@ -165,6 +166,123 @@ class SQLiteCollectionStore:
             )
             for row in rows
         ]
+
+    def load_planning_input(self, run_id: str) -> tuple[str, list[SelectedEvidence]]:
+        with self._connect() as connection:
+            run = connection.execute(
+                "SELECT topic, status FROM research_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        if run is None:
+            raise ValueError(f"不存在的研究运行：{run_id}")
+        if run["status"] not in {"completed", "partial"}:
+            raise ValueError(f"研究运行尚未产生可规划结果：{run_id}")
+        return str(run["topic"]), self.load_selected_evidence(run_id)
+
+    def start_planning(self, run_id: str) -> str:
+        planning_run_id = uuid4().hex
+        created_at = _format_datetime(project_now())
+        with self._connect() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM research_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if exists is None:
+                raise ValueError(f"不存在的研究运行：{run_id}")
+            connection.execute(
+                """
+                INSERT INTO planning_runs (
+                    id, run_id, status, raw_response, errors_json, created_at
+                )
+                VALUES (?, ?, 'started', NULL, '[]', ?)
+                """,
+                (planning_run_id, run_id, created_at),
+            )
+        return planning_run_id
+
+    def complete_planning(
+        self,
+        planning_run_id: str,
+        run_id: str,
+        plans: list[SearchPlan],
+        raw_response: str | None,
+    ) -> None:
+        finished_at = _format_datetime(project_now())
+        with self._connect() as connection:
+            for plan in plans:
+                evidence = connection.execute(
+                    """
+                    SELECT snapshot_id FROM run_evidence
+                    WHERE run_id = ? AND evidence_no = ? AND selected = 1
+                    """,
+                    (run_id, plan.evidence_id),
+                ).fetchone()
+                if evidence is None:
+                    raise ValueError(f"规划引用了不存在的已选证据：{plan.evidence_id}")
+                plan_id = uuid4().hex
+                connection.execute(
+                    """
+                    INSERT INTO search_plans (
+                        id, planning_run_id, run_id, snapshot_id, evidence_no,
+                        trigger_quote, question, kind, priority
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        plan_id,
+                        planning_run_id,
+                        run_id,
+                        evidence["snapshot_id"],
+                        plan.evidence_id,
+                        plan.trigger_quote,
+                        plan.question,
+                        plan.kind.value,
+                        plan.priority,
+                    ),
+                )
+                for position, query in enumerate(plan.queries, start=1):
+                    connection.execute(
+                        """
+                        INSERT INTO search_queries (plan_id, position, query, purpose)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (plan_id, position, query.query, query.purpose),
+                    )
+
+            updated = connection.execute(
+                """
+                UPDATE planning_runs
+                SET status = 'completed', raw_response = ?, finished_at = ?
+                WHERE id = ? AND run_id = ? AND status = 'started'
+                """,
+                (raw_response, finished_at, planning_run_id, run_id),
+            )
+            if updated.rowcount != 1:
+                raise ValueError(f"无法完成不存在或已结束的规划运行：{planning_run_id}")
+
+    def fail_planning(
+        self,
+        planning_run_id: str,
+        run_id: str,
+        error: Exception,
+        raw_response: str | None = None,
+    ) -> None:
+        finished_at = _format_datetime(project_now())
+        errors = [{"type": type(error).__name__, "message": str(error)}]
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE planning_runs
+                SET status = 'failed', raw_response = ?, finished_at = ?, errors_json = ?
+                WHERE id = ? AND run_id = ? AND status = 'started'
+                """,
+                (
+                    raw_response,
+                    finished_at,
+                    json.dumps(errors, ensure_ascii=False),
+                    planning_run_id,
+                    run_id,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise ValueError(f"无法标记不存在或已结束的规划运行：{planning_run_id}")
 
     def _upsert_snapshot(self, connection: sqlite3.Connection, article: NormalizedArticle) -> str:
         content_hash = _content_hash(article)
@@ -352,6 +470,53 @@ class SQLiteCollectionStore:
             connection.execute(
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                 (2, _format_datetime(project_now())),
+            )
+        if 3 not in applied_versions:
+            connection.executescript(
+                """
+                CREATE TABLE planning_runs (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL REFERENCES research_runs(id),
+                    status TEXT NOT NULL CHECK (status IN ('started', 'completed', 'failed')),
+                    raw_response TEXT,
+                    errors_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    UNIQUE (id, run_id)
+                );
+
+                CREATE TABLE search_plans (
+                    id TEXT PRIMARY KEY,
+                    planning_run_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    snapshot_id TEXT NOT NULL,
+                    evidence_no INTEGER NOT NULL,
+                    trigger_quote TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    priority INTEGER NOT NULL,
+                    FOREIGN KEY (planning_run_id, run_id)
+                        REFERENCES planning_runs(id, run_id),
+                    FOREIGN KEY (run_id, snapshot_id)
+                        REFERENCES run_evidence(run_id, snapshot_id)
+                );
+
+                CREATE TABLE search_queries (
+                    plan_id TEXT NOT NULL REFERENCES search_plans(id),
+                    position INTEGER NOT NULL,
+                    query TEXT NOT NULL,
+                    purpose TEXT NOT NULL,
+                    PRIMARY KEY (plan_id, position)
+                );
+
+                CREATE INDEX planning_runs_run_id_idx ON planning_runs(run_id);
+                CREATE INDEX search_plans_planning_run_id_idx
+                    ON search_plans(planning_run_id);
+                """
+            )
+            connection.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                (3, _format_datetime(project_now())),
             )
 
 

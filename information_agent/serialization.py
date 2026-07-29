@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from .investigation import PlanningReport
     from .orchestration.search_workflow import SearchReport
     from .search import SearchAnswer
-    from .storage import PersistedCollection
+    from .storage import PersistedCollection, PersistedPlanning
 
 
 def format_json_datetime(value: datetime) -> str:
@@ -45,6 +45,14 @@ def planning_report_to_payload(report: PlanningReport) -> dict[str, Any]:
         "articles": [_selected_evidence_to_payload(item) for item in report.articles],
         "plans": [_search_plan_to_payload(item) for item in report.plans],
         "errors": report.errors,
+    }
+
+
+def persisted_planning_to_payload(result: PersistedPlanning) -> dict[str, Any]:
+    return {
+        "run_id": result.run_id,
+        "planning_run_id": result.planning_run_id,
+        **planning_report_to_payload(result.report),
     }
 
 
