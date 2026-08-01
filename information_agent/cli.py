@@ -7,6 +7,7 @@ import sys
 from dotenv import load_dotenv
 
 from .serialization import (
+    agent_report_to_payload,
     collection_report_to_payload,
     planning_report_to_payload,
     report_to_payload,
@@ -36,6 +37,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan_run_parser.add_argument("run_id", help="ingest 命令返回的研究运行 ID")
     plan_run_parser.add_argument("--timeout", type=float, default=60, help="规划时限（秒）")
+    agent_run_parser = commands.add_parser(
+        "agent-run",
+        help="从数据库证据运行受限搜索 Agent",
+    )
+    agent_run_parser.add_argument("run_id", help="ingest 命令返回的研究运行 ID")
+    agent_run_parser.add_argument("--timeout", type=float, default=60, help="Agent 总时限（秒）")
+    agent_run_parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=3,
+        help="最大决策步骤数",
+    )
+    agent_run_parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=3,
+        help="模型或搜索工具单步最大尝试次数",
+    )
     search_parser = commands.add_parser("search", help="采集、生成问题并联网回答")
     _add_common_arguments(
         search_parser,
@@ -94,6 +113,17 @@ def main() -> None:
         load_dotenv()
         result = plan_run(args.run_id, timeout_seconds=args.timeout)
         payload = persisted_planning_to_payload(result)
+    elif args.command == "agent-run":
+        from .orchestration import agent_run
+
+        load_dotenv()
+        report = agent_run(
+            args.run_id,
+            timeout_seconds=args.timeout,
+            max_steps=args.max_steps,
+            max_attempts=args.max_attempts,
+        )
+        payload = agent_report_to_payload(report)
     elif args.command == "search":
         from .orchestration import search
 
