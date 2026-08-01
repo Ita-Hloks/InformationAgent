@@ -330,3 +330,41 @@ def test_collect_cli_writes_utf8_json_file(monkeypatch, capsys, tmp_path) -> Non
         "articles": [],
         "errors": [],
     }
+
+
+def test_collect_cli_writes_bare_output_name_to_log_directory(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    import information_agent.orchestration.collection as collection_module
+
+    def fake_collect(*args, **kwargs) -> CollectionReport:
+        return CollectionReport("人工智能", RunStatus.COMPLETED, [])
+
+    log_dir = tmp_path / "log"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("INFORMATION_AGENT_LOG_DIR", str(log_dir))
+    monkeypatch.setattr(collection_module, "collect", fake_collect)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "information-agent",
+            "collect",
+            "人工智能",
+            "feed",
+            "--output",
+            "采集结果.json",
+        ],
+    )
+
+    main()
+
+    output_path = log_dir / "采集结果.json"
+    assert capsys.readouterr().out == ""
+    assert not (tmp_path / "采集结果.json").exists()
+    assert json.loads(output_path.read_text(encoding="utf-8")) == {
+        "topic": "人工智能",
+        "status": "completed",
+        "articles": [],
+        "errors": [],
+    }

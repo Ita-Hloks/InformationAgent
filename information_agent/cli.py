@@ -7,6 +7,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .common.call_log import get_log_directory
 from .serialization import (
     agent_report_to_payload,
     collection_report_to_payload,
@@ -80,7 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
         command_parser.add_argument(
             "--output",
             type=Path,
-            help="将 UTF-8 JSON 写入文件；同名文件会被覆盖",
+            help="将 UTF-8 JSON 写入文件；裸文件名会写入 log/，同名文件会被覆盖",
         )
     return parser
 
@@ -158,7 +159,8 @@ def main() -> None:
 def _write_json_output(payload: dict[str, object], output_path: Path | None = None) -> None:
     serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     if output_path is not None:
-        output_path.write_text(serialized, encoding="utf-8", newline="\n")
+        target_path = _resolve_output_path(output_path)
+        target_path.write_text(serialized, encoding="utf-8", newline="\n")
         return
     if hasattr(sys.stdout, "reconfigure") and (sys.stdout.encoding or "").lower() not in {
         "utf-8",
@@ -166,6 +168,14 @@ def _write_json_output(payload: dict[str, object], output_path: Path | None = No
     }:
         sys.stdout.reconfigure(encoding="utf-8")
     sys.stdout.write(serialized)
+
+
+def _resolve_output_path(output_path: Path) -> Path:
+    if output_path.is_absolute() or output_path.parent != Path("."):
+        return output_path
+    log_directory = get_log_directory()
+    log_directory.mkdir(parents=True, exist_ok=True)
+    return log_directory / output_path.name
 
 
 if __name__ == "__main__":
