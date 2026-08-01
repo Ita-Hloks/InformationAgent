@@ -44,7 +44,20 @@ python -m pip install -r requirements.txt
 python -m information_agent.cli collect "Python" "https://github.com/python/cpython/commits/main.atom" --limit 5
 ```
 
-命令会将 UTF-8 JSON 输出到标准输出。可同时传入多个 RSS/Atom 地址；`--timeout` 控制整条工作流的总时限，`--limit` 控制输出或送入后续阶段的文章数。
+命令默认将 UTF-8 JSON 输出到标准输出。所有子命令都可使用 `--output PATH`，让 Python 直接将结果写入 UTF-8 文件并覆盖同名文件；目标文件的父目录必须已经存在。可同时传入多个 RSS/Atom 地址；`--timeout` 控制整条工作流的总时限，`--limit` 控制输出或送入后续阶段的文章数。
+
+Windows PowerShell 5.1 处理原生进程管道时可能错误解码 UTF-8，建议直接写入文件后读取：
+
+```powershell
+python -m information_agent.cli ingest `
+  "人工智能" `
+  "https://" `
+  --limit 5 `
+  --output ingest-result.json
+
+$result = Get-Content ingest-result.json -Raw -Encoding UTF8 | ConvertFrom-Json
+$result.run_id
+```
 
 ## 工作流
 

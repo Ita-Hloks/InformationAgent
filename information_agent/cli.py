@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -66,6 +67,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="验证联网搜索配置、请求和来源返回",
     )
     verification_parser.add_argument("--timeout", type=float, default=60, help="验证时限（秒）")
+    for command_parser in (
+        collect_parser,
+        ingest_parser,
+        analyze_parser,
+        plan_parser,
+        plan_run_parser,
+        agent_run_parser,
+        search_parser,
+        verification_parser,
+    ):
+        command_parser.add_argument(
+            "--output",
+            type=Path,
+            help="将 UTF-8 JSON 写入文件；同名文件会被覆盖",
+        )
     return parser
 
 
@@ -136,16 +152,20 @@ def main() -> None:
         load_dotenv()
         answer = verify_connection(args.timeout)
         payload = search_answer_to_payload(answer)
-    _write_json_output(payload)
+    _write_json_output(payload, args.output)
 
 
-def _write_json_output(payload: dict[str, object]) -> None:
+def _write_json_output(payload: dict[str, object], output_path: Path | None = None) -> None:
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    if output_path is not None:
+        output_path.write_text(serialized, encoding="utf-8", newline="\n")
+        return
     if hasattr(sys.stdout, "reconfigure") and (sys.stdout.encoding or "").lower() not in {
         "utf-8",
         "utf8",
     }:
         sys.stdout.reconfigure(encoding="utf-8")
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    sys.stdout.write(serialized)
 
 
 if __name__ == "__main__":
