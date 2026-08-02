@@ -183,6 +183,23 @@ def test_parse_agent_finish_normalizes_numeric_string_evidence_ids() -> None:
     assert decision.evidence_ids == (1,)
 
 
+def test_parse_agent_finish_rejects_empty_evidence_ids() -> None:
+    evidence = ingest_evidence()
+    raw = json.dumps(
+        {
+            "decision": "finish",
+            "reason": "insufficient_after_search",
+            "answer": "没有找到足够可靠的独立来源。",
+            "evidence_ids": [],
+            "uncertainties": ["缺少原始报道"],
+        },
+        ensure_ascii=False,
+    )
+
+    with pytest.raises(ValueError, match="finish 决策必须引用至少一条证据"):
+        parse_agent_decision(raw, evidence)
+
+
 def test_parse_agent_finish_normalizes_single_uncertainty_string() -> None:
     evidence = ingest_evidence()
     raw = json.dumps(
@@ -270,6 +287,8 @@ def test_parse_agent_search_reuses_search_plan_validation() -> None:
 def test_agent_and_planner_share_search_plan_contract() -> None:
     assert SEARCH_PLAN_CONTRACT in agent_decider._system_prompt()
     assert SEARCH_PLAN_CONTRACT in investigation_planner._system_prompt()
+    assert "evidence_ids 必须是非空的 JSON 整数数组" in agent_decider._system_prompt()
+    assert "未找到独立来源" in agent_decider._system_prompt()
 
 
 def ingest_evidence() -> list[SelectedEvidence]:
@@ -356,6 +375,39 @@ def test_agent_retries_same_decision_and_tool_calls(tmp_path: Path) -> None:
     assert report.steps == 2
     assert len(decider.calls) == 4
     assert answerer.calls == [plan, plan, plan]
+
+
+def test_agent_does_not_retry_non_retryable_service_error(tmp_path: Path) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+
+    class NonRetryableDecider:
+        calls = 0
+
+        def decide(
+            self,
+            topic: str,
+            evidence: list[SelectedEvidence],
+            observations: list[AgentObservation],
+            timeout: float,
+            validation_feedback: str | None = None,
+        ):
+            self.calls += 1
+            error = RuntimeError("余额不足")
+            error.status_code = 402
+            raise error
+
+    decider = NonRetryableDecider()
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=decider,
+        max_attempts=3,
+    )
+
+    assert report.status is RunStatus.PARTIAL
+    assert report.stop_reason is AgentStopReason.ERROR
+    assert decider.calls == 1
+    assert report.errors == ["Agent 决策失败：余额不足"]
 
 
 def test_agent_does_not_report_completion_at_step_limit(tmp_path: Path) -> None:

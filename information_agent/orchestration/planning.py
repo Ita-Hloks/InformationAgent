@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..collection import fetch_feed
+from ..common import DEFAULT_LLM_TIMEOUT_SECONDS
 from ..investigation import PlanningReport, QuestionPlanner
 from .collection import (
     DEFAULT_MAX_ATTEMPTS,
@@ -17,7 +18,7 @@ def plan(
     topic: str,
     feeds: list[str],
     *,
-    timeout_seconds: float = 60,
+    timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS,
     limit: int = MAX_PLANNING_ARTICLES,
     collector: Collector = fetch_feed,
     planner: QuestionPlanner | None = None,

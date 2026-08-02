@@ -15,6 +15,7 @@ from ..agent import (
     ResearchDecider,
     SearchDecision,
 )
+from ..common import DEFAULT_LLM_TIMEOUT_SECONDS, is_retryable_llm_error
 from ..contracts import RunStatus
 from ..search import HostedSearchAnswerer, SearchAnswer, SearchAnswerer
 from ..storage import SQLiteCollectionStore, default_database_path
@@ -30,7 +31,7 @@ def agent_run(
     run_id: str,
     *,
     database_path: str | Path | None = None,
-    timeout_seconds: float = 60,
+    timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS,
     max_steps: int = DEFAULT_MAX_AGENT_STEPS,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     decider: ResearchDecider | None = None,
@@ -199,6 +200,8 @@ def _call_with_retries(
             return operation(remaining)
         except Exception as exc:
             last_error = exc
+            if not is_retryable_llm_error(exc):
+                break
     if last_error is None:
         raise AssertionError("重试循环必须执行至少一次")
     raise last_error
@@ -231,6 +234,8 @@ def _call_decider_with_retries(
             validation_feedback = str(exc)
         except Exception as exc:
             last_error = exc
+            if not is_retryable_llm_error(exc):
+                break
             validation_feedback = None
     if last_error is None:
         raise AssertionError("重试循环必须执行至少一次")

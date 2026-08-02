@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..collection import fetch_feed
+from ..common import DEFAULT_LLM_TIMEOUT_SECONDS
 from ..contracts import Report
 from .collection import (
     DEFAULT_MAX_ATTEMPTS,
@@ -15,7 +16,7 @@ def run(
     topic: str,
     feeds: list[str],
     *,
-    timeout_seconds: float = 60,
+    timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS,
     limit: int = 20,
     collector: Collector = fetch_feed,
     analyst: Analyst | None = None,

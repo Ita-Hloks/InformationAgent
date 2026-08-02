@@ -8,6 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from .common.call_log import get_log_directory
+from .common.llm import DEFAULT_LLM_TIMEOUT_SECONDS
 from .serialization import (
     agent_report_to_payload,
     collection_report_to_payload,
@@ -26,25 +27,34 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser = commands.add_parser("ingest", help="采集、规范化、筛选并写入数据库，不调用 LLM")
     _add_common_arguments(ingest_parser, limit_help="最多输出的文章数")
     analyze_parser = commands.add_parser("analyze", help="采集后继续调用 LLM 分析")
-    _add_common_arguments(analyze_parser, limit_help="最多送入模型的证据数")
+    _add_common_arguments(
+        analyze_parser,
+        limit_help="最多送入模型的证据数",
+        default_timeout=DEFAULT_LLM_TIMEOUT_SECONDS,
+    )
     plan_parser = commands.add_parser("plan", help="从筛选后的文章生成搜索计划")
     _add_common_arguments(
         plan_parser,
         limit_help="最多检查的文章数（上限 5）",
         default_limit=5,
+        default_timeout=DEFAULT_LLM_TIMEOUT_SECONDS,
     )
     plan_run_parser = commands.add_parser(
         "plan-run",
         help="从数据库已选证据生成并保存搜索计划",
     )
     plan_run_parser.add_argument("run_id", help="ingest 命令返回的研究运行 ID")
-    plan_run_parser.add_argument("--timeout", type=float, default=60, help="规划时限（秒）")
+    plan_run_parser.add_argument(
+        "--timeout", type=float, default=DEFAULT_LLM_TIMEOUT_SECONDS, help="规划时限（秒）"
+    )
     agent_run_parser = commands.add_parser(
         "agent-run",
         help="从数据库证据运行受限搜索 Agent",
     )
     agent_run_parser.add_argument("run_id", help="ingest 命令返回的研究运行 ID")
-    agent_run_parser.add_argument("--timeout", type=float, default=60, help="Agent 总时限（秒）")
+    agent_run_parser.add_argument(
+        "--timeout", type=float, default=DEFAULT_LLM_TIMEOUT_SECONDS, help="Agent 总时限（秒）"
+    )
     agent_run_parser.add_argument(
         "--max-steps",
         type=int,
@@ -62,12 +72,15 @@ def build_parser() -> argparse.ArgumentParser:
         search_parser,
         limit_help="最多检查的文章数（上限 5）",
         default_limit=5,
+        default_timeout=DEFAULT_LLM_TIMEOUT_SECONDS,
     )
     verification_parser = commands.add_parser(
         "verify-search",
         help="验证联网搜索配置、请求和来源返回",
     )
-    verification_parser.add_argument("--timeout", type=float, default=60, help="验证时限（秒）")
+    verification_parser.add_argument(
+        "--timeout", type=float, default=DEFAULT_LLM_TIMEOUT_SECONDS, help="验证时限（秒）"
+    )
     for command_parser in (
         collect_parser,
         ingest_parser,
@@ -91,10 +104,11 @@ def _add_common_arguments(
     *,
     limit_help: str,
     default_limit: int = 20,
+    default_timeout: float = 60,
 ) -> None:
     parser.add_argument("topic", help="研究主题，例如：AI Agent")
     parser.add_argument("feeds", nargs="+", help="一个或多个 RSS/Atom 地址")
-    parser.add_argument("--timeout", type=float, default=60, help="总时限（秒）")
+    parser.add_argument("--timeout", type=float, default=default_timeout, help="总时限（秒）")
     parser.add_argument("--limit", type=int, default=default_limit, help=limit_help)
 
 

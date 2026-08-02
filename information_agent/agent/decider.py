@@ -164,7 +164,9 @@ def _system_prompt() -> str:
 1. 若现有证据足以形成谨慎结论，或继续搜索不太可能改变结论，输出 finish。字段必须为
 decision、reason、answer、evidence_ids、uncertainties。reason 只能是 evidence_sufficient、
     no_material_gap 或 insufficient_after_search。answer 使用中文；
-    evidence_ids 必须是 JSON 整数数组，只能引用输入文章编号，例如 [1]，不能写成 ["1"]。
+    evidence_ids 必须是非空的 JSON 整数数组，只能引用输入文章编号，例如 [1]，不能写成 ["1"]。
+    即使结论是“未找到独立来源”或“证据不足”，也必须引用产生待核验主张的原始文章；
+    搜索结果来源不填入 evidence_ids，它们会保留在搜索观察中。
     uncertainties 必须是字符串数组；没有不确定性时输出 []，只有一条不确定性时也必须使用数组。
 2. 若存在会显著改变结论的证据缺口，输出 search。字段必须为 decision 和 plan，且 plan 必须是
 一个搜索计划对象：
@@ -193,7 +195,11 @@ def _decision_input(
         if validation_feedback
         else ""
     )
-    return f"研究主题：{topic}\n\n{feedback}原始文章：\n{articles}\n\n搜索观察：\n{history}"
+    valid_ids = "、".join(str(item.id) for item in evidence)
+    return (
+        f"研究主题：{topic}\n有效原始文章编号：{valid_ids}\n\n"
+        f"{feedback}原始文章：\n{articles}\n\n搜索观察：\n{history}"
+    )
 
 
 def _observation_history(observations: list[AgentObservation]) -> str:

@@ -5,9 +5,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from ..common import DEFAULT_LLM_TIMEOUT_SECONDS
+
 DEFAULT_RESULT_COUNT = 5
 DEFAULT_CONTENT_SIZE = "medium"
-DEFAULT_TIMEOUT_SECONDS = 60.0
+DEFAULT_TIMEOUT_SECONDS = DEFAULT_LLM_TIMEOUT_SECONDS
 
 SUPPORTED_CONTENT_SIZES = {"low", "medium", "high"}
 
