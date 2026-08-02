@@ -1,5 +1,11 @@
 from .models import PlanningReport, PlanningResult, QuestionKind, SearchPlan, SearchQuery
-from .planner import LLMQuestionPlanner, PlanningResponseError, QuestionPlanner, parse_search_plans
+from .planner import (
+    LLMQuestionPlanner,
+    PlanningResponseError,
+    QuestionPlanner,
+    parse_evidence_id,
+    parse_search_plans,
+)
 
 __all__ = [
     "LLMQuestionPlanner",
@@ -10,5 +16,6 @@ __all__ = [
     "QuestionPlanner",
     "SearchPlan",
     "SearchQuery",
+    "parse_evidence_id",
     "parse_search_plans",
 ]

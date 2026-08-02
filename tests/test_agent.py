@@ -128,6 +128,25 @@ def test_parse_agent_finish_requires_explicit_valid_evidence() -> None:
     assert decision.evidence_ids == (1,)
 
 
+def test_parse_agent_finish_normalizes_numeric_string_evidence_ids() -> None:
+    evidence = ingest_evidence()
+    raw = json.dumps(
+        {
+            "decision": "finish",
+            "reason": "evidence_sufficient",
+            "answer": "现有证据足以形成谨慎结论。",
+            "evidence_ids": ["1"],
+            "uncertainties": [],
+        },
+        ensure_ascii=False,
+    )
+
+    decision = parse_agent_decision(raw, evidence)
+
+    assert isinstance(decision, FinishDecision)
+    assert decision.evidence_ids == (1,)
+
+
 def test_parse_agent_finish_normalizes_single_uncertainty_string() -> None:
     evidence = ingest_evidence()
     raw = json.dumps(

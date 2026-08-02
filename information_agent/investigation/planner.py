@@ -118,7 +118,7 @@ def _parse_plan(
     if set(item) != expected_fields:
         raise ValueError("计划字段不符合约定")
 
-    evidence_id = _parse_evidence_id(item["evidence_id"])
+    evidence_id = parse_evidence_id(item["evidence_id"])
     if evidence_id not in evidence_by_id:
         valid_ids = ", ".join(str(value) for value in sorted(evidence_by_id))
         raise ValueError(f"计划引用了文章编号 {evidence_id}，有效编号为：{valid_ids}")
@@ -165,7 +165,7 @@ def _required_text(value: Any, name: str, maximum_length: int) -> str:
     return normalized
 
 
-def _parse_evidence_id(value: Any) -> int:
+def parse_evidence_id(value: Any) -> int:
     if type(value) is int:
         return value
     if isinstance(value, str) and value.strip().isdigit():

@@ -7,7 +7,7 @@ from typing import Any, Protocol
 from openai import OpenAI
 
 from ..common import request_json_completion
-from ..investigation import parse_search_plans
+from ..investigation import parse_evidence_id, parse_search_plans
 from ..search import SearchAnswerStatus
 from ..selection import SelectedEvidence
 from .models import AgentDecision, AgentObservation, FinishDecision, FinishReason, SearchDecision
@@ -116,10 +116,14 @@ def _parse_finish_decision(
     valid_ids = {item.id for item in evidence}
     evidence_ids: list[int] = []
     for value in raw_ids:
-        if type(value) is not int or value not in valid_ids:
+        try:
+            evidence_id = parse_evidence_id(value)
+        except ValueError as exc:
+            raise ValueError("finish 决策的 evidence_ids 必须是输入文章的整数编号") from exc
+        if evidence_id not in valid_ids:
             raise ValueError("finish 决策引用了不存在的证据")
-        if value not in evidence_ids:
-            evidence_ids.append(value)
+        if evidence_id not in evidence_ids:
+            evidence_ids.append(evidence_id)
     if not evidence_ids:
         raise ValueError("finish 决策必须引用至少一条证据")
 
@@ -153,7 +157,7 @@ def _system_prompt() -> str:
 1. 若现有证据足以形成谨慎结论，或继续搜索不太可能改变结论，输出 finish。字段必须为
 decision、reason、answer、evidence_ids、uncertainties。reason 只能是 evidence_sufficient、
     no_material_gap 或 insufficient_after_search。answer 使用中文；
-    evidence_ids 只能引用输入文章编号。
+    evidence_ids 必须是 JSON 整数数组，只能引用输入文章编号，例如 [1]，不能写成 ["1"]。
     uncertainties 必须是字符串数组；没有不确定性时输出 []，只有一条不确定性时也必须使用数组。
 2. 若存在会显著改变结论的证据缺口，输出 search。字段必须为 decision 和 plan。plan 必须包含
 evidence_id、trigger_quote、question、kind、priority、queries，规则与普通搜索计划相同。每次只能
