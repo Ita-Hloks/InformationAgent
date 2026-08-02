@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from information_agent.agent import (
     AgentObservation,
     AgentReport,
@@ -124,6 +126,62 @@ def test_parse_agent_finish_requires_explicit_valid_evidence() -> None:
     assert isinstance(decision, FinishDecision)
     assert decision.reason is FinishReason.EVIDENCE_SUFFICIENT
     assert decision.evidence_ids == (1,)
+
+
+def test_parse_agent_finish_normalizes_single_uncertainty_string() -> None:
+    evidence = ingest_evidence()
+    raw = json.dumps(
+        {
+            "decision": "finish",
+            "reason": "evidence_sufficient",
+            "answer": "现有证据足以形成谨慎结论。",
+            "evidence_ids": [1],
+            "uncertainties": "原始文章正文过短，结论仍存在范围限制。",
+        },
+        ensure_ascii=False,
+    )
+
+    decision = parse_agent_decision(raw, evidence)
+
+    assert isinstance(decision, FinishDecision)
+    assert decision.uncertainties == ("原始文章正文过短，结论仍存在范围限制。",)
+
+
+def test_parse_agent_finish_normalizes_empty_uncertainties() -> None:
+    evidence = ingest_evidence()
+    for empty_value in (None, ""):
+        raw = json.dumps(
+            {
+                "decision": "finish",
+                "reason": "evidence_sufficient",
+                "answer": "现有证据足以形成谨慎结论。",
+                "evidence_ids": [1],
+                "uncertainties": empty_value,
+            },
+            ensure_ascii=False,
+        )
+
+        decision = parse_agent_decision(raw, evidence)
+
+        assert isinstance(decision, FinishDecision)
+        assert decision.uncertainties == ()
+
+
+def test_parse_agent_finish_rejects_non_string_uncertainties() -> None:
+    evidence = ingest_evidence()
+    raw = json.dumps(
+        {
+            "decision": "finish",
+            "reason": "evidence_sufficient",
+            "answer": "现有证据足以形成谨慎结论。",
+            "evidence_ids": [1],
+            "uncertainties": {"value": "格式错误"},
+        },
+        ensure_ascii=False,
+    )
+
+    with pytest.raises(ValueError, match="uncertainties 必须是字符串数组"):
+        parse_agent_decision(raw, evidence)
 
 
 def test_parse_agent_search_reuses_search_plan_validation() -> None:

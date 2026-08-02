@@ -124,8 +124,12 @@ def _parse_finish_decision(
         raise ValueError("finish 决策必须引用至少一条证据")
 
     raw_uncertainties = payload["uncertainties"]
-    if not isinstance(raw_uncertainties, list):
-        raise ValueError("uncertainties 必须是数组")
+    if raw_uncertainties is None or raw_uncertainties == "":
+        raw_uncertainties = []
+    elif isinstance(raw_uncertainties, str):
+        raw_uncertainties = [raw_uncertainties]
+    elif not isinstance(raw_uncertainties, list):
+        raise ValueError("uncertainties 必须是字符串数组")
     uncertainties = tuple(
         _required_text(item, "uncertainty", MAX_UNCERTAINTY_CHARS) for item in raw_uncertainties
     )
@@ -148,7 +152,9 @@ def _system_prompt() -> str:
 每次只输出一个 JSON 决策：
 1. 若现有证据足以形成谨慎结论，或继续搜索不太可能改变结论，输出 finish。字段必须为
 decision、reason、answer、evidence_ids、uncertainties。reason 只能是 evidence_sufficient、
-no_material_gap 或 insufficient_after_search。answer 使用中文；evidence_ids 只能引用输入文章编号。
+    no_material_gap 或 insufficient_after_search。answer 使用中文；
+    evidence_ids 只能引用输入文章编号。
+    uncertainties 必须是字符串数组；没有不确定性时输出 []，只有一条不确定性时也必须使用数组。
 2. 若存在会显著改变结论的证据缺口，输出 search。字段必须为 decision 和 plan。plan 必须包含
 evidence_id、trigger_quote、question、kind、priority、queries，规则与普通搜索计划相同。每次只能
 搜索一个问题，trigger_quote 必须逐字出现在原始文章正文，不能引用搜索回答作为原文锚点。
