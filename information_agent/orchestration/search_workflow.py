@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass, field
 
 from ..collection import fetch_feed
+from ..common import DEFAULT_LLM_TIMEOUT_SECONDS
 from ..contracts import RunStatus
 from ..investigation import QuestionPlanner, SearchPlan
 from ..search import HostedSearchAnswerer, SearchAnswer, SearchAnswerer
@@ -31,7 +32,7 @@ def search(
     topic: str,
     feeds: list[str],
     *,
-    timeout_seconds: float = 60,
+    timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS,
     limit: int = MAX_PLANNING_ARTICLES,
     collector: Collector = fetch_feed,
     planner: QuestionPlanner | None = None,

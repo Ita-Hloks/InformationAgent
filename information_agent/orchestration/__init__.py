@@ -1,11 +1,15 @@
-"""MVP 固定流程编排。"""
+"""信息工作流与受限 Agent 编排。"""
 
 from typing import Any
 
-__all__ = ["collect", "ingest", "plan", "plan_run", "run", "search"]
+__all__ = ["agent_run", "collect", "ingest", "plan", "plan_run", "run", "search"]
 
 
 def __getattr__(name: str) -> Any:
+    if name == "agent_run":
+        from .agent_workflow import agent_run
+
+        return agent_run
     if name == "collect":
         from .collection import collect
 

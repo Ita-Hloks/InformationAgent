@@ -8,6 +8,7 @@ from .contracts import PROJECT_TIMEZONE, CollectionReport, Report
 from .selection import SelectedEvidence
 
 if TYPE_CHECKING:
+    from .agent import AgentReport
     from .investigation import PlanningReport
     from .orchestration.search_workflow import SearchReport
     from .search import SearchAnswer
@@ -53,6 +54,23 @@ def persisted_planning_to_payload(result: PersistedPlanning) -> dict[str, Any]:
         "run_id": result.run_id,
         "planning_run_id": result.planning_run_id,
         **planning_report_to_payload(result.report),
+    }
+
+
+def agent_report_to_payload(report: AgentReport) -> dict[str, Any]:
+    return {
+        "run_id": report.run_id,
+        "topic": report.topic,
+        "status": report.status.value,
+        "articles": [_selected_evidence_to_payload(item) for item in report.articles],
+        "plans": [_search_plan_to_payload(item) for item in report.plans],
+        "answers": [search_answer_to_payload(item) for item in report.answers],
+        "final_answer": report.final_answer,
+        "evidence_ids": list(report.evidence_ids),
+        "uncertainties": list(report.uncertainties),
+        "steps": report.steps,
+        "stop_reason": report.stop_reason.value,
+        "errors": report.errors,
     }
 
 

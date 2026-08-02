@@ -9,7 +9,7 @@ from information_agent.common import request_json_completion
 
 
 class FakeClient:
-    def __init__(self, *, content: str = "{}", error: Exception | None = None) -> None:
+    def __init__(self, *, content: str | None = "{}", error: Exception | None = None) -> None:
         self.content = content
         self.error = error
         self.chat = SimpleNamespace(completions=self)
@@ -63,3 +63,20 @@ def test_request_json_completion_backs_up_errors(tmp_path, monkeypatch) -> None:
     payload = json.loads(backup.read_text(encoding="utf-8"))
     assert payload["status"] == "failed"
     assert payload["error"] == {"type": "RuntimeError", "message": "调用失败"}
+
+
+def test_request_json_completion_preserves_empty_response(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("INFORMATION_AGENT_LOG_DIR", str(tmp_path))
+
+    result = request_json_completion(
+        client=FakeClient(content=None),
+        model="test-model",
+        messages=[{"role": "user", "content": "测试正文"}],
+        timeout=1,
+        stage="planning",
+    )
+
+    backup = next(tmp_path.glob("*.json"))
+    payload = json.loads(backup.read_text(encoding="utf-8"))
+    assert result == ""
+    assert payload["response"] == ""

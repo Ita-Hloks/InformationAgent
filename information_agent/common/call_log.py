@@ -18,7 +18,7 @@ class CallBackup:
     @classmethod
     def start(cls, *, stage: str, request: dict[str, Any]) -> CallBackup:
         created_at = datetime.now(PROJECT_TIMEZONE)
-        log_directory = _log_directory()
+        log_directory = get_log_directory()
         log_directory.mkdir(parents=True, exist_ok=True)
         path = log_directory / (f"{created_at:%Y%m%d-%H%M%S-%f}-{stage}-{uuid4().hex[:8]}.json")
         _write_json(
@@ -58,8 +58,12 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     temporary_path.replace(path)
 
 
-def _log_directory() -> Path:
+def get_log_directory() -> Path:
     configured = os.getenv("INFORMATION_AGENT_LOG_DIR")
     if configured:
         return Path(configured)
     return Path(__file__).resolve().parents[2] / "log"
+
+
+def _log_directory() -> Path:
+    return get_log_directory()

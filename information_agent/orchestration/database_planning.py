@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from ..common import DEFAULT_LLM_TIMEOUT_SECONDS
 from ..contracts import RunStatus
 from ..investigation import (
     LLMQuestionPlanner,
@@ -29,7 +30,7 @@ def plan_run(
     run_id: str,
     *,
     database_path: str | Path | None = None,
-    timeout_seconds: float = 60,
+    timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS,
     planner: QuestionPlanner | None = None,
 ) -> PersistedPlanning:
     """从已持久化证据生成问题计划，并将结果写回同一数据库。"""
