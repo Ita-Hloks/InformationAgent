@@ -40,6 +40,7 @@ class AgentObservation:
 
 class AgentStopReason(StrEnum):
     FINISHED = "finished"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
     NO_EVIDENCE = "no_evidence"
     MAX_STEPS = "max_steps"
     TIMEOUT = "timeout"

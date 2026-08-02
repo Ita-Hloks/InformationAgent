@@ -54,7 +54,18 @@ def _plan(evidence_id: int = 1, query: str = "AI 芯片 推理成本 独立测�
     )
 
 
-def _finish() -> FinishDecision:
+def _finish(
+    reason: FinishReason = FinishReason.EVIDENCE_SUFFICIENT,
+) -> FinishDecision:
+    return FinishDecision(
+        reason,
+        "现有证据足以形成谨慎结论。",
+        (1,),
+        (),
+    )
+
+
+def _insufficient_finish() -> FinishDecision:
     return FinishDecision(
         FinishReason.INSUFFICIENT_AFTER_SEARCH,
         "现有公开材料没有披露可比较的测试基线。",
@@ -115,8 +126,13 @@ class FormattingFeedbackDecider:
 
 
 class RecordingAnswerer:
-    def __init__(self, failures: int = 0) -> None:
+    def __init__(
+        self,
+        failures: int = 0,
+        status: SearchAnswerStatus = SearchAnswerStatus.ANSWERED,
+    ) -> None:
         self.failures = failures
+        self.status = status
         self.calls: list[SearchPlan] = []
 
     def answer(self, plan: SearchPlan, timeout: float) -> SearchAnswer:
@@ -128,8 +144,12 @@ class RecordingAnswerer:
         return SearchAnswer(
             evidence_id=plan.evidence_id,
             question=plan.question,
-            answer="没有找到完整比较基线。",
-            status=SearchAnswerStatus.INSUFFICIENT_EVIDENCE,
+            answer=(
+                "独立测试披露了完整比较基线。"
+                if self.status is SearchAnswerStatus.ANSWERED
+                else "没有找到完整比较基线。"
+            ),
+            status=self.status,
         )
 
 
@@ -315,6 +335,40 @@ def test_agent_finishes_without_calling_search(tmp_path: Path) -> None:
     assert report.steps == 1
     assert report.plans == []
     assert answerer.calls == []
+
+
+def test_agent_reports_insufficient_finish_as_partial(tmp_path: Path) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=SequenceDecider([_insufficient_finish()]),
+        answerer=RecordingAnswerer(),
+    )
+
+    assert report.status is RunStatus.PARTIAL
+    assert report.stop_reason is AgentStopReason.INSUFFICIENT_EVIDENCE
+    assert report.final_answer == "现有公开材料没有披露可比较的测试基线。"
+    assert report.uncertainties == ("缺少独立测试报告",)
+
+
+def test_agent_cannot_complete_when_all_searches_find_no_evidence(tmp_path: Path) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+    plan = _plan()
+
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=SequenceDecider([SearchDecision(plan), _finish()]),
+        answerer=RecordingAnswerer(status=SearchAnswerStatus.INSUFFICIENT_EVIDENCE),
+    )
+
+    assert report.status is RunStatus.PARTIAL
+    assert report.stop_reason is AgentStopReason.INSUFFICIENT_EVIDENCE
+    assert report.final_answer is None
+    assert report.evidence_ids == ()
+    assert report.uncertainties == ("所有搜索均未获得可验证证据",)
 
 
 def test_agent_retries_format_failure_with_feedback(tmp_path: Path) -> None:

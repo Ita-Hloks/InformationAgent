@@ -11,13 +11,19 @@ from ..agent import (
     AgentReport,
     AgentStopReason,
     FinishDecision,
+    FinishReason,
     LLMResearchDecider,
     ResearchDecider,
     SearchDecision,
 )
 from ..common import DEFAULT_LLM_TIMEOUT_SECONDS, is_retryable_llm_error
 from ..contracts import RunStatus
-from ..search import HostedSearchAnswerer, SearchAnswer, SearchAnswerer
+from ..search import (
+    HostedSearchAnswerer,
+    SearchAnswer,
+    SearchAnswerer,
+    SearchAnswerStatus,
+)
 from ..storage import SQLiteCollectionStore, default_database_path
 from .execution import ExecutionBudget
 
@@ -113,18 +119,15 @@ def agent_run(
             )
 
         if isinstance(decision, FinishDecision):
-            return AgentReport(
+            return _finish_report(
                 run_id,
                 topic,
-                RunStatus.COMPLETED,
                 evidence,
                 plans,
                 answers,
-                decision.answer,
-                decision.evidence_ids,
-                decision.uncertainties,
+                observations,
+                decision,
                 step,
-                AgentStopReason.FINISHED,
                 errors,
             )
 
@@ -265,6 +268,45 @@ def _failed_report(
         len(observations),
         stop_reason,
         [error],
+    )
+
+
+def _finish_report(
+    run_id,
+    topic,
+    evidence,
+    plans,
+    answers,
+    observations,
+    decision: FinishDecision,
+    step: int,
+    errors,
+) -> AgentReport:
+    searches_found_no_evidence = bool(observations) and all(
+        observation.answer.status is SearchAnswerStatus.INSUFFICIENT_EVIDENCE
+        for observation in observations
+    )
+    reason_reports_insufficient = decision.reason is FinishReason.INSUFFICIENT_AFTER_SEARCH
+    insufficient = reason_reports_insufficient or searches_found_no_evidence
+    reason_mismatches_searches = searches_found_no_evidence and not reason_reports_insufficient
+    final_answer = None if reason_mismatches_searches else decision.answer
+    evidence_ids = () if reason_mismatches_searches else decision.evidence_ids
+    uncertainties = decision.uncertainties
+    if reason_mismatches_searches:
+        uncertainties = (*uncertainties, "所有搜索均未获得可验证证据")
+    return AgentReport(
+        run_id,
+        topic,
+        RunStatus.PARTIAL if insufficient else RunStatus.COMPLETED,
+        evidence,
+        plans,
+        answers,
+        final_answer,
+        evidence_ids,
+        uncertainties,
+        step,
+        AgentStopReason.INSUFFICIENT_EVIDENCE if insufficient else AgentStopReason.FINISHED,
+        errors,
     )
 
 
