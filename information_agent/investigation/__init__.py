@@ -1,5 +1,6 @@
 from .models import PlanningReport, PlanningResult, QuestionKind, SearchPlan, SearchQuery
 from .planner import (
+    SEARCH_PLAN_CONTRACT,
     LLMQuestionPlanner,
     PlanningResponseError,
     QuestionPlanner,
@@ -14,6 +15,7 @@ __all__ = [
     "PlanningResponseError",
     "QuestionKind",
     "QuestionPlanner",
+    "SEARCH_PLAN_CONTRACT",
     "SearchPlan",
     "SearchQuery",
     "parse_evidence_id",

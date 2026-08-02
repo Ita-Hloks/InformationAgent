@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import TypeVar
 
 from ..agent import (
+    AgentDecision,
+    AgentDecisionResponseError,
     AgentObservation,
     AgentReport,
     AgentStopReason,
@@ -89,13 +91,11 @@ def agent_run(
                 "Agent 在作出下一步决策前超时",
             )
         try:
-            decision = _call_with_retries(
-                lambda timeout: active_decider.decide(
-                    topic,
-                    evidence,
-                    observations,
-                    timeout,
-                ),
+            decision = _call_decider_with_retries(
+                active_decider,
+                topic,
+                evidence,
+                observations,
                 budget,
                 max_attempts,
             )
@@ -199,6 +199,39 @@ def _call_with_retries(
             return operation(remaining)
         except Exception as exc:
             last_error = exc
+    if last_error is None:
+        raise AssertionError("重试循环必须执行至少一次")
+    raise last_error
+
+
+def _call_decider_with_retries(
+    decider: ResearchDecider,
+    topic: str,
+    evidence,
+    observations,
+    budget: ExecutionBudget,
+    max_attempts: int,
+) -> AgentDecision:
+    last_error: Exception | None = None
+    validation_feedback: str | None = None
+    for _ in range(max_attempts):
+        remaining = budget.remaining()
+        if remaining <= 0:
+            raise TimeoutError("Agent 总时限已耗尽")
+        try:
+            return decider.decide(
+                topic,
+                evidence,
+                observations,
+                remaining,
+                validation_feedback=validation_feedback,
+            )
+        except AgentDecisionResponseError as exc:
+            last_error = exc
+            validation_feedback = str(exc)
+        except Exception as exc:
+            last_error = exc
+            validation_feedback = None
     if last_error is None:
         raise AssertionError("重试循环必须执行至少一次")
     raise last_error

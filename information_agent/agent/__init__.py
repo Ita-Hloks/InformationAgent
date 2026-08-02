@@ -1,4 +1,9 @@
-from .decider import LLMResearchDecider, ResearchDecider, parse_agent_decision
+from .decider import (
+    AgentDecisionResponseError,
+    LLMResearchDecider,
+    ResearchDecider,
+    parse_agent_decision,
+)
 from .models import (
     AgentDecision,
     AgentObservation,
@@ -11,6 +16,7 @@ from .models import (
 
 __all__ = [
     "AgentDecision",
+    "AgentDecisionResponseError",
     "AgentObservation",
     "AgentReport",
     "AgentStopReason",

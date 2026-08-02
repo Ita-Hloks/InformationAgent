@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from information_agent.agent import (
+    AgentDecisionResponseError,
     AgentObservation,
     AgentReport,
     AgentStopReason,
@@ -15,10 +16,17 @@ from information_agent.agent import (
     SearchDecision,
     parse_agent_decision,
 )
+from information_agent.agent import decider as agent_decider
 from information_agent.cli import main
 from information_agent.collection import RawFeedEntry
 from information_agent.contracts import RunStatus
-from information_agent.investigation import QuestionKind, SearchPlan, SearchQuery
+from information_agent.investigation import (
+    SEARCH_PLAN_CONTRACT,
+    QuestionKind,
+    SearchPlan,
+    SearchQuery,
+)
+from information_agent.investigation import planner as investigation_planner
 from information_agent.orchestration.agent_workflow import agent_run
 from information_agent.orchestration.ingestion import ingest
 from information_agent.search import SearchAnswer, SearchAnswerStatus
@@ -60,6 +68,7 @@ class SequenceDecider:
         self.decisions = list(decisions)
         self.failures = failures
         self.calls: list[list[AgentObservation]] = []
+        self.validation_feedback: list[str | None] = []
 
     def decide(
         self,
@@ -67,15 +76,42 @@ class SequenceDecider:
         evidence: list[SelectedEvidence],
         observations: list[AgentObservation],
         timeout: float,
+        validation_feedback: str | None = None,
     ):
         assert topic == "AI 芯片"
         assert evidence[0].id == 1
         assert timeout > 0
         self.calls.append(list(observations))
+        self.validation_feedback.append(validation_feedback)
         if self.failures:
             self.failures -= 1
             raise ConnectionError("模型连接中断")
         return self.decisions.pop(0)
+
+
+class FormattingFeedbackDecider:
+    def __init__(self) -> None:
+        self.validation_feedback: list[str | None] = []
+
+    def decide(
+        self,
+        topic: str,
+        evidence: list[SelectedEvidence],
+        observations: list[AgentObservation],
+        timeout: float,
+        validation_feedback: str | None = None,
+    ):
+        assert topic == "AI 芯片"
+        assert evidence[0].id == 1
+        assert observations == []
+        assert timeout > 0
+        self.validation_feedback.append(validation_feedback)
+        if validation_feedback is None:
+            raise AgentDecisionResponseError(
+                "kind 不是支持的可核查主张类型",
+                '{"decision":"search"}',
+            )
+        return _finish()
 
 
 class RecordingAnswerer:
@@ -231,6 +267,11 @@ def test_parse_agent_search_reuses_search_plan_validation() -> None:
     assert decision.plan.question == "推理成本降幅采用了什么比较基线？"
 
 
+def test_agent_and_planner_share_search_plan_contract() -> None:
+    assert SEARCH_PLAN_CONTRACT in agent_decider._system_prompt()
+    assert SEARCH_PLAN_CONTRACT in investigation_planner._system_prompt()
+
+
 def ingest_evidence() -> list[SelectedEvidence]:
     from information_agent.normalization import normalize_evidence
 
@@ -254,6 +295,26 @@ def test_agent_finishes_without_calling_search(tmp_path: Path) -> None:
     assert report.stop_reason is AgentStopReason.FINISHED
     assert report.steps == 1
     assert report.plans == []
+    assert answerer.calls == []
+
+
+def test_agent_retries_format_failure_with_feedback(tmp_path: Path) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+    decider = FormattingFeedbackDecider()
+    answerer = RecordingAnswerer()
+
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=decider,
+        answerer=answerer,
+        max_attempts=2,
+    )
+
+    assert report.status is RunStatus.COMPLETED
+    assert report.stop_reason is AgentStopReason.FINISHED
+    assert report.steps == 1
+    assert decider.validation_feedback == [None, "kind 不是支持的可核查主张类型"]
     assert answerer.calls == []
 
 
