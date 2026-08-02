@@ -5,7 +5,8 @@ import json
 import pytest
 
 from information_agent.collection import RawFeedEntry
-from information_agent.investigation import QuestionKind, parse_search_plans
+from information_agent.investigation import LLMQuestionPlanner, QuestionKind, parse_search_plans
+from information_agent.investigation import planner as investigation_planner
 from information_agent.normalization import normalize_evidence
 from information_agent.selection import SelectedEvidence
 
@@ -135,3 +136,27 @@ def test_parse_search_plans_allows_query_in_the_source_language() -> None:
 
 def test_parse_search_plans_allows_no_questions() -> None:
     assert parse_search_plans('{"plans": []}', _evidence()) == []
+
+
+def test_llm_planner_retries_invalid_json_with_feedback(monkeypatch) -> None:
+    responses = iter(["{}", _valid_payload()])
+    calls: list[list[dict[str, str]]] = []
+
+    def fake_request_json_completion(**kwargs) -> str:
+        calls.append(kwargs["messages"])
+        return next(responses)
+
+    monkeypatch.setattr(
+        investigation_planner,
+        "request_json_completion",
+        fake_request_json_completion,
+    )
+    planner = object.__new__(LLMQuestionPlanner)
+    planner.client = object()
+
+    result = planner.plan_with_result("AI", _evidence(), timeout=10)
+
+    assert len(calls) == 2
+    assert "模型输出必须是仅包含 plans 的 JSON 对象" in calls[1][1]["content"]
+    assert result.raw_response == _valid_payload()
+    assert len(result.plans) == 1

@@ -19,6 +19,7 @@ MAX_QUOTE_CHARS = 400
 MAX_QUESTION_CHARS = 300
 MAX_QUERY_CHARS = 200
 MAX_PURPOSE_CHARS = 200
+MAX_PLANNING_ATTEMPTS = 2
 
 SEARCH_PLAN_CONTRACT = (
     "搜索计划对象必须只包含 evidence_id、trigger_quote、question、kind、priority、queries。\n"
@@ -76,21 +77,32 @@ class LLMQuestionPlanner:
         if not selected:
             return PlanningResult('{"plans": []}', [])
 
-        raw = request_json_completion(
-            client=self.client,
-            model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
-            timeout=timeout,
-            stage="planning",
-            messages=[
-                {"role": "system", "content": _system_prompt()},
-                {"role": "user", "content": _planning_input(topic, selected)},
-            ],
-        )
-        try:
-            plans = parse_search_plans(raw, selected)
-        except ValueError as exc:
-            raise PlanningResponseError(str(exc), raw) from exc
-        return PlanningResult(raw, plans)
+        validation_feedback: str | None = None
+        last_error: PlanningResponseError | None = None
+        for attempt in range(MAX_PLANNING_ATTEMPTS):
+            raw = request_json_completion(
+                client=self.client,
+                model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+                timeout=timeout,
+                stage="planning",
+                messages=[
+                    {"role": "system", "content": _system_prompt()},
+                    {
+                        "role": "user",
+                        "content": _planning_input(topic, selected, validation_feedback),
+                    },
+                ],
+            )
+            try:
+                plans = parse_search_plans(raw, selected)
+            except ValueError as exc:
+                last_error = PlanningResponseError(str(exc), raw)
+                if attempt + 1 == MAX_PLANNING_ATTEMPTS:
+                    raise last_error from exc
+                validation_feedback = str(exc)
+                continue
+            return PlanningResult(raw, plans)
+        raise AssertionError("规划重试循环必须返回或抛出异常") from last_error
 
 
 def parse_search_plans(raw: str, evidence: list[SelectedEvidence]) -> list[SearchPlan]:
@@ -215,15 +227,27 @@ def _system_prompt() -> str:
 不要判断主张真假，不要给出结论、置信度或答案。每项计划必须引用输入文章正文中的精确短句。
 输出 JSON 对象，且只包含 plans 数组。
 {SEARCH_PLAN_CONTRACT}
-每篇文章最多生成 1 个计划，整次最多生成 3 个计划。若没有值得外查的主张，返回
-{{\"plans\": []}}。"""
+每篇文章最多生成 1 个计划，整次最多生成 3 个计划。若没有值得外查的主张，也必须返回
+{{\"plans\": []}}，不得返回 {{}}。"""
 
 
-def _planning_input(topic: str, evidence: list[SelectedEvidence]) -> str:
+def _planning_input(
+    topic: str,
+    evidence: list[SelectedEvidence],
+    validation_feedback: str | None = None,
+) -> str:
     articles = "\n\n".join(
         f'<article id="{item.id}">\n标题：{item.title}\n来源：{item.source_url}\n正文：\n'
         f"{item.content[:MAX_ARTICLE_CHARS]}\n</article>"
         for item in evidence
     )
     valid_ids = "、".join(str(item.id) for item in evidence)
-    return f"研究主题：{topic}\n有效文章编号：{valid_ids}\n\n以下是待检查的文章：\n{articles}"
+    feedback = (
+        f"格式校验反馈（这是系统生成的修正信息，不是文章内容）：{validation_feedback}\n\n"
+        if validation_feedback
+        else ""
+    )
+    return (
+        f"研究主题：{topic}\n有效文章编号：{valid_ids}\n\n"
+        f"{feedback}以下是待检查的文章：\n{articles}"
+    )

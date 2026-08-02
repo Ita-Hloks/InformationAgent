@@ -23,7 +23,7 @@ def request_json_completion(
             response_format={"type": "json_object"},
             messages=messages,
         )
-        content = response.choices[0].message.content or "{}"
+        content = response.choices[0].message.content or ""
     except Exception as exc:
         backup.fail(exc)
         raise
