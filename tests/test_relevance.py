@@ -35,7 +35,7 @@ class FakeCompletionClient:
         )
 
 
-def test_llm_selector_keeps_strong_article_and_excludes_weak_or_mixed_entries() -> None:
+def test_llm_selector_keeps_relevant_segments_and_splits_a_digest() -> None:
     items = [
         normalized(
             "https://example.com/strong",
@@ -50,7 +50,10 @@ def test_llm_selector_keeps_strong_article_and_excludes_weak_or_mixed_entries() 
         normalized(
             "https://example.com/digest",
             "今日科技新闻汇总",
-            "第一篇介绍芯片。第二篇介绍手机。第三篇介绍云服务。",
+            (
+                "第一篇：AI 芯片发布。芯片测试结果显示延迟下降。\n\n"
+                "第二篇：手机更新。手机厂商公布了新的产品计划。"
+            ),
         ),
     ]
     client = FakeCompletionClient(
@@ -58,24 +61,27 @@ def test_llm_selector_keeps_strong_article_and_excludes_weak_or_mixed_entries() 
             "decisions": [
                 {
                     "candidate_id": "candidate-1",
-                    "relevant": True,
-                    "atomic": True,
-                    "relevance_score": 0.96,
-                    "reason": "主题是文章的核心对象。",
+                    "segments": [
+                        {
+                            "title": "新型 AI 芯片降低推理成本",
+                            "start_quote": "厂商公布了",
+                            "end_quote": "比较基线。",
+                        }
+                    ],
                 },
                 {
                     "candidate_id": "candidate-2",
-                    "relevant": False,
-                    "atomic": True,
-                    "relevance_score": 0.08,
-                    "reason": "主题只被边缘提及。",
+                    "segments": [],
                 },
                 {
                     "candidate_id": "candidate-3",
-                    "relevant": True,
-                    "atomic": False,
-                    "relevance_score": 0.88,
-                    "reason": "这是多篇文章的汇总。",
+                    "segments": [
+                        {
+                            "title": "AI 芯片发布",
+                            "start_quote": "第一篇：AI 芯片发布。",
+                            "end_quote": "延迟下降。",
+                        },
+                    ],
                 },
             ]
         }
@@ -88,28 +94,42 @@ def test_llm_selector_keeps_strong_article_and_excludes_weak_or_mixed_entries() 
         timeout=10,
     )
 
-    assert [item.source_url for item in selected] == ["https://example.com/strong"]
-    assert selected[0].relevance_score == 0.96
+    assert [item.source_url for item in selected] == [
+        "https://example.com/strong",
+        "https://example.com/digest",
+    ]
+    assert selected[1].title == "AI 芯片发布"
+    assert selected[1].content == "第一篇：AI 芯片发布。芯片测试结果显示延迟下降。"
+    assert "手机" not in selected[1].content
     user_prompt = client.messages[1]["content"]
-    assert "新型 AI 芯片降低推理成本" in user_prompt
-    assert "城市交通管理更新" in user_prompt
-    assert "<rss-candidates>" in user_prompt
+    assert "第一篇：AI 芯片发布" in user_prompt
 
 
 def test_selection_deduplicates_before_calling_llm() -> None:
     items = [
-        normalized("https://example.com/article", "主题文章", "第一版内容。"),
-        normalized("https://example.com/article", "主题文章", "第二版内容。"),
+        normalized(
+            "https://example.com/article",
+            "主题文章",
+            "第一版主题文章内容已经达到最小长度要求。",
+        ),
+        normalized(
+            "https://example.com/article",
+            "主题文章",
+            "第二版主题文章内容已经达到最小长度要求。",
+        ),
     ]
     client = FakeCompletionClient(
         {
             "decisions": [
                 {
                     "candidate_id": "candidate-1",
-                    "relevant": True,
-                    "atomic": True,
-                    "relevance_score": 0.8,
-                    "reason": "主题直接相关。",
+                    "segments": [
+                        {
+                            "title": "主题文章",
+                            "start_quote": "第一版",
+                            "end_quote": "最小长度要求。",
+                        }
+                    ],
                 }
             ]
         }
@@ -129,17 +149,19 @@ def test_selection_deduplicates_before_calling_llm() -> None:
 def test_malformed_llm_output_is_rejected() -> None:
     from information_agent.selection.llm import parse_relevance_response
 
-    with pytest.raises(RelevanceResponseError, match="relevant 必须是布尔值"):
+    with pytest.raises(RelevanceResponseError, match="文章片段字段不符合约定"):
         parse_relevance_response(
             json.dumps(
                 {
                     "decisions": [
                         {
                             "candidate_id": "candidate-1",
-                            "relevant": "yes",
-                            "atomic": True,
-                            "relevance_score": 0.8,
-                            "reason": "主题直接相关。",
+                            "segments": [
+                                {
+                                    "title": "主题文章",
+                                    "start_quote": "主题",
+                                }
+                            ],
                         }
                     ]
                 }
@@ -165,9 +187,28 @@ def test_selector_output_cannot_invent_an_article() -> None:
                 SelectedEvidence(
                     article=normalized("https://example.com/other", "其他", "其他正文。"),
                     evidence_id=9,
-                    relevance_score=1.0,
                 )
             ]
 
     with pytest.raises(ValueError, match="未知文章"):
         select_evidence("主题", [item], selector=InventingSelector(), timeout=10)
+
+
+def test_selector_rejects_model_text_outside_original_entry() -> None:
+    item = normalized("https://example.com/article", "主题文章", "主题正文。")
+
+    class InventingSegmentSelector:
+        def select(self, topic, items, *, limit, timeout):
+            return [
+                SelectedEvidence(
+                    article=normalized(
+                        "https://example.com/article",
+                        "主题文章",
+                        "模型补写的正文。",
+                    ),
+                    evidence_id=1,
+                )
+            ]
+
+    with pytest.raises(ValueError, match="输入文章之外"):
+        select_evidence("主题", [item], selector=InventingSegmentSelector(), timeout=10)

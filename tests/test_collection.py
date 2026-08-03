@@ -9,6 +9,7 @@ from urllib.error import HTTPError, URLError
 from information_agent.cli import main
 from information_agent.collection import RawFeedEntry
 from information_agent.contracts import CollectionReport, ContentType, RunStatus
+from information_agent.normalization import derive_article
 from information_agent.orchestration.collection import collect
 from information_agent.selection import SelectedEvidence
 from information_agent.serialization import collection_report_to_payload
@@ -108,7 +109,7 @@ def test_collect_only_augments_articles_selected_by_llm(monkeypatch) -> None:
 
     class Selector:
         def select(self, topic, items, *, limit, timeout):
-            return [SelectedEvidence(items[0], 8, 0.9)]
+            return [SelectedEvidence(items[0], 8)]
 
     def fake_augment(items, *, timeout):
         fetched.extend(item.source_url for item in items)
@@ -129,6 +130,52 @@ def test_collect_only_augments_articles_selected_by_llm(monkeypatch) -> None:
     assert report.status is RunStatus.COMPLETED
     assert [item.source_url for item in report.articles] == ["https://example.com/selected"]
     assert fetched == ["https://example.com/selected"]
+
+
+def test_collect_keeps_relevant_segment_from_mixed_entry(monkeypatch) -> None:
+    entry = RawFeedEntry(
+        "https://example.com/digest",
+        "今日科技汇总",
+        "第一篇：AI 芯片发布，厂商公布了完整测试结果和比较基线。\n\n"
+        "第二篇：手机更新，厂商公布了新的产品计划和发布时间。",
+        content_type=ContentType.RSS_SUMMARY,
+    )
+    fetched: list[str] = []
+
+    class Selector:
+        def select(self, topic, items, *, limit, timeout):
+            return [
+                SelectedEvidence(
+                    derive_article(
+                        items[0],
+                        title="AI 芯片发布",
+                        content="第一篇：AI 芯片发布，厂商公布了完整测试结果和比较基线。",
+                    ),
+                    1,
+                )
+            ]
+
+    def fake_augment(items, *, timeout):
+        fetched.extend(item.source_url for item in items)
+        return items
+
+    monkeypatch.setattr(
+        "information_agent.orchestration.collection.augment_evidence",
+        fake_augment,
+    )
+
+    report = collect(
+        "AI 芯片",
+        ["feed"],
+        collector=lambda _feed, _timeout: [entry],
+        relevance_selector=Selector(),
+    )
+
+    assert report.status is RunStatus.COMPLETED
+    assert len(report.articles) == 1
+    assert report.articles[0].source_url == entry.source_url
+    assert report.articles[0].content == ("第一篇：AI 芯片发布，厂商公布了完整测试结果和比较基线。")
+    assert fetched == []
 
 
 def test_collect_fetches_six_sources_concurrently() -> None:

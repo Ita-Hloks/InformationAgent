@@ -25,7 +25,6 @@ class SelectedEvidence:
 
     article: NormalizedArticle
     evidence_id: int
-    relevance_score: float
 
     @property
     def id(self) -> int:

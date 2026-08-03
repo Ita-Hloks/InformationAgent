@@ -109,7 +109,6 @@ def _selected_evidence_to_payload(item: SelectedEvidence) -> dict[str, Any]:
     payload["categories"] = list(item.article.categories)
     payload["content_chunks"] = list(item.article.content_chunks)
     payload["processing_warnings"] = list(item.article.processing_warnings)
-    payload["relevance_score"] = item.relevance_score
     payload["id"] = item.evidence_id
     payload["collected_at"] = format_json_datetime(item.article.collected_at)
     if item.article.published_at is not None:

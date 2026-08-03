@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 from ..common import DEFAULT_LLM_TIMEOUT_SECONDS
 from ..normalization import NormalizedArticle
 from .llm import LLMRelevanceSelector
@@ -70,22 +68,25 @@ def _validate_selection(
         raise ValueError("语义筛选器返回的文章数超过上限")
 
     items_by_url = {item.source_url: item for item in items}
-    seen_urls: set[str] = set()
+    seen_segments: set[tuple[str, str]] = set()
     validated: list[SelectedEvidence] = []
     for item in selected:
         source_url = item.source_url
         if source_url not in items_by_url:
             raise ValueError("语义筛选器返回了未知文章")
-        if source_url in seen_urls:
-            raise ValueError("语义筛选器重复返回文章")
-        if not math.isfinite(item.relevance_score) or not 0 <= item.relevance_score <= 1:
-            raise ValueError("语义筛选器返回了无效相关性分数")
-        seen_urls.add(source_url)
+        base_article = items_by_url[source_url]
+        if item.article.article_id != base_article.article_id:
+            raise ValueError("语义筛选器返回了未知文章身份")
+        if item.article.content not in base_article.content:
+            raise ValueError("语义筛选器返回了输入文章之外的正文")
+        segment_key = (source_url, item.article.content)
+        if segment_key in seen_segments:
+            raise ValueError("语义筛选器重复返回文章片段")
+        seen_segments.add(segment_key)
         validated.append(
             SelectedEvidence(
-                article=items_by_url[source_url],
+                article=item.article,
                 evidence_id=len(validated) + 1,
-                relevance_score=round(item.relevance_score, 4),
             )
         )
     return validated

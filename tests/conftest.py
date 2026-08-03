@@ -20,7 +20,7 @@ class TestRelevanceSelector:
             seen_urls.add(item.source_url)
             selected.append(item)
         return [
-            SelectedEvidence(article=item, evidence_id=index, relevance_score=1.0)
+            SelectedEvidence(article=item, evidence_id=index)
             for index, item in enumerate(selected[:limit], start=1)
         ]
 

@@ -179,9 +179,18 @@ async def _execute_collection_async(
     if selection_error is not None:
         errors.append(f"语义筛选失败：{_error_message(selection_error)}")
     elif articles:
-        selected_urls = {item.source_url for item in articles}
-        selected_raw = _selected_raw_entries(collected, selected_urls)
-        selected_original_keys = {(item.source_url, item.content) for item in articles}
+        original_by_url = {item.source_url: item for item in normalized_articles}
+        direct_selected_urls = {
+            item.source_url
+            for item in articles
+            if item.article == original_by_url.get(item.source_url)
+        }
+        selected_raw = _selected_raw_entries(collected, direct_selected_urls)
+        selected_original_keys = {
+            (item.source_url, item.content)
+            for item in articles
+            if item.article == original_by_url.get(item.source_url)
+        }
         augmentation_timeout = budget.timeout_for(15.0)
         if augmentation_timeout <= 0:
             augmented_selected = selected_raw
@@ -191,9 +200,12 @@ async def _execute_collection_async(
         augmented_by_url = {item.source_url: item for item in augmented_normalized}
         articles = [
             SelectedEvidence(
-                article=augmented_by_url.get(item.source_url, item.article),
+                article=(
+                    augmented_by_url.get(item.source_url, item.article)
+                    if item.article == original_by_url.get(item.source_url)
+                    else item.article
+                ),
                 evidence_id=item.evidence_id,
-                relevance_score=item.relevance_score,
             )
             for item in articles
         ]
@@ -206,6 +218,9 @@ async def _execute_collection_async(
             else item
             for item in normalized_articles
         ]
+        for item in articles:
+            if item.article not in normalized_articles:
+                normalized_articles.append(item.article)
     status = _collection_status(errors, successful_sources)
     return _CollectionExecution(
         report=CollectionReport(topic, status, articles, errors),

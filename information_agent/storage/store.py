@@ -16,7 +16,7 @@ from ..normalization import NormalizedArticle
 from ..selection import SelectedEvidence
 from .models import FeedObservation, FeedState
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 
 def default_database_path() -> Path:
@@ -64,18 +64,16 @@ class SQLiteCollectionStore:
                 connection.execute(
                     """
                     INSERT INTO run_evidence (
-                        run_id, snapshot_id, evidence_no, relevance_score, selected
-                    ) VALUES (?, ?, ?, ?, ?)
+                        run_id, snapshot_id, evidence_no, selected
+                    ) VALUES (?, ?, ?, ?)
                     ON CONFLICT(run_id, snapshot_id) DO UPDATE SET
                         evidence_no = excluded.evidence_no,
-                        relevance_score = excluded.relevance_score,
                         selected = excluded.selected
                     """,
                     (
                         run_id,
                         snapshot_id,
                         selected.evidence_id if selected else None,
-                        selected.relevance_score if selected else None,
                         1 if selected else 0,
                     ),
                 )
@@ -150,7 +148,7 @@ class SQLiteCollectionStore:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT snapshots.payload_json, evidence.evidence_no, evidence.relevance_score
+                SELECT snapshots.payload_json, evidence.evidence_no
                 FROM run_evidence AS evidence
                 JOIN article_snapshots AS snapshots ON snapshots.id = evidence.snapshot_id
                 WHERE evidence.run_id = ? AND evidence.selected = 1
@@ -162,7 +160,6 @@ class SQLiteCollectionStore:
             SelectedEvidence(
                 article=_article_from_payload(json.loads(row["payload_json"])),
                 evidence_id=int(row["evidence_no"]),
-                relevance_score=float(row["relevance_score"]),
             )
             for row in rows
         ]
@@ -433,7 +430,6 @@ class SQLiteCollectionStore:
                 run_id TEXT NOT NULL REFERENCES research_runs(id),
                 snapshot_id TEXT NOT NULL REFERENCES article_snapshots(id),
                 evidence_no INTEGER,
-                relevance_score REAL,
                 selected INTEGER NOT NULL CHECK (selected IN (0, 1)),
                 PRIMARY KEY (run_id, snapshot_id),
                 UNIQUE (run_id, evidence_no)
@@ -517,6 +513,14 @@ class SQLiteCollectionStore:
             connection.execute(
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                 (3, _format_datetime(project_now())),
+            )
+        if 4 not in applied_versions:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(run_evidence)")}
+            if "relevance_score" in columns:
+                connection.execute("ALTER TABLE run_evidence DROP COLUMN relevance_score")
+            connection.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                (4, _format_datetime(project_now())),
             )
 
 

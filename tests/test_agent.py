@@ -413,7 +413,7 @@ def ingest_evidence() -> list[SelectedEvidence]:
     from information_agent.normalization import normalize_evidence
 
     article = normalize_evidence(_collector("", 0), min_content_chars=1)[0]
-    return [SelectedEvidence(article, evidence_id=1, relevance_score=1.0)]
+    return [SelectedEvidence(article, evidence_id=1)]
 
 
 def test_agent_finishes_without_calling_search(tmp_path: Path) -> None:

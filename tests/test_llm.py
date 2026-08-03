@@ -36,7 +36,7 @@ def test_analysis_input_includes_each_content_batch_once() -> None:
         [RawFeedEntry("https://example.com/article", "分批文章", content)]
     )[0]
 
-    prompt = _analysis_input([SelectedEvidence(article, evidence_id=1, relevance_score=1.0)])
+    prompt = _analysis_input([SelectedEvidence(article, evidence_id=1)])
 
     assert prompt.count('<evidence id="1"') == 3
     assert 'batch="1/3"' in prompt

@@ -9,7 +9,7 @@ def selected_evidence(
     source_url: str, title: str, content: str, evidence_id: int
 ) -> SelectedEvidence:
     article = normalize_evidence([RawFeedEntry(source_url, title, content)], min_content_chars=1)[0]
-    return SelectedEvidence(article=article, evidence_id=evidence_id, relevance_score=1.0)
+    return SelectedEvidence(article=article, evidence_id=evidence_id)
 
 
 def test_evaluation_detects_invalid_and_unsupported_citations() -> None:

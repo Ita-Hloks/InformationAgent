@@ -8,7 +8,9 @@ from pathlib import Path
 from information_agent.cli import main
 from information_agent.collection import FeedFetchResult, RawFeedEntry
 from information_agent.contracts import CollectionReport, RunStatus
+from information_agent.normalization import derive_article
 from information_agent.orchestration.ingestion import ingest
+from information_agent.selection import SelectedEvidence
 from information_agent.storage import PersistedCollection, SQLiteCollectionStore
 
 
@@ -35,16 +37,96 @@ def test_ingest_saves_all_normalized_articles_and_selected_evidence(tmp_path: Pa
     assert result.report.status is RunStatus.COMPLETED
     assert [item.source_url for item in selected] == ["https://example.com/ai"]
     assert selected[0].evidence_id == 1
-    assert selected[0].relevance_score == result.report.articles[0].relevance_score
 
     with sqlite3.connect(database_path) as connection:
         snapshot_count = connection.execute("SELECT COUNT(*) FROM article_snapshots").fetchone()[0]
         evidence_rows = connection.execute(
             "SELECT selected, evidence_no FROM run_evidence ORDER BY selected DESC"
         ).fetchall()
+        evidence_columns = {row[1] for row in connection.execute("PRAGMA table_info(run_evidence)")}
 
     assert snapshot_count == 2
     assert evidence_rows == [(1, 1), (0, None)]
+    assert "relevance_score" not in evidence_columns
+
+
+def test_ingest_persists_selected_segments_from_mixed_entry(tmp_path: Path) -> None:
+    database_path = tmp_path / "information-agent.db"
+
+    def collector(_: str, __: float) -> list[RawFeedEntry]:
+        return [
+            RawFeedEntry(
+                "https://example.com/digest",
+                "今日科技汇总",
+                "第一篇：AI 芯片发布，厂商公布了完整测试结果和比较基线。\n\n"
+                "第二篇：手机更新，厂商公布了新的产品计划和发布时间。",
+            )
+        ]
+
+    class Selector:
+        def select(self, topic, items, *, limit, timeout):
+            base = items[0]
+            return [
+                SelectedEvidence(
+                    derive_article(
+                        base,
+                        title="AI 芯片发布",
+                        content="第一篇：AI 芯片发布，厂商公布了完整测试结果和比较基线。",
+                    ),
+                    1,
+                )
+            ]
+
+    result = ingest(
+        "AI 芯片",
+        ["feed"],
+        database_path=database_path,
+        collector=collector,
+        relevance_selector=Selector(),
+    )
+    selected = SQLiteCollectionStore(database_path).load_selected_evidence(result.run_id)
+
+    assert result.report.status is RunStatus.COMPLETED
+    assert len(selected) == 1
+    assert selected[0].content.startswith("第一篇：AI 芯片发布")
+
+    with sqlite3.connect(database_path) as connection:
+        rows = connection.execute(
+            "SELECT selected, evidence_no FROM run_evidence ORDER BY selected DESC"
+        ).fetchall()
+
+    assert rows == [(1, 1), (0, None)]
+
+
+def test_store_migrates_legacy_relevance_score_column(tmp_path: Path) -> None:
+    database_path = tmp_path / "legacy.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            );
+            INSERT INTO schema_migrations VALUES (1, 'now');
+            INSERT INTO schema_migrations VALUES (2, 'now');
+            INSERT INTO schema_migrations VALUES (3, 'now');
+            CREATE TABLE run_evidence (
+                run_id TEXT NOT NULL,
+                snapshot_id TEXT NOT NULL,
+                evidence_no INTEGER,
+                relevance_score REAL,
+                selected INTEGER NOT NULL,
+                PRIMARY KEY (run_id, snapshot_id),
+                UNIQUE (run_id, evidence_no)
+            );
+            """
+        )
+
+    store = SQLiteCollectionStore(database_path)
+    with store._connect() as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(run_evidence)")}
+
+    assert "relevance_score" not in columns
 
 
 def test_ingest_reuses_unchanged_article_snapshot_across_runs(tmp_path: Path) -> None:

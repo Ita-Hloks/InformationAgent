@@ -12,7 +12,7 @@ from information_agent.serialization import format_json_datetime, report_to_payl
 
 def selected_evidence(source_url: str, title: str, content: str, **metadata) -> SelectedEvidence:
     article = normalize_evidence([RawFeedEntry(source_url, title, content, **metadata)])[0]
-    return SelectedEvidence(article=article, evidence_id=1, relevance_score=1.0)
+    return SelectedEvidence(article=article, evidence_id=1)
 
 
 def test_report_payload_uses_project_timezone_minute_precision() -> None:

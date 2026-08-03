@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from dataclasses import replace
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
@@ -85,6 +86,35 @@ def normalize_evidence(
             )
         )
     return normalized
+
+
+def derive_article(
+    article: NormalizedArticle,
+    *,
+    title: str,
+    content: str,
+) -> NormalizedArticle:
+    """Create a source-preserving article from a validated article segment."""
+
+    normalized_title = _normalize_text(title)
+    normalized_content = _normalize_text(content)
+    if not normalized_title or len(normalized_content) < MIN_CONTENT_CHARS:
+        raise ValueError("文章片段内容不足")
+
+    content_chunks = _split_content(normalized_content, CONTENT_BATCH_CHARS)
+    processing_warnings: list[str] = []
+    if len(content_chunks) > 1:
+        processing_warnings.append(
+            f"正文已拆分为 {len(content_chunks)} 个批次，每批最多 {CONTENT_BATCH_CHARS} 字"
+        )
+
+    return replace(
+        article,
+        title=normalized_title,
+        content=normalized_content,
+        content_chunks=tuple(content_chunks),
+        processing_warnings=tuple(processing_warnings),
+    )
 
 
 def _normalize_text(value: str) -> str:
