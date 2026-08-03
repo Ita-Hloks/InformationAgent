@@ -94,9 +94,9 @@ def test_runner_skips_analysis_when_collection_consumes_total_budget() -> None:
     ).run()
 
     assert report.status is RunStatus.PARTIAL
-    assert len(report.evidence) == 1
-    assert report.analysis.summary == "已获得证据，但没有剩余时间调用模型。"
-    assert report.errors == ["任务在模型分析前超时"]
+    assert report.evidence == []
+    assert report.analysis.summary == "没有找到与主题匹配的 RSS 内容。"
+    assert report.errors == ["语义筛选失败：任务在语义筛选前超时"]
 
 
 def test_runner_passes_only_remaining_budget_to_analysis() -> None:
@@ -142,9 +142,9 @@ def test_runner_skips_planning_when_collection_consumes_total_budget() -> None:
     ).plan()
 
     assert report.status is RunStatus.PARTIAL
-    assert len(report.articles) == 1
+    assert report.articles == []
     assert report.plans == []
-    assert report.errors == ["任务在生成搜索计划前超时"]
+    assert report.errors == ["语义筛选失败：任务在语义筛选前超时"]
 
 
 def _matching_article() -> RawFeedEntry:

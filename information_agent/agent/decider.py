@@ -131,19 +131,14 @@ def _parse_finish_decision(
         raise ValueError("finish reason 不受支持") from exc
 
     valid_ids = {item.id for item in evidence}
-    available_source_urls = {
-        normalized_url
-        for observation in observations
-        for source in observation.answer.sources
-        if (normalized_url := normalize_url(source.url)) is not None
-    }
-    citations = _parse_citations(payload["citations"], valid_ids, available_source_urls)
     answered_source_urls = {
-        source.url
+        normalized_url
         for observation in observations
         if observation.answer.status is SearchAnswerStatus.ANSWERED
         for source in observation.answer.sources
+        if (normalized_url := normalize_url(source.url)) is not None
     }
+    citations = _parse_citations(payload["citations"], valid_ids, answered_source_urls)
     cited_source_urls = {url for citation in citations for url in citation.source_urls}
     if answered_source_urls and not cited_source_urls:
         raise ValueError("finish 决策必须引用已采用的搜索来源")

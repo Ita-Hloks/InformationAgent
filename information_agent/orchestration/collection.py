@@ -8,9 +8,10 @@ from urllib.error import HTTPError, URLError
 import aiohttp
 
 from ..collection import RawFeedEntry, augment_evidence, fetch_feed, fetch_feed_async
+from ..common import DEFAULT_LLM_TIMEOUT_SECONDS, normalize_url
 from ..contracts import CollectionReport, RunStatus
 from ..normalization import NormalizedArticle, normalize_evidence
-from ..selection import filter_evidence
+from ..selection import RelevanceSelector, SelectedEvidence, select_evidence
 from .execution import ExecutionBudget
 
 Collector = Callable[[str, float], list[RawFeedEntry]]
@@ -31,9 +32,10 @@ def collect(
     topic: str,
     feeds: list[str],
     *,
-    timeout_seconds: float = 60,
+    timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS,
     limit: int = 20,
     collector: Collector = fetch_feed,
+    relevance_selector: RelevanceSelector | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
@@ -46,6 +48,7 @@ def collect(
         timeout_seconds=timeout_seconds,
         limit=limit,
         collector=collector,
+        relevance_selector=relevance_selector,
         max_workers=max_workers,
         max_attempts=max_attempts,
         source_timeout_seconds=source_timeout_seconds,
@@ -59,6 +62,7 @@ def _execute_collection(
     budget: ExecutionBudget,
     limit: int,
     collector: Collector,
+    relevance_selector: RelevanceSelector | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
@@ -69,6 +73,7 @@ def _execute_collection(
         budget=budget,
         limit=limit,
         collector=collector,
+        relevance_selector=relevance_selector,
         max_workers=max_workers,
         max_attempts=max_attempts,
         source_timeout_seconds=source_timeout_seconds,
@@ -82,6 +87,7 @@ def _execute_collection_with_details(
     budget: ExecutionBudget,
     limit: int,
     collector: Collector,
+    relevance_selector: RelevanceSelector | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
@@ -102,6 +108,7 @@ def _execute_collection_with_details(
             budget=budget,
             limit=limit,
             collector=collector,
+            relevance_selector=relevance_selector,
             max_workers=max_workers,
             max_attempts=max_attempts,
             source_timeout_seconds=source_timeout_seconds,
@@ -116,6 +123,7 @@ async def _execute_collection_async(
     budget: ExecutionBudget,
     limit: int,
     collector: Collector,
+    relevance_selector: RelevanceSelector | None,
     max_workers: int,
     max_attempts: int,
     source_timeout_seconds: float,
@@ -150,18 +158,74 @@ async def _execute_collection_async(
         collected.extend(source_items)
         successful_sources += 1
 
-    augmentation_timeout = budget.timeout_for(15.0)
-    if augmentation_timeout <= 0:
-        augmented = collected
-    else:
-        augmented = augment_evidence(collected, timeout=augmentation_timeout)
-    normalized_articles = normalize_evidence(augmented)
-    articles = filter_evidence(topic, normalized_articles, limit=limit)
+    normalized_articles = normalize_evidence(collected)
+    articles: list[SelectedEvidence] = []
+    selection_error: Exception | None = None
+    if normalized_articles:
+        selection_timeout = budget.remaining()
+        if selection_timeout <= 0:
+            selection_error = TimeoutError("任务在语义筛选前超时")
+        else:
+            try:
+                articles = select_evidence(
+                    topic,
+                    normalized_articles,
+                    limit=limit,
+                    timeout=selection_timeout,
+                    selector=relevance_selector,
+                )
+            except Exception as exc:
+                selection_error = exc
+    if selection_error is not None:
+        errors.append(f"语义筛选失败：{_error_message(selection_error)}")
+    elif articles:
+        selected_urls = {item.source_url for item in articles}
+        selected_raw = _selected_raw_entries(collected, selected_urls)
+        selected_original_keys = {(item.source_url, item.content) for item in articles}
+        augmentation_timeout = budget.timeout_for(15.0)
+        if augmentation_timeout <= 0:
+            augmented_selected = selected_raw
+        else:
+            augmented_selected = augment_evidence(selected_raw, timeout=augmentation_timeout)
+        augmented_normalized = normalize_evidence(augmented_selected)
+        augmented_by_url = {item.source_url: item for item in augmented_normalized}
+        articles = [
+            SelectedEvidence(
+                article=augmented_by_url.get(item.source_url, item.article),
+                evidence_id=item.evidence_id,
+                relevance_score=item.relevance_score,
+            )
+            for item in articles
+        ]
+        normalized_articles = [
+            augmented_by_url.get(
+                item.source_url,
+                item,
+            )
+            if (item.source_url, item.content) in selected_original_keys
+            else item
+            for item in normalized_articles
+        ]
     status = _collection_status(errors, successful_sources)
     return _CollectionExecution(
         report=CollectionReport(topic, status, articles, errors),
         normalized_articles=normalized_articles,
     )
+
+
+def _selected_raw_entries(
+    items: list[RawFeedEntry],
+    selected_urls: set[str],
+) -> list[RawFeedEntry]:
+    selected: list[RawFeedEntry] = []
+    seen_urls: set[str] = set()
+    for item in items:
+        source_url = normalize_url(item.source_url)
+        if source_url not in selected_urls or source_url in seen_urls:
+            continue
+        seen_urls.add(source_url)
+        selected.append(item)
+    return selected
 
 
 async def _collect_source(

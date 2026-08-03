@@ -88,11 +88,31 @@ def normalize_evidence(
 
 
 def _normalize_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()
+    lines = [re.sub(r"\s+", " ", line).strip() for line in value.splitlines()]
+    return "\n".join(line for line in lines if line)
 
 
 def _split_content(content: str, batch_chars: int) -> list[str]:
-    return [content[index : index + batch_chars] for index in range(0, len(content), batch_chars)]
+    chunks: list[str] = []
+    start = 0
+    while start < len(content):
+        end = min(start + batch_chars, len(content))
+        if end < len(content):
+            boundary = _last_natural_boundary(content, start, end)
+            if boundary > start + batch_chars // 2:
+                end = boundary
+        chunks.append(content[start:end])
+        start = end
+    return chunks
+
+
+def _last_natural_boundary(content: str, start: int, end: int) -> int:
+    positions = [
+        content.rfind(marker, start + 1, end)
+        for marker in ("\n", "。", "！", "？", ".", "!", "?", ";", "；")
+    ]
+    position = max(positions)
+    return position + 1 if position >= 0 else end
 
 
 def _article_id(source_url: str) -> str:

@@ -5,6 +5,7 @@ from threading import Lock
 
 from ..collection import FeedFetchResult, fetch_feed, fetch_feed_with_cache
 from ..common import normalize_url
+from ..selection import RelevanceSelector
 from ..storage import (
     FeedObservation,
     PersistedCollection,
@@ -27,13 +28,14 @@ def ingest(
     *,
     database_path: str | Path | None = None,
     collector: Collector = fetch_feed,
-    timeout_seconds: float = 60,
+    timeout_seconds: float = 300,
     limit: int = 20,
+    relevance_selector: RelevanceSelector | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     source_timeout_seconds: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
 ) -> PersistedCollection:
-    """执行粗处理并保存结果；本入口不触发任何 LLM 调用。"""
+    """执行 RSS 粗处理、LLM 语义筛选并保存结果。"""
 
     store = SQLiteCollectionStore(database_path or default_database_path())
     run_id = store.start_run(topic, feeds)
@@ -64,6 +66,7 @@ def ingest(
             budget=ExecutionBudget.start(timeout_seconds),
             limit=limit,
             collector=active_collector,
+            relevance_selector=relevance_selector,
             max_workers=max_workers,
             max_attempts=max_attempts,
             source_timeout_seconds=source_timeout_seconds,

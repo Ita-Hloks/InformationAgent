@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from html import unescape
+from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -16,9 +16,80 @@ from .models import FeedFetchResult, RawFeedEntry
 MAX_FEED_BYTES = 5 * 1024 * 1024
 
 
+class _RSSTextParser(HTMLParser):
+    _BLOCK_TAGS = {
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "br",
+        "dd",
+        "div",
+        "dl",
+        "dt",
+        "figcaption",
+        "figure",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "table",
+        "td",
+        "th",
+        "tr",
+        "ul",
+    }
+    _IGNORED_TAGS = {"script", "style", "template", "noscript"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._ignored_depth = 0
+
+    def handle_data(self, data: str) -> None:
+        if self._ignored_depth:
+            return
+        self.parts.append(data)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        normalized_tag = tag.casefold()
+        if normalized_tag in self._IGNORED_TAGS:
+            self._ignored_depth += 1
+            return
+        if not self._ignored_depth and normalized_tag in self._BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized_tag = tag.casefold()
+        if normalized_tag in self._IGNORED_TAGS:
+            self._ignored_depth = max(0, self._ignored_depth - 1)
+            return
+        if not self._ignored_depth and normalized_tag in self._BLOCK_TAGS:
+            self.parts.append("\n")
+
+
 def _plain_text(value: str) -> str:
-    without_tags = re.sub(r"<[^>]+>", " ", value)
-    return re.sub(r"\s+", " ", unescape(without_tags)).strip()
+    parser = _RSSTextParser()
+    parser.feed(value)
+    parser.close()
+    text = "".join(parser.parts)
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line)
 
 
 def fetch_feed(feed_url: str, timeout: float = 15) -> list[RawFeedEntry]:

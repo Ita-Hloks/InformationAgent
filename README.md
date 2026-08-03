@@ -11,9 +11,9 @@
 
 ## 这是什么？
 
-Information Agent 是一个 Python CLI：它从一个或多个 RSS/Atom 来源并发采集内容，规范化文章和链接，按研究主题筛选证据，再生成结构化 JSON、SQLite 文章快照、LLM 分析、可持久化搜索计划或带来源的联网回答。
+Information Agent 是一个 Python CLI：它从一个或多个 RSS/Atom 来源并发采集内容，将每个 RSS entry 保持为独立候选，交给 LLM 按研究主题做语义筛选，再生成结构化 JSON、SQLite 文章快照、LLM 分析、可持久化搜索计划或带来源的联网回答。
 
-项目把确定性处理与语义判断分开：采集、清洗、去重、筛选和引用校验由普通代码完成，LLM 只处理分析与规划。没有证据时，工作流不会生成事实结论；单个来源失败时，其余来源仍可继续执行并在结果中保留错误信息。
+项目把确定性边界与语义判断分开：采集、格式清洗、去重、候选 ID 校验、数量上限、重试和状态由普通代码完成；LLM 负责判断条目是否直接相关、是否仍是单一文章。没有证据时，工作流不会生成事实结论；单个来源或语义筛选失败时，已取得的快照和错误上下文仍会保留，但未经判定的文章不会放行。
 
 ## 快速开始
 
@@ -37,7 +37,7 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-安装依赖并运行无需 LLM 的采集流程：
+安装依赖并配置 `LLM_API_KEY` 后运行采集流程：
 
 ```bash
 python -m pip install -r requirements.txt
@@ -63,21 +63,22 @@ $result.run_id
 
 ```mermaid
 flowchart LR
-    A["RSS / Atom 来源"] --> B["并发采集与正文补全"]
-    B --> C["规范化、去重与主题筛选"]
-    C --> D["collect：JSON"]
-    C --> E["ingest：保存证据并返回 run_id"]
+    A["RSS / Atom 来源"] --> B["并发采集 RSS entries"]
+    B --> C["规范化、去重与 LLM 语义筛选"]
+    C --> D0["仅对入选条目补全正文"]
+    D0 --> D["collect：JSON"]
+    D0 --> E["ingest：保存证据并返回 run_id"]
     E --> J["plan-run：读取证据并保存搜索计划"]
-    C --> F["analyze：LLM 分析"]
+    D0 --> F["analyze：LLM 分析"]
     F --> G["引用覆盖与有效性评估"]
-    C --> H["plan：搜索计划"]
+    D0 --> H["plan：搜索计划"]
     H --> I["search：带来源的联网回答"]
 ```
 
 | 命令 | 用途 | 额外配置 |
 | --- | --- | --- |
-| `collect` | 采集、规范化并筛选文章，输出 JSON | 无 |
-| `ingest` | 保存运行记录、全部规范化文章快照、筛选关系与 Feed 缓存 | 无 |
+| `collect` | 采集、规范化、LLM 语义筛选并输出 JSON | `LLM_*` |
+| `ingest` | 保存运行记录、全部规范化文章快照、筛选关系与 Feed 缓存 | `LLM_*` |
 | `analyze` | 基于已筛选证据生成带证据编号的分析，并评估引用 | `LLM_*` |
 | `plan` | 从最多 5 篇候选文章中生成可追溯的搜索计划 | `LLM_*` |
 | `plan-run` | 根据 `ingest` 的 `run_id` 读取已选证据，并将规划运行、原始响应、计划与查询写回 SQLite | `LLM_*` |
@@ -92,7 +93,7 @@ python -m information_agent.cli collect --help
 python -m information_agent.cli plan-run --help
 ```
 
-保存无需 LLM 的采集结果：
+保存经过语义筛选的采集结果：
 
 ```bash
 python -m information_agent.cli ingest \
@@ -129,9 +130,9 @@ cp .env.example .env
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
-| `LLM_API_KEY` | `analyze`、`plan`、`plan-run` 和 `search` 的模型凭据 | 必填 |
+| `LLM_API_KEY` | `collect`、`ingest`、`analyze`、`plan`、`plan-run` 和 `search` 的模型凭据 | 必填 |
 | `LLM_BASE_URL` | OpenAI 兼容 API 根地址 | `https://api.openai.com/v1` |
-| `LLM_MODEL` | 分析与规划模型 | `gpt-4o-mini` |
+| `LLM_MODEL` | 语义筛选、分析与规划模型 | `gpt-4o-mini` |
 | `SEARCH_LLM_API_KEY` | 联网搜索服务凭据 | 必填 |
 | `SEARCH_LLM_MODEL` | 支持项目所需 `web_search` 工具的模型 | 必填 |
 | `SEARCH_LLM_BASE_URL` | 联网搜索服务的 OpenAI 兼容 API 根地址 | 必填 |
@@ -159,9 +160,12 @@ LLM 与联网搜索调用会备份到 `log/`。可通过 `INFORMATION_AGENT_LOG_
 
 - **证据优先**：结论必须引用真实证据编号；材料不足时明确记录不确定性。
 - **可追溯输出**：入库与数据库规划分别返回 `run_id` 和 `planning_run_id`；文章元数据、证据评分、搜索锚点、查询目的、来源和错误均进入结构化结果。
-- **确定性边界**：外部服务响应先转换为项目模型，不直接透传到最终报告。
+- **确定性边界**：外部服务响应先转换为项目模型；候选 ID、字段类型、分数范围、去重、数量上限和状态由普通代码校验，不把模型生成的 URL 或文章直接当成证据。
+- **RSS 条目隔离**：每个 `entry` 都以独立候选送入模型，候选之间不会拼接。模型需要将日报、周报、newsletter 和多篇文章汇编标记为非单一文章；这类内容不会进入正文补全和后续摘要。
+- **格式保真**：RSS HTML 清洗保留标题、段落和换行，长文批次优先在段落或句末切分；模型输入使用候选 ID 和明确的文章批次边界，减少摘要格式造成的跨文章混写。
+- **失败闭合**：语义筛选响应缺字段、乱造 ID、重复 ID、超出分数范围或请求失败时，本次报告为 `partial`，不放行任何未完成判定的文章；规范化快照仍可写入数据库。
 - **受控执行**：所有阶段共享同一个总时间预算；RSS 来源默认最多 6 路并发，并对临时网络错误重试。
-- **增量入库**：`ingest` 使用 SQLite 保存文章快照，通过 ETag、Last-Modified、条目标识与更新时间标记跳过未变化内容，并在条目更新后重新处理。
+- **增量入库**：`ingest` 使用 SQLite 保存文章快照，通过 ETag、Last-Modified、条目标识与更新时间标记跳过未变化内容，并在条目更新后重新处理；只有语义筛选入选的摘要条目才会继续请求网页正文。
 - **规划持久化**：`plan-run` 从已保存的证据继续规划，并保存原始模型响应、搜索计划、查询及失败信息。
 - **部分失败可用**：某个 Feed、模型调用或搜索回答失败时，已获得的证据与错误上下文仍会保留。
 

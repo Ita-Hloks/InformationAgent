@@ -41,6 +41,19 @@ def test_normalize_evidence_filters_short_content_and_batches_long_content() -> 
     assert normalized[0].published_at == datetime(2026, 7, 17, 10, 30, tzinfo=PROJECT_TIMEZONE)
 
 
+def test_content_batches_prefer_natural_boundaries_without_changing_text() -> None:
+    content = "甲" * 300 + "。" + "乙" * 300 + "。"
+    normalized = normalize_evidence(
+        [RawFeedEntry("https://example.com/article", "文章", content)],
+        min_content_chars=1,
+        content_batch_chars=500,
+    )
+
+    assert normalized[0].content == content
+    assert normalized[0].content_chunks[0].endswith("。")
+    assert "".join(normalized[0].content_chunks) == content
+
+
 def test_published_time_is_normalized_to_project_timezone() -> None:
     parsed = parse_published_at("2026-07-17T10:30:45.123456+08:00")
 

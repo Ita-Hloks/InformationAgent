@@ -3,6 +3,7 @@ from __future__ import annotations
 from ..collection import fetch_feed
 from ..common import DEFAULT_LLM_TIMEOUT_SECONDS
 from ..investigation import PlanningReport, QuestionPlanner
+from ..selection import RelevanceSelector
 from .collection import (
     DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_WORKERS,
@@ -21,6 +22,7 @@ def plan(
     timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS,
     limit: int = MAX_PLANNING_ARTICLES,
     collector: Collector = fetch_feed,
+    relevance_selector: RelevanceSelector | None = None,
     planner: QuestionPlanner | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
@@ -34,6 +36,7 @@ def plan(
         timeout_seconds=timeout_seconds,
         limit=limit,
         collector=collector,
+        relevance_selector=relevance_selector,
         planner=planner,
         max_workers=max_workers,
         max_attempts=max_attempts,

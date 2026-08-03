@@ -8,7 +8,7 @@ from ..analysis import LLMAnalyst, evaluate_analysis
 from ..collection import fetch_feed
 from ..contracts import Analysis, CollectionReport, Report, RunStatus
 from ..investigation import LLMQuestionPlanner, PlanningReport, QuestionPlanner
-from ..selection import SelectedEvidence
+from ..selection import RelevanceSelector, SelectedEvidence
 from .collection import (
     DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_WORKERS,
@@ -29,9 +29,10 @@ class WorkflowRunner:
 
     topic: str
     feeds: list[str]
-    timeout_seconds: float = 60
+    timeout_seconds: float = 300
     limit: int = 20
     collector: Collector = fetch_feed
+    relevance_selector: RelevanceSelector | None = None
     analyst: Analyst | None = None
     planner: QuestionPlanner | None = None
     max_workers: int = DEFAULT_MAX_WORKERS
@@ -113,6 +114,7 @@ class WorkflowRunner:
             budget=self._budget,
             limit=self.limit,
             collector=self.collector,
+            relevance_selector=self.relevance_selector,
             max_workers=self.max_workers,
             max_attempts=self.max_attempts,
             source_timeout_seconds=self.source_timeout_seconds,

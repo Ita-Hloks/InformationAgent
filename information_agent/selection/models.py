@@ -1,8 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from ..normalization import NormalizedArticle
+
+
+class RelevanceSelector(Protocol):
+    """为规范化文章提供语义相关性判断。"""
+
+    def select(
+        self,
+        topic: str,
+        items: list[NormalizedArticle],
+        *,
+        limit: int,
+        timeout: float,
+    ) -> list[SelectedEvidence]: ...
 
 
 @dataclass(frozen=True, slots=True)

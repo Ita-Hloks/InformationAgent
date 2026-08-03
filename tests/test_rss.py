@@ -9,6 +9,16 @@ def test_plain_text_removes_html_and_decodes_entities() -> None:
     assert _plain_text("<p>Agent &amp; RSS</p>") == "Agent & RSS"
 
 
+def test_plain_text_preserves_article_block_boundaries() -> None:
+    assert _plain_text("<h2>第一篇</h2><p>正文一</p><p>正文二</p>") == ("第一篇\n正文一\n正文二")
+
+
+def test_plain_text_ignores_embedded_scripts_and_styles() -> None:
+    assert (
+        _plain_text("<p>正文</p><script>fake summary</script><style>fake style</style>") == "正文"
+    )
+
+
 def test_fetch_feed_populates_article_and_source_fields(monkeypatch) -> None:
     payload = """<?xml version="1.0" encoding="UTF-8"?>
     <rss version="2.0"

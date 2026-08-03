@@ -230,7 +230,7 @@ def test_ingest_reprocesses_an_entry_when_its_update_marker_changes(
     assert updated_marker == "2026-07-28T11:00:00+08:00"
 
 
-def test_ingest_cli_does_not_load_llm_configuration(monkeypatch, capsys, tmp_path: Path) -> None:
+def test_ingest_cli_loads_llm_configuration(monkeypatch, capsys, tmp_path: Path) -> None:
     result = PersistedCollection(
         run_id="run-123",
         report=CollectionReport("AI", RunStatus.COMPLETED, []),
@@ -239,17 +239,20 @@ def test_ingest_cli_does_not_load_llm_configuration(monkeypatch, capsys, tmp_pat
     def fake_ingest(*args, **kwargs) -> PersistedCollection:
         return result
 
-    def fail_load_dotenv() -> None:
-        raise AssertionError("ingest 命令不应加载 LLM 配置")
+    loaded: list[bool] = []
+
+    def record_load_dotenv() -> None:
+        loaded.append(True)
 
     monkeypatch.setattr("information_agent.orchestration.ingestion.ingest", fake_ingest)
-    monkeypatch.setattr("information_agent.cli.load_dotenv", fail_load_dotenv)
+    monkeypatch.setattr("information_agent.cli.load_dotenv", record_load_dotenv)
     monkeypatch.setenv("INFORMATION_AGENT_DB_PATH", str(tmp_path / "agent.db"))
     monkeypatch.setattr(sys, "argv", ["information-agent", "ingest", "AI", "feed"])
 
     main()
     payload = json.loads(capsys.readouterr().out)
 
+    assert loaded == [True]
     assert payload == {
         "run_id": "run-123",
         "topic": "AI",

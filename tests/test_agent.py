@@ -341,6 +341,39 @@ def test_parse_agent_finish_rejects_source_not_in_observations() -> None:
         parse_agent_decision(raw, evidence)
 
 
+def test_parse_agent_finish_rejects_source_from_insufficient_observation() -> None:
+    evidence = ingest_evidence()
+    plan = _plan()
+    observation = AgentObservation(
+        plan,
+        SearchAnswer(
+            evidence_id=1,
+            question=plan.question,
+            answer="没有找到完整比较基线。",
+            status=SearchAnswerStatus.INSUFFICIENT_EVIDENCE,
+            sources=(SearchSource("低相关搜索结果", "https://example.com/weak-source"),),
+        ),
+    )
+    raw = json.dumps(
+        {
+            "decision": "finish",
+            "reason": "insufficient_after_search",
+            "citations": [
+                {
+                    "claim": "没有找到足够可靠的独立来源。",
+                    "evidence_ids": [],
+                    "source_urls": ["https://example.com/weak-source"],
+                }
+            ],
+            "uncertainties": ["搜索来源不足以支撑结论"],
+        },
+        ensure_ascii=False,
+    )
+
+    with pytest.raises(ValueError, match="本次搜索观察中不存在"):
+        parse_agent_decision(raw, evidence, [observation])
+
+
 def test_parse_agent_search_reuses_search_plan_validation() -> None:
     evidence = ingest_evidence()
     raw = json.dumps(
