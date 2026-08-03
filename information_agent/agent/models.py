@@ -17,11 +17,34 @@ class FinishReason(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class ConclusionCitation:
+    claim: str
+    evidence_ids: tuple[int, ...]
+    source_urls: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class FinishDecision:
     reason: FinishReason
-    answer: str
-    evidence_ids: tuple[int, ...]
+    citations: tuple[ConclusionCitation, ...]
     uncertainties: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def answer(self) -> str:
+        lines = []
+        for citation in self.citations:
+            references = [f"原始文章[{value}]" for value in citation.evidence_ids]
+            references.extend(citation.source_urls)
+            lines.append(f"{citation.claim}（来源：{'；'.join(references)}）")
+        return "\n".join(lines)
+
+    @property
+    def evidence_ids(self) -> tuple[int, ...]:
+        return tuple(
+            dict.fromkeys(
+                evidence_id for citation in self.citations for evidence_id in citation.evidence_ids
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,3 +85,4 @@ class AgentReport:
     steps: int
     stop_reason: AgentStopReason
     errors: list[str] = field(default_factory=list)
+    citations: tuple[ConclusionCitation, ...] = field(default_factory=tuple)

@@ -291,6 +291,7 @@ def _finish_report(
     reason_mismatches_searches = searches_found_no_evidence and not reason_reports_insufficient
     final_answer = None if reason_mismatches_searches else decision.answer
     evidence_ids = () if reason_mismatches_searches else decision.evidence_ids
+    citations = () if reason_mismatches_searches else decision.citations
     uncertainties = decision.uncertainties
     if reason_mismatches_searches:
         uncertainties = (*uncertainties, "所有搜索均未获得可验证证据")
@@ -307,6 +308,7 @@ def _finish_report(
         step,
         AgentStopReason.INSUFFICIENT_EVIDENCE if insufficient else AgentStopReason.FINISHED,
         errors,
+        citations,
     )
 
 

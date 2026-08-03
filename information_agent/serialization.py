@@ -67,6 +67,7 @@ def agent_report_to_payload(report: AgentReport) -> dict[str, Any]:
         "answers": [search_answer_to_payload(item) for item in report.answers],
         "final_answer": report.final_answer,
         "evidence_ids": list(report.evidence_ids),
+        "citations": [asdict(citation) for citation in report.citations],
         "uncertainties": list(report.uncertainties),
         "steps": report.steps,
         "stop_reason": report.stop_reason.value,

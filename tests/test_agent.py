@@ -11,6 +11,7 @@ from information_agent.agent import (
     AgentObservation,
     AgentReport,
     AgentStopReason,
+    ConclusionCitation,
     FinishDecision,
     FinishReason,
     SearchDecision,
@@ -29,7 +30,7 @@ from information_agent.investigation import (
 from information_agent.investigation import planner as investigation_planner
 from information_agent.orchestration.agent_workflow import agent_run
 from information_agent.orchestration.ingestion import ingest
-from information_agent.search import SearchAnswer, SearchAnswerStatus
+from information_agent.search import SearchAnswer, SearchAnswerStatus, SearchSource
 from information_agent.selection import SelectedEvidence
 
 
@@ -59,8 +60,7 @@ def _finish(
 ) -> FinishDecision:
     return FinishDecision(
         reason,
-        "现有证据足以形成谨慎结论。",
-        (1,),
+        (ConclusionCitation("现有证据足以形成谨慎结论。", (1,), ()),),
         (),
     )
 
@@ -68,8 +68,7 @@ def _finish(
 def _insufficient_finish() -> FinishDecision:
     return FinishDecision(
         FinishReason.INSUFFICIENT_AFTER_SEARCH,
-        "现有公开材料没有披露可比较的测试基线。",
-        (1,),
+        (ConclusionCitation("现有公开材料没有披露可比较的测试基线。", (1,), ()),),
         ("缺少独立测试报告",),
     )
 
@@ -150,6 +149,11 @@ class RecordingAnswerer:
                 else "没有找到完整比较基线。"
             ),
             status=self.status,
+            sources=(
+                (SearchSource("独立测试报告", "https://example.com/independent-test"),)
+                if self.status is SearchAnswerStatus.ANSWERED
+                else ()
+            ),
         )
 
 
@@ -164,14 +168,13 @@ def _ingested_run(tmp_path: Path):
     return database_path, collection.run_id
 
 
-def test_parse_agent_finish_requires_explicit_valid_evidence() -> None:
+def test_parse_agent_finish_requires_explicit_citation() -> None:
     evidence = ingest_evidence()
     raw = json.dumps(
         {
             "decision": "finish",
             "reason": "evidence_sufficient",
-            "answer": "现有证据足以确认产品已经发布。",
-            "evidence_ids": [1],
+            "citations": [{"claim": "产品已经发布。", "evidence_ids": [1], "source_urls": []}],
             "uncertainties": [],
         },
         ensure_ascii=False,
@@ -182,6 +185,7 @@ def test_parse_agent_finish_requires_explicit_valid_evidence() -> None:
     assert isinstance(decision, FinishDecision)
     assert decision.reason is FinishReason.EVIDENCE_SUFFICIENT
     assert decision.evidence_ids == (1,)
+    assert decision.answer == "产品已经发布。（来源：原始文章[1]）"
 
 
 def test_parse_agent_finish_normalizes_numeric_string_evidence_ids() -> None:
@@ -190,8 +194,9 @@ def test_parse_agent_finish_normalizes_numeric_string_evidence_ids() -> None:
         {
             "decision": "finish",
             "reason": "evidence_sufficient",
-            "answer": "现有证据足以形成谨慎结论。",
-            "evidence_ids": ["1"],
+            "citations": [
+                {"claim": "现有证据足以形成谨慎结论。", "evidence_ids": ["1"], "source_urls": []}
+            ],
             "uncertainties": [],
         },
         ensure_ascii=False,
@@ -203,20 +208,19 @@ def test_parse_agent_finish_normalizes_numeric_string_evidence_ids() -> None:
     assert decision.evidence_ids == (1,)
 
 
-def test_parse_agent_finish_rejects_empty_evidence_ids() -> None:
+def test_parse_agent_finish_rejects_empty_citations() -> None:
     evidence = ingest_evidence()
     raw = json.dumps(
         {
             "decision": "finish",
             "reason": "insufficient_after_search",
-            "answer": "没有找到足够可靠的独立来源。",
-            "evidence_ids": [],
+            "citations": [],
             "uncertainties": ["缺少原始报道"],
         },
         ensure_ascii=False,
     )
 
-    with pytest.raises(ValueError, match="finish 决策必须引用至少一条证据"):
+    with pytest.raises(ValueError, match="citations 必须是 1 到"):
         parse_agent_decision(raw, evidence)
 
 
@@ -226,8 +230,9 @@ def test_parse_agent_finish_normalizes_single_uncertainty_string() -> None:
         {
             "decision": "finish",
             "reason": "evidence_sufficient",
-            "answer": "现有证据足以形成谨慎结论。",
-            "evidence_ids": [1],
+            "citations": [
+                {"claim": "现有证据足以形成谨慎结论。", "evidence_ids": [1], "source_urls": []}
+            ],
             "uncertainties": "原始文章正文过短，结论仍存在范围限制。",
         },
         ensure_ascii=False,
@@ -246,8 +251,9 @@ def test_parse_agent_finish_normalizes_empty_uncertainties() -> None:
             {
                 "decision": "finish",
                 "reason": "evidence_sufficient",
-                "answer": "现有证据足以形成谨慎结论。",
-                "evidence_ids": [1],
+                "citations": [
+                    {"claim": "现有证据足以形成谨慎结论。", "evidence_ids": [1], "source_urls": []}
+                ],
                 "uncertainties": empty_value,
             },
             ensure_ascii=False,
@@ -265,14 +271,73 @@ def test_parse_agent_finish_rejects_non_string_uncertainties() -> None:
         {
             "decision": "finish",
             "reason": "evidence_sufficient",
-            "answer": "现有证据足以形成谨慎结论。",
-            "evidence_ids": [1],
+            "citations": [
+                {"claim": "现有证据足以形成谨慎结论。", "evidence_ids": [1], "source_urls": []}
+            ],
             "uncertainties": {"value": "格式错误"},
         },
         ensure_ascii=False,
     )
 
     with pytest.raises(ValueError, match="uncertainties 必须是字符串数组"):
+        parse_agent_decision(raw, evidence)
+
+
+def test_parse_agent_finish_accepts_source_from_search_observation() -> None:
+    evidence = ingest_evidence()
+    plan = _plan()
+    observation = AgentObservation(
+        plan,
+        SearchAnswer(
+            evidence_id=1,
+            question=plan.question,
+            answer="独立测试支持该结论。",
+            status=SearchAnswerStatus.ANSWERED,
+            sources=(SearchSource("独立测试报告", "https://example.com/independent-test"),),
+        ),
+    )
+    raw = json.dumps(
+        {
+            "decision": "finish",
+            "reason": "evidence_sufficient",
+            "citations": [
+                {
+                    "claim": "独立测试支持该结论。",
+                    "evidence_ids": [],
+                    "source_urls": ["https://example.com/independent-test"],
+                }
+            ],
+            "uncertainties": [],
+        },
+        ensure_ascii=False,
+    )
+
+    decision = parse_agent_decision(raw, evidence, [observation])
+
+    assert isinstance(decision, FinishDecision)
+    assert decision.citations[0].source_urls == ("https://example.com/independent-test",)
+    assert "https://example.com/independent-test" in decision.answer
+
+
+def test_parse_agent_finish_rejects_source_not_in_observations() -> None:
+    evidence = ingest_evidence()
+    raw = json.dumps(
+        {
+            "decision": "finish",
+            "reason": "evidence_sufficient",
+            "citations": [
+                {
+                    "claim": "搜索结果支持该结论。",
+                    "evidence_ids": [],
+                    "source_urls": ["https://example.com/forged"],
+                }
+            ],
+            "uncertainties": [],
+        },
+        ensure_ascii=False,
+    )
+
+    with pytest.raises(ValueError, match="本次搜索观察中不存在"):
         parse_agent_decision(raw, evidence)
 
 
@@ -307,7 +372,7 @@ def test_parse_agent_search_reuses_search_plan_validation() -> None:
 def test_agent_and_planner_share_search_plan_contract() -> None:
     assert SEARCH_PLAN_CONTRACT in agent_decider._system_prompt()
     assert SEARCH_PLAN_CONTRACT in investigation_planner._system_prompt()
-    assert "evidence_ids 必须是非空的 JSON 整数数组" in agent_decider._system_prompt()
+    assert "source_urls：支持该结论的搜索来源 URL 数组" in agent_decider._system_prompt()
     assert "未找到独立来源" in agent_decider._system_prompt()
 
 
@@ -349,7 +414,7 @@ def test_agent_reports_insufficient_finish_as_partial(tmp_path: Path) -> None:
 
     assert report.status is RunStatus.PARTIAL
     assert report.stop_reason is AgentStopReason.INSUFFICIENT_EVIDENCE
-    assert report.final_answer == "现有公开材料没有披露可比较的测试基线。"
+    assert report.final_answer == ("现有公开材料没有披露可比较的测试基线。（来源：原始文章[1]）")
     assert report.uncertainties == ("缺少独立测试报告",)
 
 
@@ -494,6 +559,7 @@ def test_agent_run_cli_uses_separate_command(monkeypatch, capsys) -> None:
         uncertainties=(),
         steps=1,
         stop_reason=AgentStopReason.FINISHED,
+        citations=(ConclusionCitation("无需继续搜索。", (1,), ()),),
     )
 
     def fake_agent_run(
@@ -536,3 +602,6 @@ def test_agent_run_cli_uses_separate_command(monkeypatch, capsys) -> None:
     assert payload["status"] == "completed"
     assert payload["stop_reason"] == "finished"
     assert payload["final_answer"] == "无需继续搜索。"
+    assert payload["citations"] == [
+        {"claim": "无需继续搜索。", "evidence_ids": [1], "source_urls": []}
+    ]
