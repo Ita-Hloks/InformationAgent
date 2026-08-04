@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from ..collection import RawFeedEntry
@@ -42,3 +43,18 @@ class FeedObservation:
     last_modified: str | None
     not_modified: bool
     new_entries: list[RawFeedEntry]
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchRunSummary:
+    """Safe, aggregate-only view of a persisted research run."""
+
+    run_id: str
+    topic: str
+    status: str
+    started_at: datetime
+    finished_at: datetime | None
+    feed_count: int
+    snapshot_count: int
+    selected_evidence_count: int
+    collection_error_count: int

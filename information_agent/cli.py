@@ -14,6 +14,7 @@ from .serialization import (
     collection_report_to_payload,
     planning_report_to_payload,
     report_to_payload,
+    research_run_summaries_to_payload,
     search_answer_to_payload,
     search_report_to_payload,
 )
@@ -46,6 +47,20 @@ def build_parser() -> argparse.ArgumentParser:
     plan_run_parser.add_argument("run_id", help="ingest 命令返回的研究运行 ID")
     plan_run_parser.add_argument(
         "--timeout", type=float, default=DEFAULT_LLM_TIMEOUT_SECONDS, help="规划时限（秒）"
+    )
+    list_runs_parser = commands.add_parser(
+        "list-runs", help="List recent persisted research runs without modifying the database"
+    )
+    list_runs_parser.add_argument(
+        "--limit",
+        type=_research_run_limit,
+        default=20,
+        help="Maximum number of runs to return (1-100; default: 20)",
+    )
+    list_runs_parser.add_argument(
+        "--status",
+        choices=("collecting", "completed", "partial", "failed"),
+        help="Return only runs with this status",
     )
     agent_run_parser = commands.add_parser(
         "agent-run",
@@ -87,6 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
         analyze_parser,
         plan_parser,
         plan_run_parser,
+        list_runs_parser,
         agent_run_parser,
         search_parser,
         verification_parser,
@@ -110,6 +126,16 @@ def _add_common_arguments(
     parser.add_argument("feeds", nargs="+", help="一个或多个 RSS/Atom 地址")
     parser.add_argument("--timeout", type=float, default=default_timeout, help="总时限（秒）")
     parser.add_argument("--limit", type=int, default=default_limit, help=limit_help)
+
+
+def _research_run_limit(value: str) -> int:
+    try:
+        limit = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("limit must be an integer between 1 and 100") from error
+    if not 1 <= limit <= 100:
+        raise argparse.ArgumentTypeError("limit must be between 1 and 100")
+    return limit
 
 
 def main() -> None:
@@ -144,6 +170,13 @@ def main() -> None:
         load_dotenv()
         result = plan_run(args.run_id, timeout_seconds=args.timeout)
         payload = persisted_planning_to_payload(result)
+    elif args.command == "list-runs":
+        from .storage import SQLiteCollectionStore, default_database_path
+
+        runs = SQLiteCollectionStore(default_database_path()).list_runs(
+            limit=args.limit, status=args.status
+        )
+        payload = research_run_summaries_to_payload(runs)
     elif args.command == "agent-run":
         from .orchestration import agent_run
 

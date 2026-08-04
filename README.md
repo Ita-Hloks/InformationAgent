@@ -81,6 +81,7 @@ flowchart LR
 | `analyze` | 基于已筛选证据生成带证据编号的分析，并评估引用 | `LLM_*` |
 | `plan` | 从最多 5 篇候选文章中生成可追溯的搜索计划 | `LLM_*` |
 | `plan-run` | 根据 `ingest` 的 `run_id` 读取已选证据，并将规划运行、原始响应、计划与查询写回 SQLite | `LLM_*` |
+| `list-runs` | 离线只读地列出最近保存的研究运行及其聚合计数 | 无 |
 | `search` | 执行采集、规划和联网回答，保留搜索来源 | `LLM_*` 与 `SEARCH_LLM_*` |
 | `verify-search` | 用固定问题检查联网搜索配置、请求和来源返回 | `SEARCH_LLM_*` |
 
@@ -90,6 +91,7 @@ flowchart LR
 python -m information_agent.cli --help
 python -m information_agent.cli collect --help
 python -m information_agent.cli plan-run --help
+python -m information_agent.cli list-runs --help
 ```
 
 保存无需 LLM 的采集结果：
@@ -102,6 +104,12 @@ python -m information_agent.cli ingest \
 ```
 
 数据库默认写入 `data/information_agent.db`，命令输出的 JSON 包含用于追踪本次入库的 `run_id`。如需修改数据库位置，请在当前 Shell 中设置 `INFORMATION_AGENT_DB_PATH`。
+
+Use `list-runs` to inspect recent persisted runs without loading credentials or changing the database. It returns at most 20 runs by default; `--limit` accepts 1 through 100, and `--status` accepts `collecting`, `completed`, `partial`, or `failed`.
+
+```bash
+python -m information_agent.cli list-runs --limit 20 --status completed
+```
 
 要基于这次入库的已选证据生成并保存搜索计划，把输出中的 `run_id` 传给 `plan-run`：
 

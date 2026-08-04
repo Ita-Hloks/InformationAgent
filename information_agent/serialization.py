@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from .investigation import PlanningReport
     from .orchestration.search_workflow import SearchReport
     from .search import SearchAnswer
-    from .storage import PersistedCollection, PersistedPlanning
+    from .storage import PersistedCollection, PersistedPlanning, ResearchRunSummary
 
 
 def format_json_datetime(value: datetime) -> str:
@@ -55,6 +55,12 @@ def persisted_planning_to_payload(result: PersistedPlanning) -> dict[str, Any]:
         "planning_run_id": result.planning_run_id,
         **planning_report_to_payload(result.report),
     }
+
+
+def research_run_summaries_to_payload(
+    runs: list[ResearchRunSummary],
+) -> dict[str, list[dict[str, Any]]]:
+    return {"runs": [_research_run_summary_to_payload(run) for run in runs]}
 
 
 def agent_report_to_payload(report: AgentReport) -> dict[str, Any]:
@@ -113,4 +119,20 @@ def _selected_evidence_to_payload(item: SelectedEvidence) -> dict[str, Any]:
     payload["collected_at"] = format_json_datetime(item.article.collected_at)
     if item.article.published_at is not None:
         payload["published_at"] = format_json_datetime(item.article.published_at)
+    return payload
+
+
+def _research_run_summary_to_payload(run: ResearchRunSummary) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "run_id": run.run_id,
+        "topic": run.topic,
+        "status": run.status,
+        "started_at": format_json_datetime(run.started_at),
+        "feed_count": run.feed_count,
+        "snapshot_count": run.snapshot_count,
+        "selected_evidence_count": run.selected_evidence_count,
+        "collection_error_count": run.collection_error_count,
+    }
+    if run.finished_at is not None:
+        payload["finished_at"] = format_json_datetime(run.finished_at)
     return payload
