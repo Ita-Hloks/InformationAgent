@@ -29,25 +29,6 @@ def select_evidence(
     return _validate_selection(selected, unique_items, limit)
 
 
-def filter_evidence(
-    topic: str,
-    items: list[NormalizedArticle],
-    limit: int = 20,
-    *,
-    timeout: float = DEFAULT_LLM_TIMEOUT_SECONDS,
-    selector: RelevanceSelector | None = None,
-) -> list[SelectedEvidence]:
-    """兼容旧名称；实际筛选始终经过语义选择器。"""
-
-    return select_evidence(
-        topic,
-        items,
-        limit=limit,
-        timeout=timeout,
-        selector=selector,
-    )
-
-
 def _deduplicate(items: list[NormalizedArticle]) -> list[NormalizedArticle]:
     unique: list[NormalizedArticle] = []
     seen_urls: set[str] = set()

@@ -98,37 +98,6 @@ def test_ingest_persists_selected_segments_from_mixed_entry(tmp_path: Path) -> N
     assert rows == [(1, 1), (0, None)]
 
 
-def test_store_migrates_legacy_relevance_score_column(tmp_path: Path) -> None:
-    database_path = tmp_path / "legacy.db"
-    with sqlite3.connect(database_path) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE schema_migrations (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL
-            );
-            INSERT INTO schema_migrations VALUES (1, 'now');
-            INSERT INTO schema_migrations VALUES (2, 'now');
-            INSERT INTO schema_migrations VALUES (3, 'now');
-            CREATE TABLE run_evidence (
-                run_id TEXT NOT NULL,
-                snapshot_id TEXT NOT NULL,
-                evidence_no INTEGER,
-                relevance_score REAL,
-                selected INTEGER NOT NULL,
-                PRIMARY KEY (run_id, snapshot_id),
-                UNIQUE (run_id, evidence_no)
-            );
-            """
-        )
-
-    store = SQLiteCollectionStore(database_path)
-    with store._connect() as connection:
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(run_evidence)")}
-
-    assert "relevance_score" not in columns
-
-
 def test_ingest_reuses_unchanged_article_snapshot_across_runs(tmp_path: Path) -> None:
     database_path = tmp_path / "information-agent.db"
 

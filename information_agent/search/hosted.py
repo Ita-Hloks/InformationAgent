@@ -155,6 +155,4 @@ def _to_jsonable(value: Any) -> Any:
         return [_to_jsonable(item) for item in value]
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
-    if hasattr(value, "to_dict"):
-        return _to_jsonable(value.to_dict())
     return str(value)

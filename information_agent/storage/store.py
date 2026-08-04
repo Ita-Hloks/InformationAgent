@@ -16,8 +16,6 @@ from ..normalization import NormalizedArticle
 from ..selection import SelectedEvidence
 from .models import FeedObservation, FeedState
 
-_SCHEMA_VERSION = 4
-
 
 def default_database_path() -> Path:
     configured = os.getenv("INFORMATION_AGENT_DB_PATH")
@@ -514,14 +512,6 @@ class SQLiteCollectionStore:
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                 (3, _format_datetime(project_now())),
             )
-        if 4 not in applied_versions:
-            columns = {row[1] for row in connection.execute("PRAGMA table_info(run_evidence)")}
-            if "relevance_score" in columns:
-                connection.execute("ALTER TABLE run_evidence DROP COLUMN relevance_score")
-            connection.execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                (4, _format_datetime(project_now())),
-            )
 
 
 def _article_payload(article: NormalizedArticle) -> dict[str, object]:
@@ -534,7 +524,6 @@ def _article_payload(article: NormalizedArticle) -> dict[str, object]:
         _format_datetime(article.published_at) if article.published_at else None
     )
     payload["collected_at"] = _format_datetime(article.collected_at)
-    payload["schema_version"] = 1
     return payload
 
 
