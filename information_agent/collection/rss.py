@@ -51,7 +51,16 @@ class _RSSTextParser(HTMLParser):
         "tr",
         "ul",
     }
-    _IGNORED_TAGS = {"script", "style", "template", "noscript"}
+    _IGNORED_TAGS = {
+        "code",
+        "kbd",
+        "noscript",
+        "pre",
+        "samp",
+        "script",
+        "style",
+        "template",
+    }
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)

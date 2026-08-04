@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 from openai import OpenAI
 
-from ..common import normalize_url, request_json_completion
+from ..common import llm_safe_text, normalize_url, request_json_completion
 from ..investigation import SEARCH_PLAN_CONTRACT, parse_evidence_id, parse_search_plans
 from ..search import SearchAnswerStatus
 from ..selection import SelectedEvidence
@@ -255,8 +255,9 @@ def _decision_input(
     validation_feedback: str | None = None,
 ) -> str:
     articles = "\n\n".join(
-        f'<article id="{item.id}">\n标题：{item.title}\n来源：{item.source_url}\n正文：\n'
-        f"{item.content[:MAX_ARTICLE_CHARS]}\n</article>"
+        f'<article id="{item.id}">\n'
+        f"标题：{llm_safe_text(item.title)}\n来源：{item.source_url}\n正文：\n"
+        f"{llm_safe_text(item.content)[:MAX_ARTICLE_CHARS]}\n</article>"
         for item in evidence
     )
     history = _observation_history(observations)

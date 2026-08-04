@@ -6,7 +6,7 @@ from typing import Any
 
 from openai import OpenAI
 
-from ..common import request_json_completion
+from ..common import CONTENT_BATCH_CHARS, llm_safe_text, request_json_completion, split_content
 from ..contracts import Analysis, Claim
 from ..selection import SelectedEvidence
 
@@ -79,11 +79,14 @@ def parse_analysis(raw: str) -> Analysis:
 def _analysis_input(evidence: list[SelectedEvidence]) -> str:
     batches: list[str] = []
     for item in evidence:
-        content_chunks = item.content_chunks or (item.content[:500],)
+        safe_content = llm_safe_text(item.content)
+        content_chunks = split_content(safe_content, CONTENT_BATCH_CHARS)
+        if not content_chunks:
+            content_chunks = [safe_content[:CONTENT_BATCH_CHARS]]
         total_chunks = len(content_chunks)
         batches.extend(
             f'<evidence id="{item.id}" batch="{index}/{total_chunks}">\n'
-            f"标题：{item.title}\n来源：{item.source_url}\n"
+            f"标题：{llm_safe_text(item.title)}\n来源：{item.source_url}\n"
             f"内容批次：{index}/{total_chunks}\n内容：{content}\n"
             "</evidence>"
             for index, content in enumerate(content_chunks, start=1)

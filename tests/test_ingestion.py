@@ -8,7 +8,6 @@ from pathlib import Path
 from information_agent.cli import main
 from information_agent.collection import FeedFetchResult, RawFeedEntry
 from information_agent.contracts import CollectionReport, RunStatus
-from information_agent.normalization import derive_article
 from information_agent.orchestration.ingestion import ingest
 from information_agent.selection import SelectedEvidence
 from information_agent.storage import PersistedCollection, SQLiteCollectionStore
@@ -50,7 +49,7 @@ def test_ingest_saves_all_normalized_articles_and_selected_evidence(tmp_path: Pa
     assert "relevance_score" not in evidence_columns
 
 
-def test_ingest_persists_selected_segments_from_mixed_entry(tmp_path: Path) -> None:
+def test_ingest_persists_a_rss_entry_as_a_whole_article(tmp_path: Path) -> None:
     database_path = tmp_path / "information-agent.db"
 
     def collector(_: str, __: float) -> list[RawFeedEntry]:
@@ -66,16 +65,7 @@ def test_ingest_persists_selected_segments_from_mixed_entry(tmp_path: Path) -> N
     class Selector:
         def select(self, topic, items, *, limit, timeout):
             base = items[0]
-            return [
-                SelectedEvidence(
-                    derive_article(
-                        base,
-                        title="AI 芯片发布",
-                        content="第一篇：AI 芯片发布，厂商公布了完整测试结果和比较基线。",
-                    ),
-                    1,
-                )
-            ]
+            return [SelectedEvidence(base, 1)]
 
     result = ingest(
         "AI 芯片",
@@ -88,14 +78,17 @@ def test_ingest_persists_selected_segments_from_mixed_entry(tmp_path: Path) -> N
 
     assert result.report.status is RunStatus.COMPLETED
     assert len(selected) == 1
-    assert selected[0].content.startswith("第一篇：AI 芯片发布")
+    assert selected[0].content == (
+        "第一篇：AI 芯片发布，厂商公布了完整测试结果和比较基线。\n"
+        "第二篇：手机更新，厂商公布了新的产品计划和发布时间。"
+    )
 
     with sqlite3.connect(database_path) as connection:
         rows = connection.execute(
             "SELECT selected, evidence_no FROM run_evidence ORDER BY selected DESC"
         ).fetchall()
 
-    assert rows == [(1, 1), (0, None)]
+    assert rows == [(1, 1)]
 
 
 def test_ingest_reuses_unchanged_article_snapshot_across_runs(tmp_path: Path) -> None:

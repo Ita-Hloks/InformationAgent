@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 from openai import OpenAI
 
-from ..common import request_json_completion
+from ..common import llm_safe_text, request_json_completion
 from ..selection import SelectedEvidence
 from .models import PlanningResult, QuestionKind, SearchPlan, SearchQuery
 
@@ -148,7 +148,7 @@ def _parse_plan(
         raise ValueError(f"计划引用了文章编号 {evidence_id}，有效编号为：{valid_ids}")
 
     trigger_quote = _required_text(item["trigger_quote"], "trigger_quote", MAX_QUOTE_CHARS)
-    if trigger_quote not in evidence_by_id[evidence_id].content:
+    if trigger_quote not in llm_safe_text(evidence_by_id[evidence_id].content):
         raise ValueError("trigger_quote 未出现在对应文章正文中")
     question = _required_chinese_text(item["question"], "question", MAX_QUESTION_CHARS)
 
@@ -237,8 +237,9 @@ def _planning_input(
     validation_feedback: str | None = None,
 ) -> str:
     articles = "\n\n".join(
-        f'<article id="{item.id}">\n标题：{item.title}\n来源：{item.source_url}\n正文：\n'
-        f"{item.content[:MAX_ARTICLE_CHARS]}\n</article>"
+        f'<article id="{item.id}">\n'
+        f"标题：{llm_safe_text(item.title)}\n来源：{item.source_url}\n正文：\n"
+        f"{llm_safe_text(item.content)[:MAX_ARTICLE_CHARS]}\n</article>"
         for item in evidence
     )
     valid_ids = "、".join(str(item.id) for item in evidence)

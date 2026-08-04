@@ -2,17 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import replace
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
 from ..collection import RawFeedEntry
-from ..common import normalize_url
+from ..common import CONTENT_BATCH_CHARS, normalize_url, split_content
 from ..contracts import PROJECT_TIMEZONE
 from .models import NormalizedArticle
 
 MIN_CONTENT_CHARS = 20
-CONTENT_BATCH_CHARS = 500
 
 
 def parse_published_at(value: str | datetime | None) -> datetime | None:
@@ -59,7 +57,7 @@ def normalize_evidence(
         if len(content) < min_content_chars:
             continue
 
-        content_chunks = _split_content(content, content_batch_chars)
+        content_chunks = split_content(content, content_batch_chars)
         processing_warnings: list[str] = []
         if len(content_chunks) > 1:
             processing_warnings.append(
@@ -88,61 +86,9 @@ def normalize_evidence(
     return normalized
 
 
-def derive_article(
-    article: NormalizedArticle,
-    *,
-    title: str,
-    content: str,
-) -> NormalizedArticle:
-    """Create a source-preserving article from a validated article segment."""
-
-    normalized_title = _normalize_text(title)
-    normalized_content = _normalize_text(content)
-    if not normalized_title or len(normalized_content) < MIN_CONTENT_CHARS:
-        raise ValueError("文章片段内容不足")
-
-    content_chunks = _split_content(normalized_content, CONTENT_BATCH_CHARS)
-    processing_warnings: list[str] = []
-    if len(content_chunks) > 1:
-        processing_warnings.append(
-            f"正文已拆分为 {len(content_chunks)} 个批次，每批最多 {CONTENT_BATCH_CHARS} 字"
-        )
-
-    return replace(
-        article,
-        title=normalized_title,
-        content=normalized_content,
-        content_chunks=tuple(content_chunks),
-        processing_warnings=tuple(processing_warnings),
-    )
-
-
 def _normalize_text(value: str) -> str:
     lines = [re.sub(r"\s+", " ", line).strip() for line in value.splitlines()]
     return "\n".join(line for line in lines if line)
-
-
-def _split_content(content: str, batch_chars: int) -> list[str]:
-    chunks: list[str] = []
-    start = 0
-    while start < len(content):
-        end = min(start + batch_chars, len(content))
-        if end < len(content):
-            boundary = _last_natural_boundary(content, start, end)
-            if boundary > start + batch_chars // 2:
-                end = boundary
-        chunks.append(content[start:end])
-        start = end
-    return chunks
-
-
-def _last_natural_boundary(content: str, start: int, end: int) -> int:
-    positions = [
-        content.rfind(marker, start + 1, end)
-        for marker in ("\n", "。", "！", "？", ".", "!", "?", ";", "；")
-    ]
-    position = max(positions)
-    return position + 1 if position >= 0 else end
 
 
 def _article_id(source_url: str) -> str:
