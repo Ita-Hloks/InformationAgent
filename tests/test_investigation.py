@@ -22,7 +22,7 @@ def _evidence() -> list[SelectedEvidence]:
             )
         ]
     )[0]
-    return [SelectedEvidence(article, evidence_id=1, relevance_score=1.0)]
+    return [SelectedEvidence(article, evidence_id=1)]
 
 
 def _valid_payload() -> str:

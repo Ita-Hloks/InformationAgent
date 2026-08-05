@@ -16,8 +16,6 @@ from ..normalization import NormalizedArticle
 from ..selection import SelectedEvidence
 from .models import FeedObservation, FeedState
 
-_SCHEMA_VERSION = 3
-
 
 def default_database_path() -> Path:
     configured = os.getenv("INFORMATION_AGENT_DB_PATH")
@@ -64,18 +62,16 @@ class SQLiteCollectionStore:
                 connection.execute(
                     """
                     INSERT INTO run_evidence (
-                        run_id, snapshot_id, evidence_no, relevance_score, selected
-                    ) VALUES (?, ?, ?, ?, ?)
+                        run_id, snapshot_id, evidence_no, selected
+                    ) VALUES (?, ?, ?, ?)
                     ON CONFLICT(run_id, snapshot_id) DO UPDATE SET
                         evidence_no = excluded.evidence_no,
-                        relevance_score = excluded.relevance_score,
                         selected = excluded.selected
                     """,
                     (
                         run_id,
                         snapshot_id,
                         selected.evidence_id if selected else None,
-                        selected.relevance_score if selected else None,
                         1 if selected else 0,
                     ),
                 )
@@ -150,7 +146,7 @@ class SQLiteCollectionStore:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT snapshots.payload_json, evidence.evidence_no, evidence.relevance_score
+                SELECT snapshots.payload_json, evidence.evidence_no
                 FROM run_evidence AS evidence
                 JOIN article_snapshots AS snapshots ON snapshots.id = evidence.snapshot_id
                 WHERE evidence.run_id = ? AND evidence.selected = 1
@@ -162,7 +158,6 @@ class SQLiteCollectionStore:
             SelectedEvidence(
                 article=_article_from_payload(json.loads(row["payload_json"])),
                 evidence_id=int(row["evidence_no"]),
-                relevance_score=float(row["relevance_score"]),
             )
             for row in rows
         ]
@@ -433,7 +428,6 @@ class SQLiteCollectionStore:
                 run_id TEXT NOT NULL REFERENCES research_runs(id),
                 snapshot_id TEXT NOT NULL REFERENCES article_snapshots(id),
                 evidence_no INTEGER,
-                relevance_score REAL,
                 selected INTEGER NOT NULL CHECK (selected IN (0, 1)),
                 PRIMARY KEY (run_id, snapshot_id),
                 UNIQUE (run_id, evidence_no)
@@ -530,7 +524,6 @@ def _article_payload(article: NormalizedArticle) -> dict[str, object]:
         _format_datetime(article.published_at) if article.published_at else None
     )
     payload["collected_at"] = _format_datetime(article.collected_at)
-    payload["schema_version"] = 1
     return payload
 
 

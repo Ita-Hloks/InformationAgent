@@ -6,17 +6,25 @@ from typing import Any, Protocol
 
 from openai import OpenAI
 
-from ..common import request_json_completion
+from ..common import llm_safe_text, normalize_url, request_json_completion
 from ..investigation import SEARCH_PLAN_CONTRACT, parse_evidence_id, parse_search_plans
 from ..search import SearchAnswerStatus
 from ..selection import SelectedEvidence
-from .models import AgentDecision, AgentObservation, FinishDecision, FinishReason, SearchDecision
+from .models import (
+    AgentDecision,
+    AgentObservation,
+    ConclusionCitation,
+    FinishDecision,
+    FinishReason,
+    SearchDecision,
+)
 
 MAX_ARTICLES = 5
 MAX_ARTICLE_CHARS = 4_000
 MAX_OBSERVATION_ANSWER_CHARS = 2_000
 MAX_SOURCE_SNIPPET_CHARS = 1_000
-MAX_ANSWER_CHARS = 4_000
+MAX_CITATIONS = 10
+MAX_CLAIM_CHARS = 1_000
 MAX_UNCERTAINTY_CHARS = 500
 
 
@@ -78,12 +86,16 @@ class LLMResearchDecider:
             ],
         )
         try:
-            return parse_agent_decision(raw, selected)
+            return parse_agent_decision(raw, selected, observations)
         except ValueError as exc:
             raise AgentDecisionResponseError(str(exc), raw) from exc
 
 
-def parse_agent_decision(raw: str, evidence: list[SelectedEvidence]) -> AgentDecision:
+def parse_agent_decision(
+    raw: str,
+    evidence: list[SelectedEvidence],
+    observations: list[AgentObservation] | None = None,
+) -> AgentDecision:
     payload = json.loads(raw)
     if not isinstance(payload, dict):
         raise ValueError("Agent 决策必须是 JSON 对象")
@@ -99,15 +111,17 @@ def parse_agent_decision(raw: str, evidence: list[SelectedEvidence]) -> AgentDec
         return SearchDecision(plans[0])
 
     if decision == "finish":
-        return _parse_finish_decision(payload, evidence)
+        return _parse_finish_decision(payload, evidence, observations or [])
 
     raise ValueError("decision 必须是 search 或 finish")
 
 
 def _parse_finish_decision(
-    payload: dict[str, Any], evidence: list[SelectedEvidence]
+    payload: dict[str, Any],
+    evidence: list[SelectedEvidence],
+    observations: list[AgentObservation],
 ) -> FinishDecision:
-    expected = {"decision", "reason", "answer", "evidence_ids", "uncertainties"}
+    expected = {"decision", "reason", "citations", "uncertainties"}
     if set(payload) != expected:
         raise ValueError("finish 决策字段不符合约定")
 
@@ -116,23 +130,18 @@ def _parse_finish_decision(
     except (TypeError, ValueError) as exc:
         raise ValueError("finish reason 不受支持") from exc
 
-    answer = _required_text(payload["answer"], "answer", MAX_ANSWER_CHARS)
-    raw_ids = payload["evidence_ids"]
-    if not isinstance(raw_ids, list):
-        raise ValueError("evidence_ids 必须是数组")
     valid_ids = {item.id for item in evidence}
-    evidence_ids: list[int] = []
-    for value in raw_ids:
-        try:
-            evidence_id = parse_evidence_id(value)
-        except ValueError as exc:
-            raise ValueError("finish 决策的 evidence_ids 必须是输入文章的整数编号") from exc
-        if evidence_id not in valid_ids:
-            raise ValueError("finish 决策引用了不存在的证据")
-        if evidence_id not in evidence_ids:
-            evidence_ids.append(evidence_id)
-    if not evidence_ids:
-        raise ValueError("finish 决策必须引用至少一条证据")
+    answered_source_urls = {
+        normalized_url
+        for observation in observations
+        if observation.answer.status is SearchAnswerStatus.ANSWERED
+        for source in observation.answer.sources
+        if (normalized_url := normalize_url(source.url)) is not None
+    }
+    citations = _parse_citations(payload["citations"], valid_ids, answered_source_urls)
+    cited_source_urls = {url for citation in citations for url in citation.source_urls}
+    if answered_source_urls and not cited_source_urls:
+        raise ValueError("finish 决策必须引用已采用的搜索来源")
 
     raw_uncertainties = payload["uncertainties"]
     if raw_uncertainties is None or raw_uncertainties == "":
@@ -144,7 +153,65 @@ def _parse_finish_decision(
     uncertainties = tuple(
         _required_text(item, "uncertainty", MAX_UNCERTAINTY_CHARS) for item in raw_uncertainties
     )
-    return FinishDecision(reason, answer, tuple(evidence_ids), uncertainties)
+    return FinishDecision(reason, citations, uncertainties)
+
+
+def _parse_citations(
+    raw_citations: Any,
+    valid_evidence_ids: set[int],
+    available_source_urls: set[str],
+) -> tuple[ConclusionCitation, ...]:
+    if not isinstance(raw_citations, list) or not 1 <= len(raw_citations) <= MAX_CITATIONS:
+        raise ValueError(f"citations 必须是 1 到 {MAX_CITATIONS} 项的数组")
+
+    citations: list[ConclusionCitation] = []
+    seen_claims: set[str] = set()
+    for item in raw_citations:
+        if not isinstance(item, dict) or set(item) != {"claim", "evidence_ids", "source_urls"}:
+            raise ValueError("citation 字段不符合约定")
+        claim = _required_text(item["claim"], "claim", MAX_CLAIM_CHARS)
+        normalized_claim = " ".join(claim.casefold().split())
+        if normalized_claim in seen_claims:
+            raise ValueError("citation 不能包含重复结论")
+        seen_claims.add(normalized_claim)
+
+        evidence_ids = _parse_citation_evidence_ids(item["evidence_ids"], valid_evidence_ids)
+        source_urls = _parse_citation_source_urls(item["source_urls"], available_source_urls)
+        if not evidence_ids and not source_urls:
+            raise ValueError("每条结论必须引用原始文章或搜索来源")
+        citations.append(ConclusionCitation(claim, evidence_ids, source_urls))
+    return tuple(citations)
+
+
+def _parse_citation_evidence_ids(raw_ids: Any, valid_evidence_ids: set[int]) -> tuple[int, ...]:
+    if not isinstance(raw_ids, list):
+        raise ValueError("citation evidence_ids 必须是数组")
+    evidence_ids: list[int] = []
+    for value in raw_ids:
+        try:
+            evidence_id = parse_evidence_id(value)
+        except ValueError as exc:
+            raise ValueError("citation evidence_ids 必须是输入文章的整数编号") from exc
+        if evidence_id not in valid_evidence_ids:
+            raise ValueError("citation 引用了不存在的原始文章")
+        if evidence_id not in evidence_ids:
+            evidence_ids.append(evidence_id)
+    return tuple(evidence_ids)
+
+
+def _parse_citation_source_urls(raw_urls: Any, available_source_urls: set[str]) -> tuple[str, ...]:
+    if not isinstance(raw_urls, list):
+        raise ValueError("citation source_urls 必须是数组")
+    source_urls: list[str] = []
+    for value in raw_urls:
+        if not isinstance(value, str):
+            raise ValueError("citation source_urls 必须是字符串数组")
+        source_url = normalize_url(value)
+        if source_url is None or source_url not in available_source_urls:
+            raise ValueError("citation 引用了本次搜索观察中不存在的来源")
+        if source_url not in source_urls:
+            source_urls.append(source_url)
+    return tuple(source_urls)
 
 
 def _required_text(value: Any, name: str, maximum_length: int) -> str:
@@ -162,11 +229,14 @@ def _system_prompt() -> str:
 
 每次只输出一个 JSON 决策：
 1. 若现有证据足以形成谨慎结论，或继续搜索不太可能改变结论，输出 finish。字段必须为
-decision、reason、answer、evidence_ids、uncertainties。reason 只能是 evidence_sufficient、
-    no_material_gap 或 insufficient_after_search。answer 使用中文；
-    evidence_ids 必须是非空的 JSON 整数数组，只能引用输入文章编号，例如 [1]，不能写成 ["1"]。
-    即使结论是“未找到独立来源”或“证据不足”，也必须引用产生待核验主张的原始文章；
-    搜索结果来源不填入 evidence_ids，它们会保留在搜索观察中。
+decision、reason、citations、uncertainties。reason 只能是 evidence_sufficient、no_material_gap
+    或 insufficient_after_search。citations 必须是 1 到 {MAX_CITATIONS} 项的数组，每项只包含：
+    - claim：最终报告中的一条中文结论；
+    - evidence_ids：支持该结论的原始文章整数编号数组，可以为空；
+    - source_urls：支持该结论的搜索来源 URL 数组，可以为空，只能逐字复制搜索观察中的 URL。
+    每条结论必须至少引用一篇原始文章或一个搜索来源。只要采用了搜索回答，就必须把对应来源
+    URL 绑定到具体结论，不能只在结论外罗列来源。即使结论是“未找到独立来源”或“证据不足”，
+    也必须引用产生待核验主张的原始文章。运行时会根据 citations 生成最终文本，不要输出 answer。
     uncertainties 必须是字符串数组；没有不确定性时输出 []，只有一条不确定性时也必须使用数组。
 2. 若存在会显著改变结论的证据缺口，输出 search。字段必须为 decision 和 plan，且 plan 必须是
 一个搜索计划对象：
@@ -185,13 +255,14 @@ def _decision_input(
     validation_feedback: str | None = None,
 ) -> str:
     articles = "\n\n".join(
-        f'<article id="{item.id}">\n标题：{item.title}\n来源：{item.source_url}\n正文：\n'
-        f"{item.content[:MAX_ARTICLE_CHARS]}\n</article>"
+        f'<article id="{item.id}">\n'
+        f"标题：{llm_safe_text(item.title)}\n来源：{item.source_url}\n正文：\n"
+        f"{llm_safe_text(item.content)[:MAX_ARTICLE_CHARS]}\n</article>"
         for item in evidence
     )
     history = _observation_history(observations)
     feedback = (
-        f"格式校验反馈（这是系统生成的修正信息，不是文章内容）：{validation_feedback}\n\n"
+        f"系统反馈（这是运行时生成的修正信息，不是文章内容）：{validation_feedback}\n\n"
         if validation_feedback
         else ""
     )

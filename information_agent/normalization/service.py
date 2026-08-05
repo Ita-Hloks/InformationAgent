@@ -6,12 +6,11 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 
 from ..collection import RawFeedEntry
-from ..common import normalize_url
+from ..common import CONTENT_BATCH_CHARS, normalize_url, split_content
 from ..contracts import PROJECT_TIMEZONE
 from .models import NormalizedArticle
 
 MIN_CONTENT_CHARS = 20
-CONTENT_BATCH_CHARS = 500
 
 
 def parse_published_at(value: str | datetime | None) -> datetime | None:
@@ -58,7 +57,7 @@ def normalize_evidence(
         if len(content) < min_content_chars:
             continue
 
-        content_chunks = _split_content(content, content_batch_chars)
+        content_chunks = split_content(content, content_batch_chars)
         processing_warnings: list[str] = []
         if len(content_chunks) > 1:
             processing_warnings.append(
@@ -88,11 +87,8 @@ def normalize_evidence(
 
 
 def _normalize_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()
-
-
-def _split_content(content: str, batch_chars: int) -> list[str]:
-    return [content[index : index + batch_chars] for index in range(0, len(content), batch_chars)]
+    lines = [re.sub(r"\s+", " ", line).strip() for line in value.splitlines()]
+    return "\n".join(line for line in lines if line)
 
 
 def _article_id(source_url: str) -> str:

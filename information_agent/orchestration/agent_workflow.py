@@ -11,13 +11,19 @@ from ..agent import (
     AgentReport,
     AgentStopReason,
     FinishDecision,
+    FinishReason,
     LLMResearchDecider,
     ResearchDecider,
     SearchDecision,
 )
 from ..common import DEFAULT_LLM_TIMEOUT_SECONDS, is_retryable_llm_error
 from ..contracts import RunStatus
-from ..search import HostedSearchAnswerer, SearchAnswer, SearchAnswerer
+from ..search import (
+    HostedSearchAnswerer,
+    SearchAnswer,
+    SearchAnswerer,
+    SearchAnswerStatus,
+)
 from ..storage import SQLiteCollectionStore, default_database_path
 from .execution import ExecutionBudget
 
@@ -79,7 +85,9 @@ def agent_run(
         )
 
     active_answerer = answerer
-    for step in range(1, max_steps + 1):
+    search_count = 0
+    decision_count = 0
+    while True:
         if budget.remaining() <= 0:
             return _failed_report(
                 run_id,
@@ -90,7 +98,10 @@ def agent_run(
                 observations,
                 AgentStopReason.TIMEOUT,
                 "Agent 在作出下一步决策前超时",
+                steps=decision_count,
             )
+        decision_count += 1
+        search_limit_reached = search_count >= max_steps
         try:
             decision = _call_decider_with_retries(
                 active_decider,
@@ -99,6 +110,11 @@ def agent_run(
                 observations,
                 budget,
                 max_attempts,
+                initial_validation_feedback=(
+                    f"已达到最大搜索动作数 {max_steps}；本轮只能输出 finish，不能继续 search。"
+                    if search_limit_reached
+                    else None
+                ),
             )
         except Exception as exc:
             return _failed_report(
@@ -110,21 +126,36 @@ def agent_run(
                 observations,
                 _failure_reason(budget),
                 f"Agent 决策失败：{exc}",
+                steps=decision_count,
             )
 
         if isinstance(decision, FinishDecision):
-            return AgentReport(
+            return _finish_report(
                 run_id,
                 topic,
-                RunStatus.COMPLETED,
                 evidence,
                 plans,
                 answers,
-                decision.answer,
-                decision.evidence_ids,
-                decision.uncertainties,
-                step,
-                AgentStopReason.FINISHED,
+                observations,
+                decision,
+                decision_count,
+                errors,
+            )
+
+        if search_limit_reached:
+            errors.append(f"Agent 达到最大搜索动作数 {max_steps}，未收到 finish 决策")
+            return AgentReport(
+                run_id,
+                topic,
+                RunStatus.PARTIAL,
+                evidence,
+                plans,
+                answers,
+                None,
+                (),
+                ("Agent 在搜索动作限制内未完成研究",),
+                decision_count,
+                AgentStopReason.MAX_STEPS,
                 errors,
             )
 
@@ -144,6 +175,7 @@ def agent_run(
             )
         seen_queries.update(normalized_queries)
         plans.append(decision.plan)
+        search_count += 1
 
         try:
             if active_answerer is None:
@@ -165,25 +197,10 @@ def agent_run(
                 observations,
                 _failure_reason(budget),
                 f"Agent 搜索工具失败：{exc}",
+                steps=decision_count,
             )
         answers.append(answer)
         observations.append(AgentObservation(decision.plan, answer))
-
-    errors.append(f"Agent 达到最大决策步骤 {max_steps}，未收到 finish 决策")
-    return AgentReport(
-        run_id,
-        topic,
-        RunStatus.PARTIAL,
-        evidence,
-        plans,
-        answers,
-        None,
-        (),
-        ("Agent 在步骤限制内未完成研究",),
-        max_steps,
-        AgentStopReason.MAX_STEPS,
-        errors,
-    )
 
 
 def _call_with_retries(
@@ -214,9 +231,10 @@ def _call_decider_with_retries(
     observations,
     budget: ExecutionBudget,
     max_attempts: int,
+    initial_validation_feedback: str | None = None,
 ) -> AgentDecision:
     last_error: Exception | None = None
-    validation_feedback: str | None = None
+    validation_feedback = initial_validation_feedback
     for _ in range(max_attempts):
         remaining = budget.remaining()
         if remaining <= 0:
@@ -251,6 +269,8 @@ def _failed_report(
     observations,
     stop_reason,
     error,
+    *,
+    steps: int | None = None,
 ) -> AgentReport:
     return AgentReport(
         run_id,
@@ -262,9 +282,50 @@ def _failed_report(
         None,
         (),
         ("Agent 未生成最终结论",),
-        len(observations),
+        len(observations) if steps is None else steps,
         stop_reason,
         [error],
+    )
+
+
+def _finish_report(
+    run_id,
+    topic,
+    evidence,
+    plans,
+    answers,
+    observations,
+    decision: FinishDecision,
+    step: int,
+    errors,
+) -> AgentReport:
+    searches_found_no_evidence = bool(observations) and all(
+        observation.answer.status is SearchAnswerStatus.INSUFFICIENT_EVIDENCE
+        for observation in observations
+    )
+    reason_reports_insufficient = decision.reason is FinishReason.INSUFFICIENT_AFTER_SEARCH
+    insufficient = reason_reports_insufficient or searches_found_no_evidence
+    reason_mismatches_searches = searches_found_no_evidence and not reason_reports_insufficient
+    final_answer = None if reason_mismatches_searches else decision.answer
+    evidence_ids = () if reason_mismatches_searches else decision.evidence_ids
+    citations = () if reason_mismatches_searches else decision.citations
+    uncertainties = decision.uncertainties
+    if reason_mismatches_searches:
+        uncertainties = (*uncertainties, "所有搜索均未获得可验证证据")
+    return AgentReport(
+        run_id,
+        topic,
+        RunStatus.PARTIAL if insufficient else RunStatus.COMPLETED,
+        evidence,
+        plans,
+        answers,
+        final_answer,
+        evidence_ids,
+        uncertainties,
+        step,
+        AgentStopReason.INSUFFICIENT_EVIDENCE if insufficient else AgentStopReason.FINISHED,
+        errors,
+        citations,
     )
 
 

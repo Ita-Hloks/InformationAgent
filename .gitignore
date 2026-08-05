@@ -170,6 +170,9 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# 本地测试临时目录
+.test-*/
+
 # 本地 LLM 调用备份
 log/
 

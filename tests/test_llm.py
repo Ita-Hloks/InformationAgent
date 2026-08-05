@@ -4,7 +4,7 @@ import pytest
 
 from information_agent.analysis.llm import _analysis_input, parse_analysis
 from information_agent.collection import RawFeedEntry
-from information_agent.normalization import normalize_evidence
+from information_agent.normalization import llm_safe_text, normalize_evidence
 from information_agent.selection import SelectedEvidence
 
 
@@ -30,13 +30,17 @@ def test_parse_analysis_rejects_wrong_shape() -> None:
         parse_analysis('{"claims": {}, "uncertainties": []}')
 
 
+def test_llm_safe_text_removes_code_fences_and_inline_code() -> None:
+    assert llm_safe_text("事实\n```python\nprint('secret')\n```\n结论 `x < 1`") == "事实\n结论"
+
+
 def test_analysis_input_includes_each_content_batch_once() -> None:
-    content = "甲" * 500 + "乙" * 500 + "丙" * 500
+    content = "甲" * 2_000 + "乙" * 2_000 + "丙" * 2_000
     article = normalize_evidence(
         [RawFeedEntry("https://example.com/article", "分批文章", content)]
     )[0]
 
-    prompt = _analysis_input([SelectedEvidence(article, evidence_id=1, relevance_score=1.0)])
+    prompt = _analysis_input([SelectedEvidence(article, evidence_id=1)])
 
     assert prompt.count('<evidence id="1"') == 3
     assert 'batch="1/3"' in prompt

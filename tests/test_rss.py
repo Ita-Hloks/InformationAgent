@@ -9,6 +9,67 @@ def test_plain_text_removes_html_and_decodes_entities() -> None:
     assert _plain_text("<p>Agent &amp; RSS</p>") == "Agent & RSS"
 
 
+def test_plain_text_preserves_article_block_boundaries() -> None:
+    assert _plain_text("<h2>第一篇</h2><p>正文一</p><p>正文二</p>") == ("第一篇\n正文一\n正文二")
+
+
+def test_plain_text_ignores_embedded_scripts_and_styles() -> None:
+    assert (
+        _plain_text("<p>正文</p><script>fake summary</script><style>fake style</style>") == "正文"
+    )
+
+
+def test_plain_text_ignores_code_elements() -> None:
+    html = "<p>正文</p><pre>print('secret')</pre><p>结论 <code>x &lt; 1</code></p>"
+    assert _plain_text(html) == "正文\n结论"
+
+
+def test_fetch_feed_keeps_each_entry_as_a_separate_article(monkeypatch) -> None:
+    payload = """<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+      <channel>
+        <title>中文科技源</title>
+        <link>https://example.com/</link>
+        <item>
+          <title>第一篇文章</title>
+          <guid>entry-1</guid>
+          <link>https://example.com/article-1</link>
+          <description><![CDATA[<p>第一篇正文。</p>]]></description>
+        </item>
+        <item>
+          <title>第二篇文章</title>
+          <guid>entry-2</guid>
+          <link>https://example.com/article-2</link>
+          <description><![CDATA[<p>第二篇正文。</p>]]></description>
+        </item>
+      </channel>
+    </rss>""".encode()
+
+    class FakeResponse:
+        headers = {"Content-Length": str(len(payload))}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def read(self, _: int) -> bytes:
+            return payload
+
+    monkeypatch.setattr(
+        "information_agent.collection.rss.urlopen",
+        lambda request, timeout: FakeResponse(),
+    )
+
+    items = fetch_feed("https://example.com/rss.xml", timeout=5)
+
+    assert [(item.source_url, item.title, item.content) for item in items] == [
+        ("https://example.com/article-1", "第一篇文章", "第一篇正文。"),
+        ("https://example.com/article-2", "第二篇文章", "第二篇正文。"),
+    ]
+
+
 def test_fetch_feed_populates_article_and_source_fields(monkeypatch) -> None:
     payload = """<?xml version="1.0" encoding="UTF-8"?>
     <rss version="2.0"

@@ -8,14 +8,13 @@ from urllib.error import HTTPError, URLError
 
 from information_agent.cli import main
 from information_agent.collection import RawFeedEntry
-from information_agent.contracts import CollectionReport, RunStatus
+from information_agent.contracts import CollectionReport, ContentType, RunStatus
 from information_agent.orchestration.collection import collect
+from information_agent.selection import SelectedEvidence
 from information_agent.serialization import collection_report_to_payload
 
 
-def test_collect_succeeds_without_llm_configuration(monkeypatch) -> None:
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
-
+def test_collect_uses_semantic_selector_before_reporting() -> None:
     def collector(_: str, __: float) -> list[RawFeedEntry]:
         return [
             RawFeedEntry(
@@ -62,6 +61,114 @@ def test_collect_with_no_matches_is_completed() -> None:
 
     assert report.status is RunStatus.COMPLETED
     assert report.articles == []
+
+
+def test_collect_fails_closed_when_semantic_selector_fails() -> None:
+    def collector(_: str, __: float) -> list[RawFeedEntry]:
+        return [
+            RawFeedEntry(
+                "https://example.com/article",
+                "主题文章",
+                "这是一篇足够长、但需要模型判断是否放行的文章正文。",
+            )
+        ]
+
+    class FailingSelector:
+        def select(self, topic, items, *, limit, timeout):
+            raise ValueError("模型输出损坏")
+
+    report = collect(
+        "主题",
+        ["feed"],
+        collector=collector,
+        relevance_selector=FailingSelector(),
+    )
+
+    assert report.status is RunStatus.PARTIAL
+    assert report.articles == []
+    assert report.errors == ["语义筛选失败：模型输出损坏"]
+
+
+def test_collect_only_augments_articles_selected_by_llm(monkeypatch) -> None:
+    entries = [
+        RawFeedEntry(
+            "https://example.com/selected",
+            "主题文章",
+            "这是主题文章的 RSS 摘要，长度足够并且会被模型选中。",
+            content_type=ContentType.RSS_SUMMARY,
+        ),
+        RawFeedEntry(
+            "https://example.com/weak",
+            "其他文章",
+            "这是弱相关文章的 RSS 摘要，长度足够但不会被模型选中。",
+            content_type=ContentType.RSS_SUMMARY,
+        ),
+    ]
+    fetched: list[str] = []
+
+    class Selector:
+        def select(self, topic, items, *, limit, timeout):
+            return [SelectedEvidence(items[0], 8)]
+
+    def fake_augment(items, *, timeout):
+        fetched.extend(item.source_url for item in items)
+        return items
+
+    monkeypatch.setattr(
+        "information_agent.orchestration.collection.augment_evidence",
+        fake_augment,
+    )
+
+    report = collect(
+        "主题",
+        ["feed"],
+        collector=lambda _feed, _timeout: entries,
+        relevance_selector=Selector(),
+    )
+
+    assert report.status is RunStatus.COMPLETED
+    assert [item.source_url for item in report.articles] == ["https://example.com/selected"]
+    assert fetched == ["https://example.com/selected"]
+
+
+def test_collect_keeps_selected_rss_entry_whole(monkeypatch) -> None:
+    entry = RawFeedEntry(
+        "https://example.com/digest",
+        "今日科技汇总",
+        "第一篇：AI 芯片发布，厂商公布了完整测试结果和比较基线。\n\n"
+        "第二篇：手机更新，厂商公布了新的产品计划和发布时间。",
+        content_type=ContentType.RSS_SUMMARY,
+    )
+    fetched: list[str] = []
+
+    class Selector:
+        def select(self, topic, items, *, limit, timeout):
+            return [SelectedEvidence(items[0], 1)]
+
+    def fake_augment(items, *, timeout):
+        fetched.extend(item.source_url for item in items)
+        return items
+
+    monkeypatch.setattr(
+        "information_agent.orchestration.collection.augment_evidence",
+        fake_augment,
+    )
+
+    report = collect(
+        "AI 芯片",
+        ["feed"],
+        collector=lambda _feed, _timeout: [entry],
+        relevance_selector=Selector(),
+    )
+
+    assert report.status is RunStatus.COMPLETED
+    assert len(report.articles) == 1
+    assert report.articles[0].source_url == entry.source_url
+    assert report.articles[0].content == (
+        "第一篇：AI 芯片发布，厂商公布了完整测试结果和比较基线。\n"
+        "第二篇：手机更新，厂商公布了新的产品计划和发布时间。"
+    )
+    assert fetched == [entry.source_url]
 
 
 def test_collect_fetches_six_sources_concurrently() -> None:
@@ -279,22 +386,25 @@ def test_collect_enforces_total_timeout_for_a_slow_streaming_feed() -> None:
     assert "超时" in report.errors[0]
 
 
-def test_collect_cli_does_not_load_llm_configuration(monkeypatch, capsys) -> None:
+def test_collect_cli_loads_llm_configuration(monkeypatch, capsys) -> None:
     import information_agent.orchestration.collection as collection_module
 
     def fake_collect(*args, **kwargs) -> CollectionReport:
         return CollectionReport("AI", RunStatus.COMPLETED, [])
 
-    def fail_load_dotenv() -> None:
-        raise AssertionError("collect 命令不应加载 LLM 配置")
+    loaded: list[bool] = []
+
+    def record_load_dotenv() -> None:
+        loaded.append(True)
 
     monkeypatch.setattr(collection_module, "collect", fake_collect)
-    monkeypatch.setattr("information_agent.cli.load_dotenv", fail_load_dotenv)
+    monkeypatch.setattr("information_agent.cli.load_dotenv", record_load_dotenv)
     monkeypatch.setattr(sys, "argv", ["information-agent", "collect", "AI", "feed"])
 
     main()
     payload = json.loads(capsys.readouterr().out)
 
+    assert loaded == [True]
     assert payload == {"topic": "AI", "status": "completed", "articles": [], "errors": []}
 
 
