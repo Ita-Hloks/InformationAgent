@@ -569,7 +569,7 @@ def test_agent_does_not_report_completion_at_step_limit(tmp_path: Path) -> None:
     report = agent_run(
         run_id,
         database_path=database_path,
-        decider=SequenceDecider([SearchDecision(plan)]),
+        decider=SequenceDecider([SearchDecision(plan), SearchDecision(_plan(query="第二条查询"))]),
         answerer=RecordingAnswerer(),
         max_steps=1,
     )
@@ -577,6 +577,30 @@ def test_agent_does_not_report_completion_at_step_limit(tmp_path: Path) -> None:
     assert report.status is RunStatus.PARTIAL
     assert report.stop_reason is AgentStopReason.MAX_STEPS
     assert report.final_answer is None
+    assert report.steps == 2
+
+
+def test_agent_allows_finish_after_maximum_search_actions(tmp_path: Path) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+    plans = [_plan(query=f"独立查询 {index}") for index in range(3)]
+    decider = SequenceDecider([*(SearchDecision(plan) for plan in plans), _finish()])
+    answerer = RecordingAnswerer()
+
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=decider,
+        answerer=answerer,
+        max_steps=3,
+    )
+
+    assert report.status is RunStatus.COMPLETED
+    assert report.stop_reason is AgentStopReason.FINISHED
+    assert report.steps == 4
+    assert report.plans == plans
+    assert answerer.calls == plans
+    assert len(decider.calls) == 4
+    assert len(decider.calls[-1]) == 3
 
 
 def test_agent_run_cli_uses_separate_command(monkeypatch, capsys) -> None:

@@ -70,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-steps",
         type=int,
         default=3,
-        help="最大决策步骤数",
+        help="最大搜索动作数；达到后仍保留一次 finish 决策",
     )
     agent_run_parser.add_argument(
         "--max-attempts",

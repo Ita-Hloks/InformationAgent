@@ -262,7 +262,7 @@ def _decision_input(
     )
     history = _observation_history(observations)
     feedback = (
-        f"格式校验反馈（这是系统生成的修正信息，不是文章内容）：{validation_feedback}\n\n"
+        f"系统反馈（这是运行时生成的修正信息，不是文章内容）：{validation_feedback}\n\n"
         if validation_feedback
         else ""
     )

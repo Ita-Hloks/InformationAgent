@@ -8,14 +8,30 @@ from information_agent.search import HostedSearchAnswerer, HostedSearchConfig, S
 
 
 class FakeResponse:
-    def __init__(self, *, answer: str, web_search: list[dict[str, str]]) -> None:
-        self.choices = [SimpleNamespace(message=SimpleNamespace(content=answer))]
+    def __init__(
+        self,
+        *,
+        answer: str,
+        web_search: list[dict[str, str]],
+        reasoning_content: str | None = None,
+    ) -> None:
+        self.choices = [
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=answer,
+                    reasoning_content=reasoning_content,
+                )
+            )
+        ]
         self.web_search = web_search
 
     def model_dump(self, *, mode: str) -> dict[str, object]:
         assert mode == "json"
+        message = {"content": self.choices[0].message.content}
+        if self.choices[0].message.reasoning_content is not None:
+            message["reasoning_content"] = self.choices[0].message.reasoning_content
         return {
-            "choices": [{"message": {"content": self.choices[0].message.content}}],
+            "choices": [{"message": message}],
             "web_search": self.web_search,
         }
 
@@ -156,6 +172,7 @@ def test_hosted_search_answerer_rejects_search_trace_after_synthesis(tmp_path, m
         [
             FakeResponse(answer=trace, web_search=[source]),
             FakeResponse(answer=trace, web_search=[]),
+            FakeResponse(answer=trace, web_search=[]),
         ]
     )
 
@@ -164,7 +181,30 @@ def test_hosted_search_answerer_rejects_search_trace_after_synthesis(tmp_path, m
     assert result.status is SearchAnswerStatus.INSUFFICIENT_EVIDENCE
     assert result.answer == "未能获得带有可验证来源的搜索结果。"
     assert result.sources[0].url == "https://docs.python.org/3/"
-    assert len(client.requests) == 2
+    assert len(client.requests) == 3
+
+
+def test_hosted_search_answerer_ignores_separate_reasoning_content(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("INFORMATION_AGENT_LOG_DIR", str(tmp_path))
+    client = FakeClient(
+        FakeResponse(
+            answer="Python 官方文档首页是 https://docs.python.org/3/。",
+            reasoning_content="<chain>这段内容不能成为答案。</chain>",
+            web_search=[
+                {
+                    "title": "Python Documentation",
+                    "link": "https://docs.python.org/3/",
+                    "content": "The official Python documentation.",
+                }
+            ],
+        )
+    )
+
+    result = HostedSearchAnswerer(_config(), client).answer(_plan(), timeout=20)
+
+    assert result.status is SearchAnswerStatus.ANSWERED
+    assert result.answer == "Python 官方文档首页是 https://docs.python.org/3/。"
+    assert len(client.requests) == 1
 
 
 def test_hosted_search_answerer_preserves_explicit_insufficient_answer(

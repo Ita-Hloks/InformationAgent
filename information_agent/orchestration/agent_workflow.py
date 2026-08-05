@@ -85,7 +85,9 @@ def agent_run(
         )
 
     active_answerer = answerer
-    for step in range(1, max_steps + 1):
+    search_count = 0
+    decision_count = 0
+    while True:
         if budget.remaining() <= 0:
             return _failed_report(
                 run_id,
@@ -96,7 +98,10 @@ def agent_run(
                 observations,
                 AgentStopReason.TIMEOUT,
                 "Agent 在作出下一步决策前超时",
+                steps=decision_count,
             )
+        decision_count += 1
+        search_limit_reached = search_count >= max_steps
         try:
             decision = _call_decider_with_retries(
                 active_decider,
@@ -105,6 +110,11 @@ def agent_run(
                 observations,
                 budget,
                 max_attempts,
+                initial_validation_feedback=(
+                    f"已达到最大搜索动作数 {max_steps}；本轮只能输出 finish，不能继续 search。"
+                    if search_limit_reached
+                    else None
+                ),
             )
         except Exception as exc:
             return _failed_report(
@@ -116,6 +126,7 @@ def agent_run(
                 observations,
                 _failure_reason(budget),
                 f"Agent 决策失败：{exc}",
+                steps=decision_count,
             )
 
         if isinstance(decision, FinishDecision):
@@ -127,7 +138,24 @@ def agent_run(
                 answers,
                 observations,
                 decision,
-                step,
+                decision_count,
+                errors,
+            )
+
+        if search_limit_reached:
+            errors.append(f"Agent 达到最大搜索动作数 {max_steps}，未收到 finish 决策")
+            return AgentReport(
+                run_id,
+                topic,
+                RunStatus.PARTIAL,
+                evidence,
+                plans,
+                answers,
+                None,
+                (),
+                ("Agent 在搜索动作限制内未完成研究",),
+                decision_count,
+                AgentStopReason.MAX_STEPS,
                 errors,
             )
 
@@ -147,6 +175,7 @@ def agent_run(
             )
         seen_queries.update(normalized_queries)
         plans.append(decision.plan)
+        search_count += 1
 
         try:
             if active_answerer is None:
@@ -168,25 +197,10 @@ def agent_run(
                 observations,
                 _failure_reason(budget),
                 f"Agent 搜索工具失败：{exc}",
+                steps=decision_count,
             )
         answers.append(answer)
         observations.append(AgentObservation(decision.plan, answer))
-
-    errors.append(f"Agent 达到最大决策步骤 {max_steps}，未收到 finish 决策")
-    return AgentReport(
-        run_id,
-        topic,
-        RunStatus.PARTIAL,
-        evidence,
-        plans,
-        answers,
-        None,
-        (),
-        ("Agent 在步骤限制内未完成研究",),
-        max_steps,
-        AgentStopReason.MAX_STEPS,
-        errors,
-    )
 
 
 def _call_with_retries(
@@ -217,9 +231,10 @@ def _call_decider_with_retries(
     observations,
     budget: ExecutionBudget,
     max_attempts: int,
+    initial_validation_feedback: str | None = None,
 ) -> AgentDecision:
     last_error: Exception | None = None
-    validation_feedback: str | None = None
+    validation_feedback = initial_validation_feedback
     for _ in range(max_attempts):
         remaining = budget.remaining()
         if remaining <= 0:
@@ -254,6 +269,8 @@ def _failed_report(
     observations,
     stop_reason,
     error,
+    *,
+    steps: int | None = None,
 ) -> AgentReport:
     return AgentReport(
         run_id,
@@ -265,7 +282,7 @@ def _failed_report(
         None,
         (),
         ("Agent 未生成最终结论",),
-        len(observations),
+        len(observations) if steps is None else steps,
         stop_reason,
         [error],
     )
