@@ -10,10 +10,18 @@ from pathlib import Path
 from uuid import uuid4
 
 from ..collection import RawFeedEntry
-from ..contracts import PROJECT_TIMEZONE, CollectionReport, ContentType, project_now
+from ..contracts import CollectionReport, ContentType, project_now
 from ..investigation import SearchPlan
 from ..normalization import NormalizedArticle
 from ..selection import SelectedEvidence
+from .analysis_schema import migrate_analysis_schema
+from .analysis_store import AnalysisPersistenceMixin
+from .common import (
+    _format_datetime,
+    _optional_text,
+    _parse_datetime,
+    _required_datetime,
+)
 from .models import FeedObservation, FeedState
 
 
@@ -24,7 +32,7 @@ def default_database_path() -> Path:
     return Path("data") / "information_agent.db"
 
 
-class SQLiteCollectionStore:
+class SQLiteCollectionStore(AnalysisPersistenceMixin):
     """保存粗处理文章快照与运行内证据关系。"""
 
     def __init__(self, database_path: str | Path) -> None:
@@ -276,8 +284,8 @@ class SQLiteCollectionStore:
                     run_id,
                 ),
             )
-            if updated.rowcount != 1:
-                raise ValueError(f"无法标记不存在或已结束的规划运行：{planning_run_id}")
+        if updated.rowcount != 1:
+            raise ValueError(f"无法标记不存在或已结束的规划运行：{planning_run_id}")
 
     def _upsert_snapshot(self, connection: sqlite3.Connection, article: NormalizedArticle) -> str:
         content_hash = _content_hash(article)
@@ -512,6 +520,7 @@ class SQLiteCollectionStore:
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                 (3, _format_datetime(project_now())),
             )
+        migrate_analysis_schema(connection)
 
 
 def _article_payload(article: NormalizedArticle) -> dict[str, object]:
@@ -572,26 +581,3 @@ def _article_from_payload(payload: dict[str, object]) -> NormalizedArticle:
         collected_at=_required_datetime(payload["collected_at"]),
         processing_warnings=tuple(str(item) for item in payload["processing_warnings"]),
     )
-
-
-def _optional_text(value: object | None) -> str | None:
-    return str(value) if value is not None else None
-
-
-def _parse_datetime(value: object | None) -> datetime | None:
-    if value is None:
-        return None
-    return _required_datetime(value)
-
-
-def _required_datetime(value: object) -> datetime:
-    parsed = datetime.fromisoformat(str(value))
-    if parsed.tzinfo is None:
-        raise ValueError("数据库中的日期时间必须包含时区")
-    return parsed.astimezone(PROJECT_TIMEZONE)
-
-
-def _format_datetime(value: datetime) -> str:
-    if value.tzinfo is None:
-        raise ValueError("数据库中的日期时间必须包含时区")
-    return value.astimezone(PROJECT_TIMEZONE).isoformat(timespec="seconds")
