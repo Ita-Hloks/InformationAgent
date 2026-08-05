@@ -12,7 +12,7 @@ class FakeResponse:
         self,
         *,
         answer: str,
-        web_search: list[dict[str, str]],
+        web_search: list[dict[str, str]] | None = None,
         reasoning_content: str | None = None,
     ) -> None:
         self.choices = [
@@ -23,7 +23,7 @@ class FakeResponse:
                 )
             )
         ]
-        self.web_search = web_search
+        self.web_search = web_search or []
 
     def model_dump(self, *, mode: str) -> dict[str, object]:
         assert mode == "json"
@@ -98,6 +98,7 @@ def test_hosted_search_answerer_returns_answer_with_sources(tmp_path, monkeypatc
     request = client.requests[0]
     assert request["model"] == "search-model"
     assert request["timeout"] == 20
+    assert request["response_format"] == {"type": "json_object"}
     assert request["tools"] == [
         {
             "type": "web_search",
@@ -117,13 +118,42 @@ def test_hosted_search_answerer_returns_answer_with_sources(tmp_path, monkeypatc
 
 def test_hosted_search_answerer_requires_sources(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("INFORMATION_AGENT_LOG_DIR", str(tmp_path))
-    client = FakeClient(FakeResponse(answer="模型声称找到了答案。", web_search=[]))
+    client = FakeClient(FakeResponse(answer="模型声称找到了答案。"))
 
     result = HostedSearchAnswerer(_config(), client).answer(_plan(), timeout=20)
 
     assert result.status is SearchAnswerStatus.INSUFFICIENT_EVIDENCE
     assert result.answer == "未能获得带有可验证来源的搜索结果。"
     assert result.sources == ()
+
+
+def test_hosted_search_answerer_accepts_json_content_sources(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("INFORMATION_AGENT_LOG_DIR", str(tmp_path))
+    client = FakeClient(
+        FakeResponse(
+            answer=json.dumps(
+                {
+                    "answer": "Python 官方文档首页是 https://docs.python.org/3/。",
+                    "sources": [
+                        {
+                            "title": "Python Documentation",
+                            "url": "https://docs.python.org/3/",
+                            "snippet": "Official Python documentation.",
+                            "site_name": "Python Documentation",
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+
+    result = HostedSearchAnswerer(_config(), client).answer(_plan(), timeout=20)
+
+    assert result.status is SearchAnswerStatus.ANSWERED
+    assert result.answer == "Python 官方文档首页是 https://docs.python.org/3/。"
+    assert result.sources[0].url == "https://docs.python.org/3/"
+    assert result.sources[0].site_name == "Python Documentation"
 
 
 def test_hosted_search_answerer_synthesizes_search_trace(tmp_path, monkeypatch) -> None:
@@ -140,7 +170,6 @@ def test_hosted_search_answerer_synthesizes_search_trace(tmp_path, monkeypatch) 
     )
     second_response = FakeResponse(
         answer="Python 官方文档首页是 https://docs.python.org/3/。",
-        web_search=[],
     )
     client = FakeClient([first_response, second_response])
 
@@ -152,6 +181,7 @@ def test_hosted_search_answerer_synthesizes_search_trace(tmp_path, monkeypatch) 
     assert len(client.requests) == 2
     assert "tools" in client.requests[0]
     assert "tools" not in client.requests[1]
+    assert client.requests[1]["response_format"] == {"type": "json_object"}
     assert "https://docs.python.org/3/" in client.requests[1]["messages"][1]["content"]
     backups = [json.loads(path.read_text(encoding="utf-8")) for path in tmp_path.glob("*.json")]
     assert {item["stage"] for item in backups} == {
@@ -171,8 +201,8 @@ def test_hosted_search_answerer_rejects_search_trace_after_synthesis(tmp_path, m
     client = FakeClient(
         [
             FakeResponse(answer=trace, web_search=[source]),
-            FakeResponse(answer=trace, web_search=[]),
-            FakeResponse(answer=trace, web_search=[]),
+            FakeResponse(answer=trace),
+            FakeResponse(answer=trace),
         ]
     )
 
@@ -232,7 +262,7 @@ def test_hosted_search_answerer_preserves_explicit_insufficient_answer(
 
 
 def test_hosted_search_answerer_creates_a_client_when_not_injected(monkeypatch) -> None:
-    client = FakeClient(FakeResponse(answer="", web_search=[]))
+    client = FakeClient(FakeResponse(answer=""))
     observed_configs: list[HostedSearchConfig] = []
 
     def fake_factory(config: HostedSearchConfig) -> FakeClient:
