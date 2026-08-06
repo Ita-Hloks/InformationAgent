@@ -1,4 +1,22 @@
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: no-commit-to-branch
+        args: [--branch, main, --branch, master]
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: detect-private-key
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.21
     hooks:
@@ -6,13 +24,12 @@ repos:
         args: [--fix]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+  - repo: local
     hooks:
-      - id: check-merge-conflict
-      - id: check-yaml
-      - id: check-toml
-      - id: end-of-file-fixer
-      - id: trailing-whitespace
-        args: [--markdown-linebreak-ext=md]
-      - id: detect-private-key
+      - id: frontend-check
+        name: frontend typecheck, ESLint and Prettier
+        entry: npm --prefix frontend run precommit
+        language: system
+        files: ^frontend/
+        exclude: ^frontend/(dist|node_modules)/
+        pass_filenames: false

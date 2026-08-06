@@ -31,4 +31,4 @@ fix(frontend): 修复移动端布局
 chore(frontend): 更新构建依赖
 ```
 
-提交前运行 `npm run check`，本目录不安装仓库级 Git hook，避免影响 Python 根项目的提交流程。
+仓库根目录的 pre-commit 钩子会在前端文件变化时自动运行 `npm run precommit`，依次检查 TypeScript、ESLint 与 Prettier。首次开发前需要在仓库根目录运行 `pre-commit install --overwrite`；完整构建仍通过 `npm run build` 单独验证。
