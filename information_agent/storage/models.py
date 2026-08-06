@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any
 
 from ..collection import RawFeedEntry
 from ..contracts import CollectionReport
@@ -25,6 +26,103 @@ class PersistedPlanning:
     run_id: str
     planning_run_id: str
     report: PlanningReport
+
+
+class AnalysisRunStatus(StrEnum):
+    CREATED = "created"
+    RUNNING = "running"
+    PAUSED = "paused"
+    INTERRUPTED = "interrupted"
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class AnalysisStepStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+    SKIPPED = "skipped"
+    CANCELLED = "cancelled"
+
+
+class AnalysisAttemptStatus(StrEnum):
+    STARTED = "started"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+    CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisRun:
+    id: str
+    research_run_id: str
+    analysis_type: str
+    status: AnalysisRunStatus
+    current_step_key: str | None
+    config: dict[str, Any]
+    idempotency_key: str | None
+    created_at: str
+    updated_at: str
+    started_at: str | None
+    finished_at: str | None
+    errors: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisStep:
+    id: str
+    analysis_run_id: str
+    position: int
+    step_key: str
+    status: AnalysisStepStatus
+    created_at: str
+    updated_at: str
+    started_at: str | None
+    finished_at: str | None
+    error: dict[str, Any] | None
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisAttempt:
+    id: str
+    analysis_step_id: str
+    attempt_no: int
+    operation: str
+    idempotency_key: str
+    request_hash: str
+    status: AnalysisAttemptStatus
+    started_at: str
+    finished_at: str | None
+    error: dict[str, Any] | None
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisArtifact:
+    id: str
+    analysis_run_id: str
+    artifact_key: str
+    step_id: str | None
+    attempt_id: str | None
+    kind: str
+    content_type: str
+    payload: Any
+    metadata: dict[str, Any]
+    content_hash: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisState:
+    run: AnalysisRun
+    steps: tuple[AnalysisStep, ...]
+    attempts: tuple[AnalysisAttempt, ...]
+    artifacts: tuple[AnalysisArtifact, ...]
 
 
 @dataclass(frozen=True, slots=True)
