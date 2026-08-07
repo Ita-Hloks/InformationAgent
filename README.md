@@ -212,22 +212,26 @@ InformationAgent/
 
 ## 开发与贡献
 
-安装开发依赖和提交前钩子：
+安装后端开发依赖、前端依赖和仓库级提交前钩子：
 
 ```bash
 python -m pip install -r requirements-dev.txt
-pre-commit install
+npm --prefix frontend ci
+pre-commit install --overwrite
 ```
 
-提交变更前运行：
+提交前钩子会阻止直接提交到 `main` 或 `master`。Python 文件会经过 Ruff 检查和格式化；修改 `frontend/` 时，还会执行 TypeScript 类型检查、ESLint 与 Prettier 格式检查。手动运行完整检查：
 
 ```bash
-ruff check .
-ruff format --check .
+python -m ruff check .
+python -m ruff format --check .
 python -m pytest
+npm --prefix frontend run check
+npm --prefix frontend run build
+pre-commit run --all-files
 ```
 
-建议使用 `<type>[optional scope]: <description>` 格式提交，例如 `docs(readme): clarify search configuration`。README 等文档修改使用 `docs` 类型；完整说明见[约定式提交 1.0.0](https://www.conventionalcommits.org/zh-hans/v1.0.0/)。
+建议使用 `<type>[optional scope]: <description>` 格式提交，例如 `docs(readme): 更新搜索配置`。README 等文档修改使用 `docs` 类型；完整说明见[约定式提交 1.0.0](https://www.conventionalcommits.org/zh-hans/v1.0.0/)。
 
 <a href="https://github.com/Ita-Hloks/InformationAgent/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=Ita-Hloks/InformationAgent" alt="Contributors" />

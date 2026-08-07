@@ -177,7 +177,15 @@ cython_debug/
 log/
 
 # 本地粗处理数据库
-data/
+/data/
+
+# 独立前端本地生成内容
+frontend/node_modules/
+frontend/.vite/
+frontend/*.tsbuildinfo
+frontend/npm-debug.log*
+frontend/.env.local
+frontend/.env.*.local
 
 # PyPI configuration file
 .pypirc
