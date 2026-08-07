@@ -8,9 +8,23 @@
 - TypeScript
 - Vite
 - Tailwind CSS 4
+- Lucide React
 - ESLint 和 Prettier
 
-运行时只保留 React、React DOM 和 Tailwind CSS。路由、状态管理、请求库、图标库和 API 层在后续需求明确后再引入。
+运行时只保留 React、React DOM、Tailwind CSS 和 Lucide 图标。路由、状态管理、请求库和 API 层在后续需求明确后再引入。
+
+## 页面结构
+
+界面采用 RSS 阅读器常见的三栏工作区：左侧管理阅读视图、研究运行和订阅源，中间筛选文章队列，右侧阅读正文并打开上下文提问面板。移动端在文章列表和正文之间切换。
+
+```text
+src/
+├── App.tsx                  # 工作区状态与组件编排
+├── components/             # 侧栏、列表、阅读器、提问面板和添加源弹窗
+├── data/mockData.ts        # 本地演示数据，后续由 API 适配层替换
+├── types.ts                # 前端领域类型
+└── styles.css              # Tailwind 入口与全局阅读样式
+```
 
 ## 开发命令
 

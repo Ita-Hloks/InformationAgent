@@ -1,107 +1,175 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-type ViewKey = "workspace" | "history";
+import { AddFeedDialog } from "./components/AddFeedDialog";
+import { AppSidebar } from "./components/AppSidebar";
+import { ArticleList } from "./components/ArticleList";
+import { AskPanel } from "./components/AskPanel";
+import { ReaderPane } from "./components/ReaderPane";
+import { initialArticles, initialFeeds, researchRuns } from "./data/mockData";
+import type { Feed, LibraryView, MobilePane } from "./types";
 
-const navigation: Array<{ key: ViewKey; label: string }> = [
-  { key: "workspace", label: "工作台" },
-  { key: "history", label: "分析记录" },
-];
-
-const viewCopy: Record<ViewKey, { eyebrow: string; title: string; description: string }> = {
-  workspace: {
-    eyebrow: "LOCAL WORKSPACE",
-    title: "分析工作台",
-    description: "当前工作区没有待处理的分析运行",
-  },
-  history: {
-    eyebrow: "ANALYSIS HISTORY",
-    title: "分析记录",
-    description: "当前没有可展示的分析记录",
-  },
+const viewTitles: Record<LibraryView, string> = {
+  inbox: "收件箱",
+  today: "今天",
+  all: "全部文章",
+  saved: "已收藏",
+  research: "研究资料",
 };
 
 function App() {
-  const [activeView, setActiveView] = useState<ViewKey>("workspace");
-  const currentView = viewCopy[activeView];
+  const [activeView, setActiveView] = useState<LibraryView>("inbox");
+  const [selectedFeedId, setSelectedFeedId] = useState<string | null>(null);
+  const [selectedArticleId, setSelectedArticleId] = useState(initialArticles[0].id);
+  const [feeds, setFeeds] = useState<Feed[]>(initialFeeds);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [savedIds, setSavedIds] = useState(
+    () => new Set(initialArticles.filter(article => article.starred).map(article => article.id)),
+  );
+  const [readIds, setReadIds] = useState(
+    () => new Set(initialArticles.filter(article => !article.unread).map(article => article.id)),
+  );
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
+  const [addFeedOpen, setAddFeedOpen] = useState(false);
+  const [mobilePane, setMobilePane] = useState<MobilePane>("list");
+
+  const visibleArticles = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    return initialArticles
+      .filter(article => {
+        if (selectedFeedId) return article.feedId === selectedFeedId;
+        if (activeView === "inbox") {
+          return !readIds.has(article.id) || article.id === selectedArticleId;
+        }
+        if (activeView === "today") return !["昨天", "周二"].includes(article.publishedAt);
+        if (activeView === "saved") return savedIds.has(article.id);
+        return true;
+      })
+      .filter(article => {
+        if (!normalizedQuery) return true;
+        return `${article.title} ${article.summary} ${article.source} ${article.category}`
+          .toLowerCase()
+          .includes(normalizedQuery);
+      })
+      .map(article => ({ ...article, unread: !readIds.has(article.id) }));
+  }, [activeView, readIds, savedIds, searchQuery, selectedArticleId, selectedFeedId]);
+
+  useEffect(() => {
+    if (
+      visibleArticles.length > 0 &&
+      !visibleArticles.some(article => article.id === selectedArticleId)
+    ) {
+      setSelectedArticleId(visibleArticles[0].id);
+    }
+  }, [selectedArticleId, visibleArticles]);
+
+  const selectedArticle =
+    initialArticles.find(article => article.id === selectedArticleId) ?? initialArticles[0];
+  const selectedFeed = feeds.find(feed => feed.id === selectedFeedId);
+  const listTitle = selectedFeed?.name ?? viewTitles[activeView];
+  const unreadTotal = initialArticles.filter(article => !readIds.has(article.id)).length;
+
+  const selectView = (view: LibraryView) => {
+    setActiveView(view);
+    setSelectedFeedId(null);
+    setSearchQuery("");
+    setMobilePane("list");
+  };
+
+  const selectFeed = (feedId: string) => {
+    setSelectedFeedId(feedId);
+    setActiveView("all");
+    setSearchQuery("");
+    setMobilePane("list");
+  };
+
+  const selectArticle = (articleId: string) => {
+    setSelectedArticleId(articleId);
+    setReadIds(current => new Set(current).add(articleId));
+    setMobilePane("reader");
+  };
+
+  const toggleSaved = (articleId: string) => {
+    setSavedIds(current => {
+      const next = new Set(current);
+      if (next.has(articleId)) next.delete(articleId);
+      else next.add(articleId);
+      return next;
+    });
+  };
+
+  const markAllRead = () => {
+    setReadIds(current => {
+      const next = new Set(current);
+      visibleArticles.forEach(article => next.add(article.id));
+      return next;
+    });
+  };
+
+  const addFeed = (feed: Feed) => {
+    setFeeds(current => (current.some(item => item.id === feed.id) ? current : [...current, feed]));
+  };
 
   return (
-    <div className="min-h-screen bg-[#f3f6f5] text-[#14201e] md:flex">
-      <aside className="border-b border-[#dbe4e1] bg-[#e8efed] md:min-h-screen md:w-64 md:shrink-0 md:border-b-0 md:border-r">
-        <div className="flex items-center gap-3 px-5 py-5 md:block md:px-6 md:py-7">
-          <div className="flex size-10 items-center justify-center rounded-xl bg-[#143c35] text-sm font-bold tracking-[0.08em] text-[#e7f4ef]">
-            IA
-          </div>
-          <div className="md:mt-5">
-            <p className="text-[0.68rem] font-semibold tracking-[0.18em] text-[#55716a]">
-              INFORMATION AGENT
-            </p>
-            <h1 className="mt-2 text-lg font-semibold tracking-[-0.02em]">研究工作台</h1>
-          </div>
+    <div className="h-dvh min-h-[600px] overflow-hidden bg-[#f2f2ef] text-[#242528]">
+      {sidebarOpen && (
+        <button
+          type="button"
+          className="fixed inset-0 z-30 bg-black/25 xl:hidden"
+          aria-label="关闭资料库导航"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      <div className="grid h-full min-w-0 grid-cols-1 md:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[252px_370px_minmax(0,1fr)]">
+        <AppSidebar
+          activeView={activeView}
+          feeds={feeds}
+          researchRuns={researchRuns}
+          selectedFeedId={selectedFeedId}
+          unreadTotal={unreadTotal}
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          onSelectView={selectView}
+          onSelectFeed={selectFeed}
+          onAddFeed={() => setAddFeedOpen(true)}
+        />
+
+        <div className={`min-h-0 min-w-0 ${mobilePane === "list" ? "block" : "hidden"} md:block`}>
+          <ArticleList
+            title={listTitle}
+            articles={visibleArticles}
+            selectedArticleId={selectedArticleId}
+            savedIds={savedIds}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            onSelectArticle={selectArticle}
+            onToggleSaved={toggleSaved}
+            onMarkAllRead={markAllRead}
+            onOpenSidebar={() => setSidebarOpen(true)}
+          />
         </div>
 
-        <nav aria-label="主导航" className="flex gap-2 overflow-x-auto px-4 pb-4 md:block md:px-3">
-          {navigation.map(item => (
-            <button
-              key={item.key}
-              type="button"
-              aria-current={activeView === item.key ? "page" : undefined}
-              className={`min-w-28 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors md:mb-1 md:w-full ${
-                activeView === item.key
-                  ? "bg-[#143c35] text-white shadow-[0_5px_14px_rgba(20,60,53,0.14)]"
-                  : "text-[#4f6962] hover:bg-[#dce8e4] hover:text-[#143c35]"
-              }`}
-              onClick={() => setActiveView(item.key)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
-
-        <div className="hidden border-t border-[#d3dfdb] px-6 py-5 md:block">
-          <p className="text-xs font-medium text-[#55716a]">本地模式</p>
-          <p className="mt-1 text-xs leading-5 text-[#71857f]">等待数据连接</p>
+        <div className={`min-h-0 min-w-0 ${mobilePane === "reader" ? "block" : "hidden"} md:block`}>
+          <ReaderPane
+            article={selectedArticle}
+            saved={savedIds.has(selectedArticle.id)}
+            read={readIds.has(selectedArticle.id)}
+            onBack={() => setMobilePane("list")}
+            onToggleSaved={() => toggleSaved(selectedArticle.id)}
+            onMarkRead={() => setReadIds(current => new Set(current).add(selectedArticle.id))}
+            onAsk={() => setAskOpen(true)}
+          />
         </div>
-      </aside>
+      </div>
 
-      <main className="min-w-0 flex-1">
-        <header className="border-b border-[#dbe4e1] bg-[#f7faf9] px-5 py-4 sm:px-8 sm:py-5">
-          <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
-            <div>
-              <p className="text-xs font-medium text-[#71857f]">当前视图</p>
-              <h2 className="mt-1 text-base font-semibold text-[#24332f]">{currentView.title}</h2>
-            </div>
-            <span className="rounded-full border border-[#bed5cb] bg-[#edf7f2] px-3 py-1 text-xs font-medium text-[#2c6a57]">
-              未连接
-            </span>
-          </div>
-        </header>
-
-        <div className="mx-auto max-w-6xl px-5 py-8 sm:px-8 sm:py-10">
-          <section aria-labelledby="page-title">
-            <p className="text-xs font-semibold tracking-[0.18em] text-[#78918a]">
-              {currentView.eyebrow}
-            </p>
-            <h3
-              id="page-title"
-              className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-[#14201e]"
-            >
-              {currentView.title}
-            </h3>
-          </section>
-
-          <section className="mt-8 flex min-h-[390px] items-center border border-[#dbe4e1] bg-white px-6 py-12 shadow-[0_12px_30px_rgba(20,60,53,0.04)] sm:px-12">
-            <div className="max-w-md">
-              <div className="flex size-12 items-center justify-center rounded-xl border border-[#c9dcd5] bg-[#f2f8f5] text-sm font-bold tracking-[0.08em] text-[#2c6a57]">
-                IA
-              </div>
-              <h4 className="mt-7 text-xl font-semibold tracking-[-0.02em] text-[#24332f]">
-                {currentView.description}
-              </h4>
-              <p className="mt-3 text-sm leading-6 text-[#71857f]">前端框架已就绪</p>
-            </div>
-          </section>
-        </div>
-      </main>
+      <AskPanel article={selectedArticle} open={askOpen} onClose={() => setAskOpen(false)} />
+      <AddFeedDialog
+        open={addFeedOpen}
+        feeds={feeds}
+        onAddFeed={addFeed}
+        onClose={() => setAddFeedOpen(false)}
+      />
     </div>
   );
 }
