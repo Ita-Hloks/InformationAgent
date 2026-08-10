@@ -13,7 +13,7 @@ import {
   X,
 } from "lucide-react";
 
-import type { Feed, LibraryView, ResearchRun } from "../types";
+import type { Feed, LibraryView, ResearchRun } from "../../types";
 
 type AppSidebarProps = {
   activeView: LibraryView;

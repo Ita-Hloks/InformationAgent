@@ -1,6 +1,6 @@
 import { CheckCheck, Menu, Search, SlidersHorizontal, Star } from "lucide-react";
 
-import type { Article } from "../types";
+import type { Article } from "../../types";
 
 type ArticleListProps = {
   title: string;

@@ -9,7 +9,7 @@ import {
   Star,
 } from "lucide-react";
 
-import type { Article } from "../types";
+import type { Article } from "../../types";
 
 type ReaderPaneProps = {
   article: Article | null;

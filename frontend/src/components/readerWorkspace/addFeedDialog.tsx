@@ -1,8 +1,8 @@
 import { type FormEvent, useMemo, useRef, useState } from "react";
 import { Check, Plus, Rss, Search, X } from "lucide-react";
 
-import { useOverlayDialog } from "../hooks/useOverlayDialog";
-import type { Feed } from "../types";
+import { useOverlayDialog } from "../../hooks/useOverlayDialog";
+import type { Feed } from "../../types";
 
 type AddFeedDialogProps = {
   open: boolean;

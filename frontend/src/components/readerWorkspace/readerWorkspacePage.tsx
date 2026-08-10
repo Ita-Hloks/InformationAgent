@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation, useMatch, useNavigate, useSearchParams } from "react-router-dom";
 
-import { feedPath, viewFromPath, viewPaths, viewTitles } from "../app/navigation";
-import { AddFeedDialog } from "../components/AddFeedDialog";
-import { AppSidebar } from "../components/AppSidebar";
-import { ArticleList } from "../components/ArticleList";
-import { AskPanel } from "../components/AskPanel";
-import { ReaderPane } from "../components/ReaderPane";
-import { addFeed as createFeed, getArticles, getFeeds } from "../api/client";
-import { initialArticles, initialFeeds, researchRuns } from "../data/localState";
-import type { Feed, LibraryView } from "../types";
+import { feedPath, viewFromPath, viewPaths, viewTitles } from "../../app/navigation";
+import {
+  addFeed as createFeed,
+  getArticles,
+  getFeeds,
+  type ArticleStateUpdate,
+  updateArticleStates,
+} from "../../api/client";
+import { initialArticles, initialFeeds, researchRuns } from "../../data/localState";
+import type { Feed, LibraryView } from "../../types";
+import { AppSidebar } from "../appShell";
+import { AddFeedDialog } from "./addFeedDialog";
+import { ArticleList } from "./articleList";
+import { AskPanel } from "./askPanel";
+import { ReaderPane } from "./readerPane";
 
 type OverlayName = "add-feed" | "ask";
 type RouteState = {
@@ -25,7 +31,7 @@ function bindArticleSources(articles: typeof initialArticles, feeds: Feed[]) {
   }));
 }
 
-export function ReaderWorkspace() {
+export function ReaderWorkspacePage() {
   const location = useLocation();
   const navigate = useNavigate();
   const feedMatch = useMatch("/feeds/:feedId");
@@ -42,12 +48,48 @@ export function ReaderWorkspace() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [apiStatus, setApiStatus] = useState<ApiStatus>("connecting");
 
+  const applyArticleStates = (states: Awaited<ReturnType<typeof updateArticleStates>>) => {
+    setReadIds(current => {
+      const next = new Set(current);
+      states.forEach(state => {
+        if (state.is_read) next.add(state.article_id);
+        else next.delete(state.article_id);
+      });
+      return next;
+    });
+    setSavedIds(current => {
+      const next = new Set(current);
+      states.forEach(state => {
+        if (state.is_saved) next.add(state.article_id);
+        else next.delete(state.article_id);
+      });
+      return next;
+    });
+  };
+
+  const persistArticleStates = async (articleIds: string[], update: ArticleStateUpdate) => {
+    if (articleIds.length === 0) return;
+    try {
+      const states = await updateArticleStates(articleIds, update);
+      applyArticleStates(states);
+      setApiStatus("connected");
+    } catch {
+      setApiStatus("unavailable");
+    }
+  };
+
   useEffect(() => {
     void Promise.all([getFeeds(), getArticles()])
       .then(([loadedFeeds, loadedArticles]) => {
         setFeeds(loadedFeeds);
-        setArticles(bindArticleSources(loadedArticles, loadedFeeds));
-        setReadIds(new Set());
+        const nextArticles = bindArticleSources(loadedArticles, loadedFeeds);
+        setArticles(nextArticles);
+        setReadIds(
+          new Set(nextArticles.filter(article => !article.unread).map(article => article.id)),
+        );
+        setSavedIds(
+          new Set(nextArticles.filter(article => article.starred).map(article => article.id)),
+        );
         setApiStatus("connected");
       })
       .catch(() => {
@@ -134,6 +176,7 @@ export function ReaderWorkspace() {
 
   const selectArticle = (articleId: string) => {
     setReadIds(current => new Set(current).add(articleId));
+    void persistArticleStates([articleId], { isRead: true });
     updateSearchParams(next => {
       next.set("article", articleId);
       next.delete("panel");
@@ -152,27 +195,36 @@ export function ReaderWorkspace() {
   };
 
   const toggleSaved = (articleId: string) => {
+    const nextSaved = !savedIds.has(articleId);
     setSavedIds(current => {
       const next = new Set(current);
       if (next.has(articleId)) next.delete(articleId);
       else next.add(articleId);
       return next;
     });
+    void persistArticleStates([articleId], { isSaved: nextSaved });
   };
 
   const markAllRead = () => {
+    const articleIds = visibleArticles.map(article => article.id);
     setReadIds(current => {
       const next = new Set(current);
       visibleArticles.forEach(article => next.add(article.id));
       return next;
     });
+    void persistArticleStates(articleIds, { isRead: true });
   };
 
   const addFeed = async (input: { url: string; title?: string }) => {
     const feed = await createFeed(input);
     const [loadedFeeds, loadedArticles] = await Promise.all([getFeeds(), getArticles()]);
+    const nextArticles = bindArticleSources(loadedArticles, loadedFeeds);
     setFeeds(loadedFeeds.some(item => item.id === feed.id) ? loadedFeeds : [...loadedFeeds, feed]);
-    setArticles(bindArticleSources(loadedArticles, loadedFeeds));
+    setArticles(nextArticles);
+    setReadIds(new Set(nextArticles.filter(article => !article.unread).map(article => article.id)));
+    setSavedIds(
+      new Set(nextArticles.filter(article => article.starred).map(article => article.id)),
+    );
     setApiStatus("connected");
   };
 
@@ -270,6 +322,7 @@ export function ReaderWorkspace() {
             onMarkRead={() => {
               if (selectedArticle) {
                 setReadIds(current => new Set(current).add(selectedArticle.id));
+                void persistArticleStates([selectedArticle.id], { isRead: true });
               }
             }}
             onAsk={() => openOverlay("ask")}

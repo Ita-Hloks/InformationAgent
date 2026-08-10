@@ -1,8 +1,8 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Bot, Send, Sparkles, TriangleAlert, X } from "lucide-react";
 
-import { useOverlayDialog } from "../hooks/useOverlayDialog";
-import type { Article } from "../types";
+import { useOverlayDialog } from "../../hooks/useOverlayDialog";
+import type { Article } from "../../types";
 
 type AskPanelProps = {
   article: Article;

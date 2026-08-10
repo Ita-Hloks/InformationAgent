@@ -45,6 +45,7 @@ def test_feed_subscription_and_article_fetch(tmp_path: Path) -> None:
     feed = response.json()
     assert feed["title"] == "示例来源"
     assert feed["article_count"] == 1
+    assert feed["unread_count"] == 1
 
     feeds = client.get("/api/feeds")
     assert feeds.status_code == 200
@@ -53,11 +54,40 @@ def test_feed_subscription_and_article_fetch(tmp_path: Path) -> None:
     articles = client.get("/api/articles")
     assert articles.status_code == 200
     assert articles.json()[0]["title"] == "一篇用于 API 测试的文章标题"
+    assert articles.json()[0]["is_read"] is False
+    assert articles.json()[0]["is_saved"] is False
 
     article_id = articles.json()[0]["id"]
     detail = client.get(f"/api/articles/{article_id}")
     assert detail.status_code == 200
     assert "足够长的 RSS 文章正文" in detail.json()["content"]
+
+
+def test_article_state_round_trips_through_sqlite(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    client.post(
+        "/api/feeds",
+        json={"url": "https://example.com/rss.xml", "title": "示例来源"},
+    )
+    article = client.get("/api/articles").json()[0]
+
+    update = client.put(
+        "/api/articles/state",
+        json={"article_ids": [article["id"]], "is_read": True, "is_saved": True},
+    )
+    assert update.status_code == 200
+    assert update.json()[0]["is_read"] is True
+    assert update.json()[0]["is_saved"] is True
+
+    current = client.get("/api/articles").json()[0]
+    assert current["is_read"] is True
+    assert current["is_saved"] is True
+    assert client.get("/api/feeds").json()[0]["unread_count"] == 0
+
+    restarted_client = _client(tmp_path)
+    persisted = restarted_client.get("/api/articles").json()[0]
+    assert persisted["is_read"] is True
+    assert persisted["is_saved"] is True
 
 
 def test_feed_api_reports_invalid_and_unavailable_sources(tmp_path: Path) -> None:

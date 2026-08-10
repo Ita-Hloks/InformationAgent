@@ -153,9 +153,22 @@ class FeedSubscription:
     last_refreshed_at: str | None
     last_error: str | None
     article_count: int
+    unread_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReaderArticleState:
+    article_id: str
+    is_read: bool
+    is_saved: bool
+    read_at: str | None
+    saved_at: str | None
+    updated_at: str
 
 
 @dataclass(frozen=True, slots=True)
 class ReaderArticle:
     feed_id: str
     article: NormalizedArticle
+    is_read: bool = False
+    is_saved: bool = False
