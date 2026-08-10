@@ -22,7 +22,7 @@ from .common import (
     _parse_datetime,
     _required_datetime,
 )
-from .models import FeedObservation, FeedState
+from .models import FeedObservation, FeedState, FeedSubscription, ReaderArticle
 
 
 def default_database_path() -> Path:
@@ -114,6 +114,175 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
             feed_url=feed_url,
             etag=str(row["etag"]) if row and row["etag"] else None,
             last_modified=str(row["last_modified"]) if row and row["last_modified"] else None,
+        )
+
+    def save_subscription(
+        self,
+        *,
+        feed_url: str,
+        title: str,
+        site_url: str | None,
+        result_etag: str | None,
+        result_last_modified: str | None,
+        entries: list[RawFeedEntry],
+        articles: list[NormalizedArticle],
+    ) -> FeedSubscription:
+        state = self.feed_state(feed_url)
+        new_entries = self.new_feed_entries(state, entries)
+        articles_by_url = {article.source_url: article for article in articles}
+        observed_at = _format_datetime(project_now())
+        observation = FeedObservation(
+            state=state,
+            etag=result_etag,
+            last_modified=result_last_modified,
+            not_modified=False,
+            new_entries=new_entries,
+        )
+        with self._connect() as connection:
+            article_ids_by_url: dict[str, str] = {}
+            for entry in new_entries:
+                article = articles_by_url.get(entry.source_url)
+                if article is None:
+                    continue
+                self._upsert_snapshot(connection, article)
+                article_ids_by_url[article.source_url] = article.article_id
+            self._record_feed_observation(connection, observation, article_ids_by_url)
+            connection.execute(
+                """
+                INSERT INTO feed_subscriptions (
+                    feed_id, title, site_url, subscribed_at, last_refreshed_at, last_error
+                ) VALUES (?, ?, ?, ?, ?, NULL)
+                ON CONFLICT(feed_id) DO UPDATE SET
+                    title = excluded.title,
+                    site_url = COALESCE(excluded.site_url, feed_subscriptions.site_url),
+                    last_refreshed_at = excluded.last_refreshed_at,
+                    last_error = NULL
+                """,
+                (state.feed_id, title, site_url, observed_at, observed_at),
+            )
+        subscription = self.get_subscription(state.feed_id)
+        if subscription is None:
+            raise RuntimeError("订阅保存后无法读取")
+        return subscription
+
+    def list_subscriptions(self) -> list[FeedSubscription]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT subscriptions.feed_id, feeds.feed_url, subscriptions.title,
+                       subscriptions.site_url, subscriptions.subscribed_at,
+                       subscriptions.last_refreshed_at, subscriptions.last_error,
+                       COUNT(feed_entries.article_id) AS article_count
+                FROM feed_subscriptions AS subscriptions
+                JOIN feeds ON feeds.id = subscriptions.feed_id
+                LEFT JOIN feed_entries ON feed_entries.feed_id = subscriptions.feed_id
+                GROUP BY subscriptions.feed_id
+                ORDER BY subscriptions.subscribed_at, subscriptions.feed_id
+                """
+            ).fetchall()
+        return [_subscription_from_row(row) for row in rows]
+
+    def get_subscription(self, feed_id: str) -> FeedSubscription | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT subscriptions.feed_id, feeds.feed_url, subscriptions.title,
+                       subscriptions.site_url, subscriptions.subscribed_at,
+                       subscriptions.last_refreshed_at, subscriptions.last_error,
+                       COUNT(feed_entries.article_id) AS article_count
+                FROM feed_subscriptions AS subscriptions
+                JOIN feeds ON feeds.id = subscriptions.feed_id
+                LEFT JOIN feed_entries ON feed_entries.feed_id = subscriptions.feed_id
+                WHERE subscriptions.feed_id = ?
+                GROUP BY subscriptions.feed_id
+                """,
+                (feed_id,),
+            ).fetchone()
+        return _subscription_from_row(row) if row is not None else None
+
+    def record_subscription_error(self, feed_id: str, error: Exception) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE feed_subscriptions SET last_error = ? WHERE feed_id = ?",
+                (str(error), feed_id),
+            )
+
+    def list_reader_articles(
+        self,
+        *,
+        feed_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[ReaderArticle]:
+        parameters: list[object] = []
+        if feed_id is not None:
+            query = """
+                SELECT entries.feed_id, snapshots.payload_json
+                FROM feed_entries AS entries
+                JOIN feed_subscriptions AS subscriptions
+                    ON subscriptions.feed_id = entries.feed_id
+                JOIN article_snapshots AS snapshots
+                    ON snapshots.article_id = entries.article_id
+                WHERE entries.feed_id = ?
+                  AND snapshots.id = (
+                      SELECT latest.id FROM article_snapshots AS latest
+                      WHERE latest.article_id = entries.article_id
+                      ORDER BY latest.collected_at DESC, latest.created_at DESC
+                      LIMIT 1
+                  )
+                ORDER BY snapshots.collected_at DESC, entries.entry_key
+                LIMIT ? OFFSET ?
+                """
+            parameters.append(feed_id)
+        else:
+            query = """
+                SELECT entries.feed_id, snapshots.payload_json
+                FROM feed_entries AS entries
+                JOIN feed_subscriptions AS subscriptions
+                    ON subscriptions.feed_id = entries.feed_id
+                JOIN article_snapshots AS snapshots
+                    ON snapshots.article_id = entries.article_id
+                WHERE snapshots.id = (
+                    SELECT latest.id FROM article_snapshots AS latest
+                    WHERE latest.article_id = entries.article_id
+                    ORDER BY latest.collected_at DESC, latest.created_at DESC
+                    LIMIT 1
+                )
+                ORDER BY snapshots.collected_at DESC, entries.entry_key
+                LIMIT ? OFFSET ?
+                """
+        parameters.extend((limit, offset))
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [
+            ReaderArticle(
+                feed_id=str(row["feed_id"]),
+                article=_article_from_payload(json.loads(row["payload_json"])),
+            )
+            for row in rows
+        ]
+
+    def get_reader_article(self, article_id: str) -> ReaderArticle | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT entries.feed_id, snapshots.payload_json
+                FROM feed_entries AS entries
+                JOIN feed_subscriptions AS subscriptions
+                    ON subscriptions.feed_id = entries.feed_id
+                JOIN article_snapshots AS snapshots
+                    ON snapshots.article_id = entries.article_id
+                WHERE entries.article_id = ?
+                ORDER BY snapshots.collected_at DESC, snapshots.created_at DESC
+                LIMIT 1
+                """,
+                (article_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ReaderArticle(
+            feed_id=str(row["feed_id"]),
+            article=_article_from_payload(json.loads(row["payload_json"])),
         )
 
     def new_feed_entries(
@@ -521,6 +690,37 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
                 (3, _format_datetime(project_now())),
             )
         migrate_analysis_schema(connection)
+        applied_versions = {
+            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
+        }
+        feed_tables_exist = (
+            connection.execute(
+                """
+            SELECT COUNT(*) FROM sqlite_master
+            WHERE type = 'table' AND name IN ('feeds', 'feed_entries')
+            """
+            ).fetchone()[0]
+            == 2
+        )
+        if 6 not in applied_versions and feed_tables_exist:
+            connection.executescript(
+                """
+                CREATE TABLE feed_subscriptions (
+                    feed_id TEXT PRIMARY KEY REFERENCES feeds(id) ON DELETE CASCADE,
+                    title TEXT NOT NULL,
+                    site_url TEXT,
+                    subscribed_at TEXT NOT NULL,
+                    last_refreshed_at TEXT,
+                    last_error TEXT
+                );
+
+                CREATE INDEX feed_entries_article_id_idx ON feed_entries(article_id);
+                """
+            )
+            connection.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                (6, _format_datetime(project_now())),
+            )
 
 
 def _article_payload(article: NormalizedArticle) -> dict[str, object]:
@@ -534,6 +734,19 @@ def _article_payload(article: NormalizedArticle) -> dict[str, object]:
     )
     payload["collected_at"] = _format_datetime(article.collected_at)
     return payload
+
+
+def _subscription_from_row(row: sqlite3.Row) -> FeedSubscription:
+    return FeedSubscription(
+        feed_id=str(row["feed_id"]),
+        feed_url=str(row["feed_url"]),
+        title=str(row["title"]),
+        site_url=_optional_text(row["site_url"]),
+        subscribed_at=str(row["subscribed_at"]),
+        last_refreshed_at=_optional_text(row["last_refreshed_at"]),
+        last_error=_optional_text(row["last_error"]),
+        article_count=int(row["article_count"]),
+    )
 
 
 def _snapshot_key(article: NormalizedArticle) -> tuple[str, str]:

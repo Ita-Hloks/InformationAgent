@@ -1,9 +1,18 @@
-import { ArrowLeft, Bot, Check, ExternalLink, MoreHorizontal, Share2, Star } from "lucide-react";
+import {
+  ArrowLeft,
+  Bot,
+  Check,
+  ExternalLink,
+  FileText,
+  MoreHorizontal,
+  Share2,
+  Star,
+} from "lucide-react";
 
 import type { Article } from "../types";
 
 type ReaderPaneProps = {
-  article: Article;
+  article: Article | null;
   saved: boolean;
   read: boolean;
   onBack: () => void;
@@ -21,6 +30,20 @@ export function ReaderPane({
   onMarkRead,
   onAsk,
 }: ReaderPaneProps) {
+  if (!article) {
+    return (
+      <section className="flex h-full min-h-0 min-w-0 flex-col bg-[#fbfbf8]">
+        <header className="h-16 shrink-0 border-b border-[#e3e3de]" />
+        <div className="grid min-h-0 flex-1 place-items-center px-6 text-center">
+          <div>
+            <FileText size={24} className="mx-auto text-[#a4a5a5]" />
+            <p className="mt-3 text-sm font-medium text-[#5f6165]">选择一篇文章</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col bg-[#fbfbf8]">
       <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[#e3e3de] px-3 sm:px-4">
@@ -64,14 +87,16 @@ export function ReaderPane({
           >
             <Share2 size={17} />
           </button>
-          <button
-            type="button"
+          <a
+            href={article.sourceUrl}
+            target="_blank"
+            rel="noreferrer"
             className="grid size-9 place-items-center rounded-md text-[#696c72] hover:bg-[#efefeb]"
             aria-label="打开原文"
             title="打开原文"
           >
             <ExternalLink size={17} />
-          </button>
+          </a>
         </div>
 
         <div className="flex items-center gap-1">
@@ -80,7 +105,8 @@ export function ReaderPane({
             className="flex h-9 items-center gap-2 rounded-md border border-[#dddcd6] bg-white px-3 text-xs font-medium text-[#34363a] shadow-sm hover:border-[#c9c8c1] hover:bg-[#f7f7f4]"
             onClick={onAsk}
           >
-            <Bot size={16} className="text-[#b75f39]" />向 IA 提问
+            <Bot size={16} className="text-[#b75f39]" />
+            向助手提问
           </button>
           <button
             type="button"
@@ -114,11 +140,13 @@ export function ReaderPane({
           </h1>
           <p className="mt-4 text-[17px] leading-7 text-[#696b70]">{article.summary}</p>
 
-          <img
-            className="mt-8 aspect-[16/8.5] w-full rounded-lg object-cover"
-            src={article.imageUrl}
-            alt=""
-          />
+          {article.imageUrl && (
+            <img
+              className="mt-8 aspect-[16/8.5] w-full rounded-lg object-cover"
+              src={article.imageUrl}
+              alt=""
+            />
+          )}
 
           <div className="reader-copy mt-9">
             {article.body.map(paragraph => (

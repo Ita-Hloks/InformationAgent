@@ -5,7 +5,7 @@ import type { Article } from "../types";
 type ArticleListProps = {
   title: string;
   articles: Article[];
-  selectedArticleId: string;
+  selectedArticleId: string | null;
   savedIds: Set<string>;
   searchQuery: string;
   onSearchChange: (value: string) => void;
@@ -99,7 +99,9 @@ export function ArticleList({
                 {selected && <span className="absolute inset-y-0 left-0 w-0.5 bg-[#ef8354]" />}
                 <button
                   type="button"
-                  className="grid w-full grid-cols-[minmax(0,1fr)_72px] gap-3 px-4 py-3.5 text-left"
+                  className={`grid w-full gap-3 px-4 py-3.5 text-left ${
+                    article.imageUrl ? "grid-cols-[minmax(0,1fr)_72px]" : "grid-cols-1"
+                  }`}
                   onClick={() => onSelectArticle(article.id)}
                 >
                   <span className="min-w-0">
@@ -130,11 +132,13 @@ export function ArticleList({
                       <span>{article.readingMinutes} 分钟</span>
                     </span>
                   </span>
-                  <img
-                    className="mt-0.5 h-14 w-[72px] rounded-md object-cover grayscale-[0.08]"
-                    src={article.imageUrl}
-                    alt=""
-                  />
+                  {article.imageUrl && (
+                    <img
+                      className="mt-0.5 h-14 w-[72px] rounded-md object-cover grayscale-[0.08]"
+                      src={article.imageUrl}
+                      alt=""
+                    />
+                  )}
                 </button>
                 <button
                   type="button"
