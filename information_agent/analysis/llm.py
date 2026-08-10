@@ -72,7 +72,9 @@ def parse_analysis(raw: str) -> Analysis:
     return Analysis(
         summary=summary,
         claims=claims,
-        uncertainties=[str(item).strip() for item in uncertainties_payload if str(item).strip()],
+        uncertainties=[
+            item.strip() for item in uncertainties_payload if isinstance(item, str) and item.strip()
+        ],
     )
 
 
@@ -95,16 +97,17 @@ def _analysis_input(evidence: list[SelectedEvidence]) -> str:
 
 
 def _parse_claim(item: dict[str, Any]) -> Claim:
+    text = item.get("text", "")
     raw_ids = item.get("evidence_ids", [])
     if not isinstance(raw_ids, list):
         raw_ids = []
     evidence_ids = []
     for value in raw_ids:
-        try:
+        if isinstance(value, int) and not isinstance(value, bool):
             evidence_ids.append(int(value))
-        except (TypeError, ValueError):
-            continue
+        elif isinstance(value, str) and value.isascii() and value.isdigit():
+            evidence_ids.append(int(value))
     return Claim(
-        text=str(item.get("text", "")).strip(),
+        text=text.strip() if isinstance(text, str) else "",
         evidence_ids=evidence_ids,
     )

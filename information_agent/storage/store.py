@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -28,7 +29,10 @@ from .models import (
     FeedSubscription,
     ReaderArticle,
     ReaderArticleState,
+    ResearchRunSummary,
 )
+
+RESEARCH_RUN_STATUSES = ("collecting", "completed", "partial", "failed")
 
 
 def default_database_path() -> Path:
@@ -440,6 +444,52 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
                 """,
                 (finished_at, json.dumps(payload, ensure_ascii=False), run_id),
             )
+
+    def list_runs(self, *, limit: int, status: str | None = None) -> list[ResearchRunSummary]:
+        """Return aggregate run metadata without opening the source database for writing."""
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        if status is not None and status not in RESEARCH_RUN_STATUSES:
+            raise ValueError(f"unknown research run status: {status}")
+
+        query = """
+            SELECT runs.id AS run_id, runs.topic, runs.status,
+                runs.created_at AS started_at, runs.finished_at,
+                json_array_length(runs.feeds_json) AS feed_count,
+                COUNT(evidence.snapshot_id) AS snapshot_count,
+                COALESCE(SUM(CASE WHEN evidence.selected = 1 THEN 1 ELSE 0 END), 0)
+                    AS selected_evidence_count,
+                json_array_length(runs.errors_json) AS collection_error_count
+            FROM research_runs AS runs
+            LEFT JOIN run_evidence AS evidence ON evidence.run_id = runs.id
+        """
+        parameters: list[object] = []
+        if status is not None:
+            query += " WHERE runs.status = ?"
+            parameters.append(status)
+        query += """
+            GROUP BY runs.id
+            ORDER BY runs.created_at DESC, runs.id ASC
+            LIMIT ?
+        """
+        parameters.append(limit)
+
+        with _read_only_snapshot_connection(self.database_path) as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [
+            ResearchRunSummary(
+                run_id=str(row["run_id"]),
+                topic=str(row["topic"]),
+                status=str(row["status"]),
+                started_at=_required_datetime(row["started_at"]),
+                finished_at=_parse_datetime(row["finished_at"]),
+                feed_count=int(row["feed_count"]),
+                snapshot_count=int(row["snapshot_count"]),
+                selected_evidence_count=int(row["selected_evidence_count"]),
+                collection_error_count=int(row["collection_error_count"]),
+            )
+            for row in rows
+        ]
 
     def load_selected_evidence(self, run_id: str) -> list[SelectedEvidence]:
         with self._connect() as connection:
@@ -951,3 +1001,18 @@ def _article_from_payload(payload: dict[str, object]) -> NormalizedArticle:
         collected_at=_required_datetime(payload["collected_at"]),
         processing_warnings=tuple(str(item) for item in payload["processing_warnings"]),
     )
+
+
+@contextmanager
+def _read_only_snapshot_connection(database_path: Path):
+    """Open one SQLite-managed read-only snapshot for inspection."""
+    if not database_path.is_file():
+        raise FileNotFoundError(f"database does not exist: {database_path}")
+    database_uri = f"{database_path.resolve().as_uri()}?mode=ro"
+    connection = sqlite3.connect(database_uri, uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        connection.execute("BEGIN")
+        yield connection
+    finally:
+        connection.close()
