@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -14,6 +15,10 @@ class ExecutionBudget:
     total_seconds: float
     deadline: float
     _clock: Clock = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.total_seconds) or self.total_seconds <= 0:
+            raise ValueError("total_seconds must be a positive finite number")
 
     @classmethod
     def start(

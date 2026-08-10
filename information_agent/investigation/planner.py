@@ -118,8 +118,9 @@ def parse_search_plans(raw: str, evidence: list[SelectedEvidence]) -> list[Searc
     plans: list[SearchPlan] = []
     plan_counts: dict[int, int] = {}
     seen_anchors: set[tuple[int, str]] = set()
+    seen_queries: set[str] = set()
     for item in raw_plans:
-        plan = _parse_plan(item, evidence_by_id, set())
+        plan = _parse_plan(item, evidence_by_id, seen_queries)
         anchor = (plan.evidence_id, plan.trigger_quote)
         if anchor in seen_anchors:
             raise ValueError("同一文章原文锚点不能生成重复计划")

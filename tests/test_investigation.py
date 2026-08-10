@@ -84,6 +84,39 @@ def test_parse_search_plans_rejects_duplicate_queries() -> None:
         parse_search_plans(json.dumps(payload, ensure_ascii=False), _evidence())
 
 
+def test_parse_search_plans_rejects_duplicate_queries_across_plans() -> None:
+    payload = json.loads(_valid_payload())
+    second_plan = payload["plans"][0].copy()
+    second_plan["evidence_id"] = 2
+    second_plan["queries"] = [
+        {"query": "  公司名 新芯片 推理成本 70% 测试方法  ", "purpose": "查找另一项依据"}
+    ]
+    payload["plans"].append(second_plan)
+    evidence = _evidence()
+    evidence.append(SelectedEvidence(evidence[0].article, evidence_id=2))
+
+    with pytest.raises(ValueError, match="查询不能重复"):
+        parse_search_plans(json.dumps(payload, ensure_ascii=False), evidence)
+
+
+def test_parse_search_plans_preserves_distinct_queries_across_plans() -> None:
+    payload = json.loads(_valid_payload())
+    second_plan = payload["plans"][0].copy()
+    second_plan["evidence_id"] = 2
+    second_plan["queries"] = [{"query": "新芯片 下月供货 量产交付", "purpose": "查找量产依据"}]
+    payload["plans"].append(second_plan)
+    evidence = _evidence()
+    evidence.append(SelectedEvidence(evidence[0].article, evidence_id=2))
+
+    plans = parse_search_plans(json.dumps(payload, ensure_ascii=False), evidence)
+
+    assert [plan.evidence_id for plan in plans] == [1, 2]
+    assert [query.query for plan in plans for query in plan.queries] == [
+        "公司名 新芯片 推理成本 70% 测试方法",
+        "新芯片 下月供货 量产交付",
+    ]
+
+
 def test_parse_search_plans_limits_one_plan_per_article() -> None:
     payload = json.loads(_valid_payload())
     payload["plans"].append(

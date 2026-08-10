@@ -12,6 +12,12 @@ from .client import create_search_client
 from .config import HostedSearchConfig
 from .models import SearchAnswer, SearchAnswerStatus, SearchSource
 
+MAX_SOURCE_TITLE_CHARS = 500
+MAX_SOURCE_SITE_NAME_CHARS = 200
+MAX_SOURCE_PUBLISHED_AT_CHARS = 100
+MAX_SOURCE_SNIPPET_CHARS = 4_000
+MAX_SOURCE_REFERENCE_CHARS = 500
+
 NO_EVIDENCE_ANSWER = "未能获得带有可验证来源的搜索结果。"
 MAX_SYNTHESIS_ATTEMPTS = 2
 SEARCH_RESPONSE_FORMAT = {"type": "json_object"}
@@ -269,16 +275,25 @@ def _parse_sources(raw_sources: Any) -> tuple[SearchSource, ...]:
         url = normalize_url(str(raw_url or ""))
         if url is None or url in seen_urls:
             continue
-        title = str(_first_field(item, "title") or "").strip() or url
+        title = _bounded_text(_first_field(item, "title"), MAX_SOURCE_TITLE_CHARS) or url
         seen_urls.add(url)
         sources.append(
             SearchSource(
                 title=title,
                 url=url,
-                site_name=_optional_text(_first_field(item, "site_name", "media")),
-                published_at=_optional_text(_first_field(item, "published_at", "publish_date")),
-                snippet=_optional_text(_first_field(item, "snippet", "content")),
-                reference=_optional_text(_first_field(item, "reference", "refer")),
+                site_name=_bounded_text(
+                    _first_field(item, "site_name", "media"), MAX_SOURCE_SITE_NAME_CHARS
+                ),
+                published_at=_bounded_text(
+                    _first_field(item, "published_at", "publish_date"),
+                    MAX_SOURCE_PUBLISHED_AT_CHARS,
+                ),
+                snippet=_bounded_text(
+                    _first_field(item, "snippet", "content"), MAX_SOURCE_SNIPPET_CHARS
+                ),
+                reference=_bounded_text(
+                    _first_field(item, "reference", "refer"), MAX_SOURCE_REFERENCE_CHARS
+                ),
             )
         )
     return tuple(sources)
@@ -298,9 +313,9 @@ def _first_field(value: Any, *names: str) -> Any:
     return None
 
 
-def _optional_text(value: Any) -> str | None:
-    normalized = str(value or "").strip()
-    return normalized or None
+def _bounded_text(value: Any, maximum_length: int) -> str | None:
+    normalized = " ".join(str(value or "").split())
+    return normalized[:maximum_length] or None
 
 
 def _to_jsonable(value: Any) -> Any:

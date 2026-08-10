@@ -26,15 +26,16 @@ def evaluate_analysis(analysis: Analysis, evidence: list[SelectedEvidence]) -> E
     issues: list[str] = []
 
     for index, claim in enumerate(analysis.claims, start=1):
-        citation_count += len(claim.evidence_ids)
+        unique_evidence_ids = list(dict.fromkeys(claim.evidence_ids))
+        citation_count += len(unique_evidence_ids)
         cited_claims += bool(claim.evidence_ids)
         valid_sources = [
             evidence_by_id[evidence_id]
-            for evidence_id in claim.evidence_ids
+            for evidence_id in unique_evidence_ids
             if evidence_id in evidence_by_id
         ]
         valid_citations += len(valid_sources)
-        if len(valid_sources) != len(claim.evidence_ids):
+        if len(valid_sources) != len(unique_evidence_ids):
             issues.append(f"结论 {index} 引用了不存在的证据")
 
         source_text = " ".join(f"{item.title} {item.content}" for item in valid_sources)

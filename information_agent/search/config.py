@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -37,7 +38,7 @@ class HostedSearchConfig:
             raise ValueError("SEARCH_LLM_RESULT_COUNT 必须在 1 到 50 之间")
         if self.content_size not in SUPPORTED_CONTENT_SIZES:
             raise ValueError("SEARCH_LLM_CONTENT_SIZE 必须是 low、medium 或 high")
-        if self.timeout_seconds <= 0:
+        if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
             raise ValueError("SEARCH_LLM_TIMEOUT_SECONDS 必须大于 0")
 
     @classmethod

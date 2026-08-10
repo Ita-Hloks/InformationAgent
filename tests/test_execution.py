@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import math
+
+import pytest
+
 from information_agent.collection import RawFeedEntry
 from information_agent.contracts import Analysis, Claim, RunStatus
 from information_agent.investigation import SearchPlan
@@ -73,6 +77,30 @@ def test_execution_budget_caps_stage_timeout_and_never_becomes_negative() -> Non
 
     assert budget.remaining() == 0.0
     assert budget.timeout_for(3.0) == 0.0
+
+
+@pytest.mark.parametrize("total_seconds", [math.nan, math.inf, -math.inf, 0.0, -1.0])
+def test_execution_budget_rejects_nonpositive_and_nonfinite_totals(
+    total_seconds: float,
+) -> None:
+    with pytest.raises(ValueError, match="total_seconds must be a positive finite number"):
+        ExecutionBudget.start(total_seconds)
+
+
+@pytest.mark.parametrize("total_seconds", [math.nan, math.inf, -math.inf, 0.0, -1.0])
+def test_runner_rejects_invalid_total_budget_before_collection(
+    total_seconds: float,
+) -> None:
+    def collector(_: str, __: float) -> list[RawFeedEntry]:
+        raise AssertionError("collector should not run")
+
+    with pytest.raises(ValueError, match="total_seconds must be a positive finite number"):
+        WorkflowRunner(
+            topic="AI",
+            feeds=["feed"],
+            timeout_seconds=total_seconds,
+            collector=collector,
+        )
 
 
 def test_runner_skips_analysis_when_collection_consumes_total_budget() -> None:
