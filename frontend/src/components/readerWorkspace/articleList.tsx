@@ -28,7 +28,7 @@ export function ArticleList({
   onOpenSidebar,
 }: ArticleListProps) {
   return (
-    <section className="flex h-full min-h-0 min-w-0 flex-col border-r border-[#deded9] bg-[#f2f2ef]">
+    <section className="flex h-full min-h-0 min-w-0 flex-col border-r border-[#deded9] bg-[#f3e8c6]">
       <header className="shrink-0 border-b border-[#deded9] bg-[#f7f7f4] px-3 py-3">
         <div className="flex h-8 items-center gap-2">
           <button

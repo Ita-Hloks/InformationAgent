@@ -269,7 +269,7 @@ export function ReaderWorkspacePage() {
   const closeAsk = useCallback(() => closeOverlay("ask"), [closeOverlay]);
 
   return (
-    <div className="h-dvh min-h-[600px] overflow-hidden bg-[#f2f2ef] text-[#242528]">
+    <div className="h-dvh min-h-[600px] overflow-hidden bg-[#f3e8c6] text-[#242528]">
       <Outlet />
       {sidebarOpen && (
         <button
