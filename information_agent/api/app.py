@@ -2,8 +2,22 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException, Query
 
-from ..reader import FeedNotFoundError, FeedUnavailableError, ReaderService
-from .models import ArticleResponse, FeedCreate, FeedResponse, article_response, feed_response
+from ..reader import (
+    ArticleNotFoundError,
+    FeedNotFoundError,
+    FeedUnavailableError,
+    ReaderService,
+)
+from .models import (
+    ArticleResponse,
+    ArticleStateResponse,
+    ArticleStateUpdate,
+    FeedCreate,
+    FeedResponse,
+    article_response,
+    article_state_response,
+    feed_response,
+)
 
 
 def create_app(service: ReaderService | None = None) -> FastAPI:
@@ -47,6 +61,20 @@ def create_app(service: ReaderService | None = None) -> FastAPI:
         except FeedNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return [article_response(item) for item in articles]
+
+    @app.put("/api/articles/state", response_model=list[ArticleStateResponse])
+    def update_article_states(request: ArticleStateUpdate) -> list[ArticleStateResponse]:
+        try:
+            states = reader.update_article_states(
+                request.article_ids,
+                is_read=request.is_read,
+                is_saved=request.is_saved,
+            )
+        except ArticleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return [article_state_response(state) for state in states]
 
     @app.get("/api/articles/{article_id}", response_model=ArticleResponse)
     def get_article(article_id: str) -> ArticleResponse:

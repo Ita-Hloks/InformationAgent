@@ -1,6 +1,6 @@
 # 信息助手前端
 
-这是 Information Agent 的独立前端目录，默认通过 Vite 代理连接本地文章订阅 API；已读和收藏仍是浏览器内的临时状态。
+这是 Information Agent 的独立前端目录，默认通过 Vite 代理连接本地文章订阅 API；订阅、文章、已读和收藏状态由本地 FastAPI 服务写入 SQLite。当前没有登录系统，不提供多用户隔离或跨设备同步。
 
 ## 技术选型
 
@@ -22,9 +22,9 @@
 src/
 ├── App.tsx                  # 路由入口
 ├── app/                     # 路由表与导航路径
-├── components/             # 侧栏、列表、阅读器、提问面板和添加源弹窗
+├── api/                     # 订阅、文章和阅读状态 HTTP 客户端
+├── components/             # 应用壳与按页面划分的组件目录
 ├── data/localState.ts      # 空的本地初始状态
-├── features/               # 阅读工作区状态与组件编排
 ├── hooks/                  # 弹层交互逻辑
 ├── types.ts                # 前端领域类型
 └── styles.css              # Tailwind 入口与全局阅读样式

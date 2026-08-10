@@ -1,6 +1,12 @@
 import type { Article, Feed } from "../types";
 
-type FeedPayload = { id: string; url: string; title: string; article_count: number };
+type FeedPayload = {
+  id: string;
+  url: string;
+  title: string;
+  article_count: number;
+  unread_count?: number;
+};
 type ArticlePayload = {
   id: string;
   feed_id: string;
@@ -10,6 +16,21 @@ type ArticlePayload = {
   categories: string[];
   published_at: string | null;
   content: string;
+  is_read?: boolean;
+  is_saved?: boolean;
+};
+type ArticleStatePayload = {
+  article_id: string;
+  is_read: boolean;
+  is_saved: boolean;
+  read_at: string | null;
+  saved_at: string | null;
+  updated_at: string;
+};
+
+export type ArticleStateUpdate = {
+  isRead?: boolean;
+  isSaved?: boolean;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -37,7 +58,7 @@ function toFeed(feed: FeedPayload): Feed {
     url: feed.url,
     name: feed.title,
     domain: `${parsed.host}${parsed.pathname === "/" ? "" : parsed.pathname}`,
-    unread: 0,
+    unread: feed.unread_count ?? 0,
     color: "#3978a8",
   };
 }
@@ -69,9 +90,23 @@ export async function getArticles(feedId?: string): Promise<Article[]> {
     readingMinutes: Math.max(1, Math.ceil(article.content.length / 400)),
     category: article.categories[0] ?? "未分类",
     imageUrl: "",
-    unread: true,
-    starred: false,
+    unread: !(article.is_read ?? false),
+    starred: article.is_saved ?? false,
     body: article.content.split(/\n+/).filter(Boolean),
     sourceUrl: article.source_url,
   }));
+}
+
+export async function updateArticleStates(
+  articleIds: string[],
+  update: ArticleStateUpdate,
+): Promise<ArticleStatePayload[]> {
+  return request<ArticleStatePayload[]>("/api/articles/state", {
+    method: "PUT",
+    body: JSON.stringify({
+      article_ids: articleIds,
+      is_read: update.isRead,
+      is_saved: update.isSaved,
+    }),
+  });
 }

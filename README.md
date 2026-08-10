@@ -164,7 +164,7 @@ python -m information_agent.cli search "人工智能" "https://www.geekpark.net/
 
 ## 本地文章订阅 API
 
-当前已提供一个面向本地阅读器的最小 HTTP API。它只负责 RSS/Atom 订阅、刷新和文章读取，不调用 LLM，也不保存已读、收藏等用户状态。
+当前已提供一个面向本地阅读器的最小 HTTP API。它负责 RSS/Atom 订阅、刷新、文章读取和当前本地阅读器的已读/收藏状态，不调用 LLM。当前没有登录系统，多用户隔离和跨设备同步仍未实现。
 
 安装依赖后，在项目根目录启动服务：
 
@@ -182,13 +182,14 @@ python -m uvicorn information_agent.api:app --host 127.0.0.1 --port 8001
 | `POST` | `/api/feeds/{feed_id}/refresh` | 刷新一个来源 |
 | `GET` | `/api/articles?feed_id=...&limit=100&offset=0` | 获取文章列表 |
 | `GET` | `/api/articles/{article_id}` | 获取文章详情 |
+| `PUT` | `/api/articles/state` | 批量更新文章已读/收藏状态，JSON 为 `{ "article_ids": ["..."], "is_read": true, "is_saved": false }` |
 
 重要前置条件与约束：
 
 - 第一版要求用户提供明确的 RSS/Atom `http` 或 `https` 地址，不自动从网站首页发现 Feed；没有 LLM API Key 也可以使用订阅和读取接口。
 - 服务默认仅监听 `127.0.0.1`，没有用户认证、权限隔离、跨设备同步和公网部署安全保障；若改变监听地址，必须先补认证、CORS、CSRF/访问控制和 SSRF 防护评审。
 - 单次 Feed 响应上限为 5 MiB，网页正文抓取仍是独立流程；RSS 摘要不足 20 个字符的条目不会进入文章列表。上游的 403、429、超时或解析失败会返回 `502` 并记录在订阅状态中。
-- 订阅和文章使用现有 SQLite 数据库；可通过 `INFORMATION_AGENT_DB_PATH` 指定位置。当前 API 不会改变研究工作流的 LLM 语义筛选边界。
+- 订阅、文章和本地阅读状态使用现有 SQLite 数据库；可通过 `INFORMATION_AGENT_DB_PATH` 指定位置。当前 API 不会改变研究工作流的 LLM 语义筛选边界。
 
 LLM 与联网搜索调用会备份到 `log/`。可通过 `INFORMATION_AGENT_LOG_DIR` 修改目录；日志可能包含请求与响应内容，请按敏感数据管理。
 

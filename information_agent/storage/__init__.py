@@ -15,6 +15,7 @@ from .models import (
     PersistedCollection,
     PersistedPlanning,
     ReaderArticle,
+    ReaderArticleState,
     ResearchRunSummary,
 )
 from .store import RESEARCH_RUN_STATUSES, SQLiteCollectionStore, default_database_path
@@ -35,6 +36,7 @@ __all__ = [
     "PersistedPlanning",
     "RESEARCH_RUN_STATUSES",
     "ReaderArticle",
+    "ReaderArticleState",
     "ResearchRunSummary",
     "SQLiteCollectionStore",
     "default_database_path",

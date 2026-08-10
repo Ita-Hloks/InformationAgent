@@ -10,6 +10,7 @@ from ..normalization import normalize_evidence
 from ..storage import (
     FeedSubscription,
     ReaderArticle,
+    ReaderArticleState,
     SQLiteCollectionStore,
     default_database_path,
 )
@@ -22,6 +23,10 @@ class FeedNotFoundError(LookupError):
 
 
 class FeedUnavailableError(RuntimeError):
+    pass
+
+
+class ArticleNotFoundError(LookupError):
     pass
 
 
@@ -99,6 +104,22 @@ class ReaderService:
         if article is None:
             raise FeedNotFoundError(f"不存在的文章：{article_id}")
         return article
+
+    def update_article_states(
+        self,
+        article_ids: list[str],
+        *,
+        is_read: bool | None = None,
+        is_saved: bool | None = None,
+    ) -> list[ReaderArticleState]:
+        try:
+            return self.store.update_reader_article_states(
+                article_ids,
+                is_read=is_read,
+                is_saved=is_saved,
+            )
+        except KeyError as exc:
+            raise ArticleNotFoundError(f"不存在的文章：{exc.args[0]}") from exc
 
     def _fetch(
         self,

@@ -9,7 +9,7 @@ import {
   Star,
 } from "lucide-react";
 
-import type { Article } from "../types";
+import type { Article } from "../../types";
 
 type ReaderPaneProps = {
   article: Article | null;
@@ -32,8 +32,8 @@ export function ReaderPane({
 }: ReaderPaneProps) {
   if (!article) {
     return (
-      <section className="flex h-full min-h-0 min-w-0 flex-col bg-[#fbfbf8]">
-        <header className="h-16 shrink-0 border-b border-[#e3e3de]" />
+      <section className="flex h-full min-h-0 min-w-0 flex-col bg-[var(--reader-workspace-surface)]">
+        <header className="h-16 shrink-0 border-b border-[var(--reader-workspace-border)]" />
         <div className="grid min-h-0 flex-1 place-items-center px-6 text-center">
           <div>
             <FileText size={24} className="mx-auto text-[#a4a5a5]" />
@@ -45,12 +45,12 @@ export function ReaderPane({
   }
 
   return (
-    <section className="flex h-full min-h-0 min-w-0 flex-col bg-[#fbfbf8]">
-      <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[#e3e3de] px-3 sm:px-4">
+    <section className="flex h-full min-h-0 min-w-0 flex-col bg-[var(--reader-workspace-surface)]">
+      <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[var(--reader-workspace-border)] px-3 sm:px-4">
         <div className="flex items-center gap-1">
           <button
             type="button"
-            className="grid size-9 place-items-center rounded-md text-[#60636a] hover:bg-[#efefeb] md:hidden"
+            className="grid size-9 place-items-center rounded-md text-[#60636a] hover:bg-[var(--reader-workspace-hover)] md:hidden"
             aria-label="返回文章列表"
             title="返回文章列表"
             onClick={onBack}
@@ -59,7 +59,7 @@ export function ReaderPane({
           </button>
           <button
             type="button"
-            className={`grid size-9 place-items-center rounded-md hover:bg-[#efefeb] ${
+            className={`grid size-9 place-items-center rounded-md hover:bg-[var(--reader-workspace-hover)] ${
               read ? "text-[#399269]" : "text-[#696c72]"
             }`}
             aria-label={read ? "已读" : "标为已读"}
@@ -70,7 +70,7 @@ export function ReaderPane({
           </button>
           <button
             type="button"
-            className={`grid size-9 place-items-center rounded-md hover:bg-[#efefeb] ${
+            className={`grid size-9 place-items-center rounded-md hover:bg-[var(--reader-workspace-hover)] ${
               saved ? "text-[#ef8354]" : "text-[#696c72]"
             }`}
             aria-label={saved ? "取消收藏" : "收藏文章"}
@@ -81,7 +81,7 @@ export function ReaderPane({
           </button>
           <button
             type="button"
-            className="grid size-9 place-items-center rounded-md text-[#696c72] hover:bg-[#efefeb]"
+            className="grid size-9 place-items-center rounded-md text-[#696c72] hover:bg-[var(--reader-workspace-hover)]"
             aria-label="分享文章"
             title="分享文章"
           >
@@ -91,7 +91,7 @@ export function ReaderPane({
             href={article.sourceUrl}
             target="_blank"
             rel="noreferrer"
-            className="grid size-9 place-items-center rounded-md text-[#696c72] hover:bg-[#efefeb]"
+            className="grid size-9 place-items-center rounded-md text-[#696c72] hover:bg-[var(--reader-workspace-hover)]"
             aria-label="打开原文"
             title="打开原文"
           >
@@ -102,7 +102,7 @@ export function ReaderPane({
         <div className="flex items-center gap-1">
           <button
             type="button"
-            className="flex h-9 items-center gap-2 rounded-md border border-[#dddcd6] bg-white px-3 text-xs font-medium text-[#34363a] shadow-sm hover:border-[#c9c8c1] hover:bg-[#f7f7f4]"
+            className="flex h-9 items-center gap-2 rounded-md border border-[var(--reader-workspace-border)] bg-white px-3 text-xs font-medium text-[#34363a] shadow-sm hover:border-[#c9c8c1] hover:bg-[var(--reader-workspace-raised)]"
             onClick={onAsk}
           >
             <Bot size={16} className="text-[#b75f39]" />
@@ -110,7 +110,7 @@ export function ReaderPane({
           </button>
           <button
             type="button"
-            className="grid size-9 place-items-center rounded-md text-[#696c72] hover:bg-[#efefeb]"
+            className="grid size-9 place-items-center rounded-md text-[#696c72] hover:bg-[var(--reader-workspace-hover)]"
             aria-label="更多文章操作"
             title="更多文章操作"
           >
@@ -119,7 +119,7 @@ export function ReaderPane({
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="workspace-scroll min-h-0 flex-1 overflow-y-auto">
         <article className="mx-auto w-full max-w-[760px] px-6 pt-10 pb-20 sm:px-10 sm:pt-14">
           <div className="flex items-center gap-3 text-xs text-[#77797e]">
             <span className="grid size-8 place-items-center rounded-md bg-[#24272c] text-[10px] font-semibold text-white">
@@ -154,7 +154,7 @@ export function ReaderPane({
             ))}
           </div>
 
-          <div className="mt-10 border-y border-[#e1e1db] py-5">
+          <div className="mt-10 border-y border-[var(--reader-workspace-border)] py-5">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <span className="text-[11px] font-semibold text-[#56585d]">证据状态</span>
@@ -169,10 +169,10 @@ export function ReaderPane({
           </div>
 
           <div className="mt-5 flex flex-wrap items-center gap-2">
-            <span className="rounded-md bg-[#ecece7] px-2.5 py-1 text-[11px] text-[#66686d]">
+            <span className="rounded-md bg-[var(--reader-workspace-hover)] px-2.5 py-1 text-[11px] text-[#66686d]">
               {article.category}
             </span>
-            <span className="rounded-md bg-[#ecece7] px-2.5 py-1 text-[11px] text-[#66686d]">
+            <span className="rounded-md bg-[var(--reader-workspace-hover)] px-2.5 py-1 text-[11px] text-[#66686d]">
               RSS
             </span>
           </div>

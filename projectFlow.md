@@ -11,7 +11,7 @@ Information Agent 是一个 Python CLI 研究流水线。它把外部信息处�
 - 普通代码负责输入校验、URL 规范化、RSS entry 边界、正文清洗、去重、数量上限、重试、超时、状态和持久化
 - LLM 负责语义任务，例如判断文章是否与主题直接相关、生成研究问题、基于证据形成结论
 - 未通过校验的模型输出不会直接成为证据、搜索计划或最终结论
-- 当前后端仍是 CLI + SQLite，没有 HTTP API；`frontend/` 只是独立的本地 React 页面框架
+- 研究主流程仍是 CLI + SQLite；另有一个本地 FastAPI 阅读 API，供 `frontend/` 访问订阅、文章和阅读状态
 
 ## 2. 全局流程
 
@@ -349,27 +349,29 @@ analysis_runs -> analysis_steps -> analysis_attempts -> analysis_artifacts
 - `SQLiteCollectionStore` 已继承这套持久化能力
 - `cli.py` 没有创建或运行 `analysis_run` 的命令
 - `orchestration/` 的现有 `analyze` 没有调用这套分析生命周期接口
-- 没有 HTTP 服务、后台任务管理或前端 API 层把它暴露出去
+- 这套分析生命周期没有 HTTP 服务、后台任务管理或前端 API 层把它暴露出去
 
 因此，这部分是可复用的存储基础设施，不应在当前文档中描述成已经接通的端到端分析服务。
 
 ## 12. 前端当前边界
 
-`frontend/` 是独立的 React 19 + TypeScript + Vite + Tailwind CSS 4 目录。当前数据流只有：
+`frontend/` 是独立的 React 19 + TypeScript + Vite + Tailwind CSS 4 目录。阅读工作区的数据流是：
 
 ```text
-frontend/src/main.tsx -> App.tsx -> useState(activeView) -> 本地页面渲染
+frontend/src/main.tsx -> App.tsx -> AppRoutes -> ReaderWorkspacePage
+    -> frontend/src/api/client.ts -> Vite proxy -> information_agent/api
+    -> ReaderService -> SQLite
 ```
 
-当前实现包含“工作台”和“分析记录”两个本地视图，但：
+当前已实现订阅阅读闭环，但：
 
-- 没有请求客户端和 API 类型
-- 没有 HTTP 请求、轮询、SSE 或 WebSocket
-- 没有路由到 Python CLI 或 SQLite
-- 页面中的“未连接”是当前实现状态，不是后端健康检查结果
+- `GET/POST /api/feeds` 和 `GET /api/articles` 只覆盖本地 RSS 订阅与文章读取
+- `PUT /api/articles/state` 保存当前本地阅读器的已读/收藏状态
+- 没有分析任务创建、状态轮询、SSE 或 WebSocket
+- 没有把 HTTP 请求路由到 Python CLI 的长任务生命周期
 - 前端不能直接读取 LLM 密钥、调用 SQLite 或替代后端编排
 
-要形成真正的前后端闭环，后续至少需要增加 HTTP 服务层、运行创建/状态查询、证据和结果查询、取消操作，以及将长任务状态映射为 `queued`、`running`、`completed`、`partial`、`failed`、`cancelled` 和 `insufficient_evidence`。这些接口当前尚未实现。
+后续接入 LLM 分析时，至少需要增加分析运行创建/状态查询、证据和结果查询、取消操作，以及将长任务状态映射为 `queued`、`running`、`completed`、`partial`、`failed`、`cancelled` 和 `insufficient_evidence`。这些接口当前尚未实现。
 
 ## 13. 代码地图
 

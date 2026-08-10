@@ -1,11 +1,11 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
-import { ReaderWorkspace } from "../features/readerWorkspace";
+import { ReaderWorkspacePage } from "../components/readerWorkspace";
 
 export function AppRoutes() {
   return (
     <Routes>
-      <Route element={<ReaderWorkspace />} path="/">
+      <Route element={<ReaderWorkspacePage />} path="/">
         <Route element={<Navigate replace to="/inbox" />} index />
         <Route element={<WorkspaceRoute />} path="inbox" />
         <Route element={<WorkspaceRoute />} path="today" />

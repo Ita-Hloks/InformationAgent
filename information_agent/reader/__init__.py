@@ -1,3 +1,8 @@
-from .service import FeedNotFoundError, FeedUnavailableError, ReaderService
+from .service import ArticleNotFoundError, FeedNotFoundError, FeedUnavailableError, ReaderService
 
-__all__ = ["FeedNotFoundError", "FeedUnavailableError", "ReaderService"]
+__all__ = [
+    "ArticleNotFoundError",
+    "FeedNotFoundError",
+    "FeedUnavailableError",
+    "ReaderService",
+]

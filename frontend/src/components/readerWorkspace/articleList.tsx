@@ -1,6 +1,6 @@
 import { CheckCheck, Menu, Search, SlidersHorizontal, Star } from "lucide-react";
 
-import type { Article } from "../types";
+import type { Article } from "../../types";
 
 type ArticleListProps = {
   title: string;
@@ -28,12 +28,12 @@ export function ArticleList({
   onOpenSidebar,
 }: ArticleListProps) {
   return (
-    <section className="flex h-full min-h-0 min-w-0 flex-col border-r border-[#deded9] bg-[#f2f2ef]">
-      <header className="shrink-0 border-b border-[#deded9] bg-[#f7f7f4] px-3 py-3">
+    <section className="flex h-full min-h-0 min-w-0 flex-col border-r border-[var(--reader-workspace-border)] bg-[var(--reader-workspace-surface)]">
+      <header className="shrink-0 border-b border-[var(--reader-workspace-border)] bg-[var(--reader-workspace-surface)] px-3 py-3">
         <div className="flex h-8 items-center gap-2">
           <button
             type="button"
-            className="grid size-8 shrink-0 place-items-center rounded-md text-[#60636a] hover:bg-[#e7e7e2] hover:text-[#202124] xl:hidden"
+            className="grid size-8 shrink-0 place-items-center rounded-md text-[#60636a] hover:bg-[var(--reader-workspace-hover)] hover:text-[#202124] xl:hidden"
             aria-label="打开资料库导航"
             title="打开资料库导航"
             onClick={onOpenSidebar}
@@ -46,7 +46,7 @@ export function ArticleList({
           <span className="text-xs tabular-nums text-[#85878c]">{articles.length}</span>
           <button
             type="button"
-            className="grid size-8 place-items-center rounded-md text-[#676a70] hover:bg-[#e7e7e2] hover:text-[#202124]"
+            className="grid size-8 place-items-center rounded-md text-[#676a70] hover:bg-[var(--reader-workspace-hover)] hover:text-[#202124]"
             aria-label="全部标为已读"
             title="全部标为已读"
             onClick={onMarkAllRead}
@@ -55,7 +55,7 @@ export function ArticleList({
           </button>
           <button
             type="button"
-            className="grid size-8 place-items-center rounded-md text-[#676a70] hover:bg-[#e7e7e2] hover:text-[#202124]"
+            className="grid size-8 place-items-center rounded-md text-[#676a70] hover:bg-[var(--reader-workspace-hover)] hover:text-[#202124]"
             aria-label="筛选文章"
             title="筛选文章"
           >
@@ -76,7 +76,10 @@ export function ArticleList({
         </label>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto" aria-label="文章列表">
+      <div
+        className="workspace-scroll flex min-h-0 flex-1 flex-col overflow-y-auto"
+        aria-label="文章列表"
+      >
         {articles.length === 0 ? (
           <div className="grid flex-1 place-items-center px-8 text-center">
             <div>
@@ -92,8 +95,10 @@ export function ArticleList({
             return (
               <article
                 key={article.id}
-                className={`group relative border-b border-[#deded9] transition-colors ${
-                  selected ? "bg-white" : "bg-[#f7f7f4] hover:bg-white"
+                className={`group relative border-b border-[var(--reader-workspace-border)] transition-colors ${
+                  selected
+                    ? "bg-[var(--reader-workspace-raised)]"
+                    : "bg-transparent hover:bg-[var(--reader-workspace-raised)]"
                 }`}
               >
                 {selected && <span className="absolute inset-y-0 left-0 w-0.5 bg-[#ef8354]" />}
@@ -143,7 +148,9 @@ export function ArticleList({
                 <button
                   type="button"
                   className={`absolute right-3 bottom-2.5 grid size-7 place-items-center rounded-md opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 ${
-                    saved ? "text-[#ef8354] opacity-100" : "text-[#86888d] hover:bg-[#eeeeea]"
+                    saved
+                      ? "text-[#ef8354] opacity-100"
+                      : "text-[#86888d] hover:bg-[var(--reader-workspace-hover)]"
                   }`}
                   aria-label={saved ? "取消收藏" : "收藏文章"}
                   title={saved ? "取消收藏" : "收藏文章"}

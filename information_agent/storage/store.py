@@ -28,6 +28,7 @@ from .models import (
     FeedState,
     FeedSubscription,
     ReaderArticle,
+    ReaderArticleState,
     ResearchRunSummary,
 )
 
@@ -181,10 +182,15 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
                 SELECT subscriptions.feed_id, feeds.feed_url, subscriptions.title,
                        subscriptions.site_url, subscriptions.subscribed_at,
                        subscriptions.last_refreshed_at, subscriptions.last_error,
-                       COUNT(feed_entries.article_id) AS article_count
+                       COUNT(feed_entries.article_id) AS article_count,
+                       COUNT(feed_entries.article_id)
+                         - COUNT(CASE WHEN states.is_read = 1 THEN feed_entries.article_id END)
+                         AS unread_count
                 FROM feed_subscriptions AS subscriptions
                 JOIN feeds ON feeds.id = subscriptions.feed_id
                 LEFT JOIN feed_entries ON feed_entries.feed_id = subscriptions.feed_id
+                LEFT JOIN reader_article_states AS states
+                    ON states.article_id = feed_entries.article_id
                 GROUP BY subscriptions.feed_id
                 ORDER BY subscriptions.subscribed_at, subscriptions.feed_id
                 """
@@ -198,10 +204,15 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
                 SELECT subscriptions.feed_id, feeds.feed_url, subscriptions.title,
                        subscriptions.site_url, subscriptions.subscribed_at,
                        subscriptions.last_refreshed_at, subscriptions.last_error,
-                       COUNT(feed_entries.article_id) AS article_count
+                       COUNT(feed_entries.article_id) AS article_count,
+                       COUNT(feed_entries.article_id)
+                         - COUNT(CASE WHEN states.is_read = 1 THEN feed_entries.article_id END)
+                         AS unread_count
                 FROM feed_subscriptions AS subscriptions
                 JOIN feeds ON feeds.id = subscriptions.feed_id
                 LEFT JOIN feed_entries ON feed_entries.feed_id = subscriptions.feed_id
+                LEFT JOIN reader_article_states AS states
+                    ON states.article_id = feed_entries.article_id
                 WHERE subscriptions.feed_id = ?
                 GROUP BY subscriptions.feed_id
                 """,
@@ -226,12 +237,16 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
         parameters: list[object] = []
         if feed_id is not None:
             query = """
-                SELECT entries.feed_id, snapshots.payload_json
+                SELECT entries.feed_id, snapshots.payload_json,
+                       COALESCE(states.is_read, 0) AS is_read,
+                       COALESCE(states.is_saved, 0) AS is_saved
                 FROM feed_entries AS entries
                 JOIN feed_subscriptions AS subscriptions
                     ON subscriptions.feed_id = entries.feed_id
                 JOIN article_snapshots AS snapshots
                     ON snapshots.article_id = entries.article_id
+                LEFT JOIN reader_article_states AS states
+                    ON states.article_id = entries.article_id
                 WHERE entries.feed_id = ?
                   AND snapshots.id = (
                       SELECT latest.id FROM article_snapshots AS latest
@@ -245,12 +260,16 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
             parameters.append(feed_id)
         else:
             query = """
-                SELECT entries.feed_id, snapshots.payload_json
+                SELECT entries.feed_id, snapshots.payload_json,
+                       COALESCE(states.is_read, 0) AS is_read,
+                       COALESCE(states.is_saved, 0) AS is_saved
                 FROM feed_entries AS entries
                 JOIN feed_subscriptions AS subscriptions
                     ON subscriptions.feed_id = entries.feed_id
                 JOIN article_snapshots AS snapshots
                     ON snapshots.article_id = entries.article_id
+                LEFT JOIN reader_article_states AS states
+                    ON states.article_id = entries.article_id
                 WHERE snapshots.id = (
                     SELECT latest.id FROM article_snapshots AS latest
                     WHERE latest.article_id = entries.article_id
@@ -267,6 +286,8 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
             ReaderArticle(
                 feed_id=str(row["feed_id"]),
                 article=_article_from_payload(json.loads(row["payload_json"])),
+                is_read=bool(row["is_read"]),
+                is_saved=bool(row["is_saved"]),
             )
             for row in rows
         ]
@@ -275,12 +296,16 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT entries.feed_id, snapshots.payload_json
+                SELECT entries.feed_id, snapshots.payload_json,
+                       COALESCE(states.is_read, 0) AS is_read,
+                       COALESCE(states.is_saved, 0) AS is_saved
                 FROM feed_entries AS entries
                 JOIN feed_subscriptions AS subscriptions
                     ON subscriptions.feed_id = entries.feed_id
                 JOIN article_snapshots AS snapshots
                     ON snapshots.article_id = entries.article_id
+                LEFT JOIN reader_article_states AS states
+                    ON states.article_id = entries.article_id
                 WHERE entries.article_id = ?
                 ORDER BY snapshots.collected_at DESC, snapshots.created_at DESC
                 LIMIT 1
@@ -292,7 +317,99 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
         return ReaderArticle(
             feed_id=str(row["feed_id"]),
             article=_article_from_payload(json.loads(row["payload_json"])),
+            is_read=bool(row["is_read"]),
+            is_saved=bool(row["is_saved"]),
         )
+
+    def update_reader_article_states(
+        self,
+        article_ids: list[str],
+        *,
+        is_read: bool | None = None,
+        is_saved: bool | None = None,
+    ) -> list[ReaderArticleState]:
+        unique_ids = list(dict.fromkeys(article_ids))
+        if not unique_ids:
+            raise ValueError("至少需要一个文章 ID")
+        if is_read is None and is_saved is None:
+            raise ValueError("至少需要提供一个文章状态")
+
+        placeholders = ", ".join("?" for _ in unique_ids)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT DISTINCT entries.article_id
+                FROM feed_entries AS entries
+                JOIN feed_subscriptions AS subscriptions
+                    ON subscriptions.feed_id = entries.feed_id
+                WHERE entries.article_id IN ({placeholders})
+                """,
+                unique_ids,
+            ).fetchall()
+            existing_ids = {str(row["article_id"]) for row in rows}
+            missing_ids = [
+                article_id for article_id in unique_ids if article_id not in existing_ids
+            ]
+            if missing_ids:
+                raise KeyError(missing_ids[0])
+
+            updated_at = _format_datetime(project_now())
+            for article_id in unique_ids:
+                current = connection.execute(
+                    """
+                    SELECT is_read, is_saved, read_at, saved_at
+                    FROM reader_article_states
+                    WHERE article_id = ?
+                    """,
+                    (article_id,),
+                ).fetchone()
+                current_is_read = bool(current["is_read"]) if current else False
+                current_is_saved = bool(current["is_saved"]) if current else False
+                current_read_at = _optional_text(current["read_at"]) if current else None
+                current_saved_at = _optional_text(current["saved_at"]) if current else None
+                next_is_read = current_is_read if is_read is None else is_read
+                next_is_saved = current_is_saved if is_saved is None else is_saved
+                next_read_at = (
+                    current_read_at if is_read is None else updated_at if is_read else None
+                )
+                next_saved_at = (
+                    current_saved_at if is_saved is None else updated_at if is_saved else None
+                )
+                connection.execute(
+                    """
+                    INSERT INTO reader_article_states (
+                        article_id, is_read, is_saved, read_at, saved_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(article_id) DO UPDATE SET
+                        is_read = excluded.is_read,
+                        is_saved = excluded.is_saved,
+                        read_at = excluded.read_at,
+                        saved_at = excluded.saved_at,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        article_id,
+                        int(next_is_read),
+                        int(next_is_saved),
+                        next_read_at,
+                        next_saved_at,
+                        updated_at,
+                    ),
+                )
+
+            state_rows = connection.execute(
+                f"""
+                SELECT article_id, is_read, is_saved, read_at, saved_at, updated_at
+                FROM reader_article_states
+                WHERE article_id IN ({placeholders})
+                """,
+                unique_ids,
+            ).fetchall()
+
+        states_by_id = {
+            str(row["article_id"]): _reader_article_state_from_row(row) for row in state_rows
+        }
+        return [states_by_id[article_id] for article_id in unique_ids]
 
     def new_feed_entries(
         self,
@@ -776,6 +893,29 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                 (6, _format_datetime(project_now())),
             )
+        applied_versions = {
+            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
+        }
+        if 7 not in applied_versions and feed_tables_exist:
+            connection.executescript(
+                """
+                CREATE TABLE reader_article_states (
+                    article_id TEXT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+                    is_read INTEGER NOT NULL DEFAULT 0 CHECK (is_read IN (0, 1)),
+                    is_saved INTEGER NOT NULL DEFAULT 0 CHECK (is_saved IN (0, 1)),
+                    read_at TEXT,
+                    saved_at TEXT,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX reader_article_states_updated_at_idx
+                    ON reader_article_states(updated_at);
+                """
+            )
+            connection.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                (7, _format_datetime(project_now())),
+            )
 
 
 def _article_payload(article: NormalizedArticle) -> dict[str, object]:
@@ -801,6 +941,18 @@ def _subscription_from_row(row: sqlite3.Row) -> FeedSubscription:
         last_refreshed_at=_optional_text(row["last_refreshed_at"]),
         last_error=_optional_text(row["last_error"]),
         article_count=int(row["article_count"]),
+        unread_count=int(row["unread_count"]),
+    )
+
+
+def _reader_article_state_from_row(row: sqlite3.Row) -> ReaderArticleState:
+    return ReaderArticleState(
+        article_id=str(row["article_id"]),
+        is_read=bool(row["is_read"]),
+        is_saved=bool(row["is_saved"]),
+        read_at=_optional_text(row["read_at"]),
+        saved_at=_optional_text(row["saved_at"]),
+        updated_at=str(row["updated_at"]),
     )
 
 
