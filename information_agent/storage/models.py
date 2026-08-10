@@ -10,6 +10,7 @@ from ..contracts import CollectionReport
 
 if TYPE_CHECKING:
     from ..investigation import PlanningReport
+    from ..normalization import NormalizedArticle
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,6 +1,6 @@
-# Information Agent 前端
+# 信息助手前端
 
-这是 Information Agent 的独立前端目录，当前版本只提供 React 页面框架和本地视图状态，不连接后端、不发送网络请求，也不包含 API 类型或请求客户端。
+这是 Information Agent 的独立前端目录，默认通过 Vite 代理连接本地文章订阅 API；已读和收藏仍是浏览器内的临时状态。
 
 ## 技术选型
 
@@ -9,9 +9,10 @@
 - Vite
 - Tailwind CSS 4
 - Lucide React
+- React Router
 - ESLint 和 Prettier
 
-运行时只保留 React、React DOM、Tailwind CSS 和 Lucide 图标。路由、状态管理、请求库和 API 层在后续需求明确后再引入。
+开发服务器会把 `/api` 请求代理到 `http://127.0.0.1:8001`，需要先启动根目录中的 FastAPI 服务。
 
 ## 页面结构
 
@@ -19,9 +20,12 @@
 
 ```text
 src/
-├── App.tsx                  # 工作区状态与组件编排
+├── App.tsx                  # 路由入口
+├── app/                     # 路由表与导航路径
 ├── components/             # 侧栏、列表、阅读器、提问面板和添加源弹窗
-├── data/mockData.ts        # 本地演示数据，后续由 API 适配层替换
+├── data/localState.ts      # 空的本地初始状态
+├── features/               # 阅读工作区状态与组件编排
+├── hooks/                  # 弹层交互逻辑
 ├── types.ts                # 前端领域类型
 └── styles.css              # Tailwind 入口与全局阅读样式
 ```

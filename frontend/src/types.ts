@@ -1,8 +1,8 @@
 export type LibraryView = "inbox" | "today" | "all" | "saved" | "research";
-export type MobilePane = "list" | "reader";
 
 export type Feed = {
   id: string;
+  url: string;
   name: string;
   domain: string;
   unread: number;
@@ -23,6 +23,7 @@ export type Article = {
   unread: boolean;
   starred: boolean;
   body: string[];
+  sourceUrl: string;
 };
 
 export type ResearchRun = {
