@@ -5,6 +5,14 @@ from types import SimpleNamespace
 
 from information_agent.investigation import QuestionKind, SearchPlan, SearchQuery
 from information_agent.search import HostedSearchAnswerer, HostedSearchConfig, SearchAnswerStatus
+from information_agent.search.hosted import (
+    MAX_SOURCE_PUBLISHED_AT_CHARS,
+    MAX_SOURCE_REFERENCE_CHARS,
+    MAX_SOURCE_SITE_NAME_CHARS,
+    MAX_SOURCE_SNIPPET_CHARS,
+    MAX_SOURCE_TITLE_CHARS,
+    _parse_sources,
+)
 
 
 class FakeResponse:
@@ -275,3 +283,65 @@ def test_hosted_search_answerer_creates_a_client_when_not_injected(monkeypatch) 
 
     assert answerer.client is client
     assert observed_configs == [_config()]
+
+
+def test_parse_sources_normalizes_and_bounds_untrusted_text() -> None:
+    sources = _parse_sources(
+        [
+            {
+                "title": "  source\n title  " + "x" * MAX_SOURCE_TITLE_CHARS,
+                "link": "https://example.com/article",
+                "media": "  source\t site  " + "x" * MAX_SOURCE_SITE_NAME_CHARS,
+                "publish_date": "  2026\n 08  " + "x" * MAX_SOURCE_PUBLISHED_AT_CHARS,
+                "content": "  source\n snippet  " + "x" * MAX_SOURCE_SNIPPET_CHARS,
+                "refer": "  source\t reference  " + "x" * MAX_SOURCE_REFERENCE_CHARS,
+            },
+            {
+                "title": "Second source",
+                "link": "https://example.com/second",
+                "media": " \n\t ",
+                "publish_date": "",
+                "content": None,
+                "refer": "  ",
+            },
+        ]
+    )
+
+    first, second = sources
+    assert first.title == ("source title " + "x" * MAX_SOURCE_TITLE_CHARS)[:MAX_SOURCE_TITLE_CHARS]
+    assert (
+        first.site_name
+        == ("source site " + "x" * MAX_SOURCE_SITE_NAME_CHARS)[:MAX_SOURCE_SITE_NAME_CHARS]
+    )
+    assert (
+        first.published_at
+        == ("2026 08 " + "x" * MAX_SOURCE_PUBLISHED_AT_CHARS)[:MAX_SOURCE_PUBLISHED_AT_CHARS]
+    )
+    assert (
+        first.snippet
+        == ("source snippet " + "x" * MAX_SOURCE_SNIPPET_CHARS)[:MAX_SOURCE_SNIPPET_CHARS]
+    )
+    assert (
+        first.reference
+        == ("source reference " + "x" * MAX_SOURCE_REFERENCE_CHARS)[:MAX_SOURCE_REFERENCE_CHARS]
+    )
+    assert second.site_name is None
+    assert second.published_at is None
+    assert second.snippet is None
+    assert second.reference is None
+
+
+def test_parse_sources_retains_first_source_and_uses_untruncated_url_title_fallback() -> None:
+    url = "https://example.com/" + "a" * (MAX_SOURCE_TITLE_CHARS + 1)
+
+    sources = _parse_sources(
+        [
+            {"title": "   ", "link": url},
+            {"title": "Duplicate", "link": url},
+            {"title": "Second", "link": "https://example.com/second"},
+        ]
+    )
+
+    assert [source.url for source in sources] == [url, "https://example.com/second"]
+    assert sources[0].title == url
+    assert sources[1].title == "Second"

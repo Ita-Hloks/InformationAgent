@@ -66,6 +66,37 @@ def test_hosted_search_config_rejects_invalid_values(
         HostedSearchConfig.from_env(environ)
 
 
+@pytest.mark.parametrize("timeout_seconds", ["nan", "inf", "-inf"])
+def test_hosted_search_config_rejects_non_finite_timeouts(
+    timeout_seconds: str,
+) -> None:
+    with pytest.raises(ValueError, match="SEARCH_LLM_TIMEOUT_SECONDS"):
+        HostedSearchConfig.from_env(
+            {
+                "SEARCH_LLM_API_KEY": "secret",
+                "SEARCH_LLM_MODEL": "search-model",
+                "SEARCH_LLM_BASE_URL": "https://api.example.com/v1",
+                "SEARCH_LLM_TIMEOUT_SECONDS": timeout_seconds,
+            }
+        )
+
+
+@pytest.mark.parametrize("timeout_seconds", [1, 0.5])
+def test_hosted_search_config_accepts_positive_finite_timeouts(
+    timeout_seconds: int | float,
+) -> None:
+    config = HostedSearchConfig.from_env(
+        {
+            "SEARCH_LLM_API_KEY": "secret",
+            "SEARCH_LLM_MODEL": "search-model",
+            "SEARCH_LLM_BASE_URL": "https://api.example.com/v1",
+            "SEARCH_LLM_TIMEOUT_SECONDS": str(timeout_seconds),
+        }
+    )
+
+    assert config.timeout_seconds == timeout_seconds
+
+
 @pytest.mark.parametrize(
     "base_url",
     [

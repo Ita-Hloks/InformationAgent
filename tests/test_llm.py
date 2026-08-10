@@ -25,6 +25,51 @@ def test_parse_analysis_validates_and_clamps_values() -> None:
     assert result.claims[0].evidence_ids == [1]
 
 
+def test_parse_analysis_omits_coercible_invalid_citation_values() -> None:
+    result = parse_analysis(
+        json.dumps(
+            {
+                "claims": [
+                    {
+                        "text": "保留的结论",
+                        "evidence_ids": [
+                            7,
+                            "08",
+                            True,
+                            1.0,
+                            float("nan"),
+                            float("inf"),
+                            [],
+                            {},
+                            None,
+                            "bad",
+                        ],
+                    },
+                    {
+                        "text": "没有有效引用的结论",
+                        "evidence_ids": [
+                            False,
+                            2.5,
+                            float("-inf"),
+                            [],
+                            {},
+                            None,
+                            "invalid",
+                        ],
+                    },
+                ],
+                "uncertainties": ["保留的不确定性"],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert result.summary == "保留的结论。"
+    assert result.claims[0].evidence_ids == [7, 8]
+    assert len(result.claims) == 1
+    assert result.uncertainties == ["保留的不确定性"]
+
+
 def test_parse_analysis_rejects_wrong_shape() -> None:
     with pytest.raises(ValueError, match="claims"):
         parse_analysis('{"claims": {}, "uncertainties": []}')
@@ -32,6 +77,36 @@ def test_parse_analysis_rejects_wrong_shape() -> None:
 
 def test_llm_safe_text_removes_code_fences_and_inline_code() -> None:
     assert llm_safe_text("事实\n```python\nprint('secret')\n```\n结论 `x < 1`") == "事实\n结论"
+
+
+def test_parse_analysis_omits_non_string_text_and_uncertainties() -> None:
+    result = parse_analysis(
+        json.dumps(
+            {
+                "claims": [
+                    {"text": "  retained claim  ", "evidence_ids": [7]},
+                    {"text": ["not", "a", "claim"], "evidence_ids": [8]},
+                    {"text": {"not": "a claim"}, "evidence_ids": [9]},
+                    {"text": 10, "evidence_ids": [10]},
+                    {"text": "   ", "evidence_ids": [11]},
+                ],
+                "uncertainties": [
+                    "  first uncertainty  ",
+                    ["not", "an uncertainty"],
+                    {"not": "an uncertainty"},
+                    12,
+                    "   ",
+                    "second uncertainty",
+                ],
+            }
+        )
+    )
+
+    assert result.summary == "retained claim。"
+    assert [(claim.text, claim.evidence_ids) for claim in result.claims] == [
+        ("retained claim", [7])
+    ]
+    assert result.uncertainties == ["first uncertainty", "second uncertainty"]
 
 
 def test_analysis_input_includes_each_content_batch_once() -> None:
