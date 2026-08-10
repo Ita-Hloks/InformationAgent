@@ -21,6 +21,7 @@ type AppSidebarProps = {
   researchRuns: ResearchRun[];
   selectedFeedId: string | null;
   unreadTotal: number;
+  apiStatus: "connecting" | "connected" | "unavailable";
   open: boolean;
   onClose: () => void;
   onSelectView: (view: LibraryView) => void;
@@ -41,6 +42,7 @@ export function AppSidebar({
   researchRuns,
   selectedFeedId,
   unreadTotal,
+  apiStatus,
   open,
   onClose,
   onSelectView,
@@ -74,10 +76,8 @@ export function AppSidebar({
             IA
           </span>
           <span className="min-w-0">
-            <strong className="block truncate text-sm font-semibold tracking-[0]">
-              Information Agent
-            </strong>
-            <span className="block text-[11px] text-[#898d94]">Research reader</span>
+            <strong className="block truncate text-sm font-semibold tracking-[0]">信息助手</strong>
+            <span className="block text-[11px] text-[#898d94]">研究阅读器</span>
           </span>
         </button>
         <button
@@ -234,7 +234,13 @@ export function AppSidebar({
           <CircleUserRound size={22} className="text-[#a3a7ad]" strokeWidth={1.6} />
           <span className="min-w-0 flex-1">
             <strong className="block truncate text-xs font-medium">本地工作区</strong>
-            <span className="block text-[10px] text-[#72767e]">未连接 API</span>
+            <span className="block text-[10px] text-[#72767e]">
+              {apiStatus === "connected"
+                ? "本地 API 已连接"
+                : apiStatus === "connecting"
+                  ? "正在连接 API"
+                  : "本地 API 不可用"}
+            </span>
           </span>
           <Settings size={15} className="text-[#777b82]" />
         </button>
