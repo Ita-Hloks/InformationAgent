@@ -23,7 +23,13 @@ from .common import (
     _parse_datetime,
     _required_datetime,
 )
-from .models import FeedObservation, FeedState, ResearchRunSummary
+from .models import (
+    FeedObservation,
+    FeedState,
+    FeedSubscription,
+    ReaderArticle,
+    ResearchRunSummary,
+)
 
 RESEARCH_RUN_STATUSES = ("collecting", "completed", "partial", "failed")
 

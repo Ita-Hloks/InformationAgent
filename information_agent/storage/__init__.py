@@ -11,8 +11,10 @@ from .models import (
     AnalysisStepStatus,
     FeedObservation,
     FeedState,
+    FeedSubscription,
     PersistedCollection,
     PersistedPlanning,
+    ReaderArticle,
     ResearchRunSummary,
 )
 from .store import RESEARCH_RUN_STATUSES, SQLiteCollectionStore, default_database_path
@@ -28,9 +30,11 @@ __all__ = [
     "AnalysisStepStatus",
     "FeedObservation",
     "FeedState",
+    "FeedSubscription",
     "PersistedCollection",
     "PersistedPlanning",
     "RESEARCH_RUN_STATUSES",
+    "ReaderArticle",
     "ResearchRunSummary",
     "SQLiteCollectionStore",
     "default_database_path",
