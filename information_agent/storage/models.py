@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -159,3 +160,18 @@ class FeedSubscription:
 class ReaderArticle:
     feed_id: str
     article: NormalizedArticle
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchRunSummary:
+    """Safe, aggregate-only view of a persisted research run."""
+
+    run_id: str
+    topic: str
+    status: str
+    started_at: datetime
+    finished_at: datetime | None
+    feed_count: int
+    snapshot_count: int
+    selected_evidence_count: int
+    collection_error_count: int
