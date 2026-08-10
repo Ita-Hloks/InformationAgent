@@ -9,6 +9,7 @@ from ..contracts import CollectionReport
 
 if TYPE_CHECKING:
     from ..investigation import PlanningReport
+    from ..normalization import NormalizedArticle
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,3 +141,21 @@ class FeedObservation:
     last_modified: str | None
     not_modified: bool
     new_entries: list[RawFeedEntry]
+
+
+@dataclass(frozen=True, slots=True)
+class FeedSubscription:
+    feed_id: str
+    feed_url: str
+    title: str
+    site_url: str | None
+    subscribed_at: str
+    last_refreshed_at: str | None
+    last_error: str | None
+    article_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReaderArticle:
+    feed_id: str
+    article: NormalizedArticle

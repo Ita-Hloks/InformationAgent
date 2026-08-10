@@ -1,32 +1,65 @@
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useMemo, useRef, useState } from "react";
 import { Check, Plus, Rss, Search, X } from "lucide-react";
 
+import { useOverlayDialog } from "../hooks/useOverlayDialog";
 import type { Feed } from "../types";
 
 type AddFeedDialogProps = {
   open: boolean;
   feeds: Feed[];
-  onAddFeed: (feed: Feed) => void;
+  onAddFeed: (input: { url: string; title?: string }) => Promise<void>;
   onClose: () => void;
 };
 
 const recommendations: Feed[] = [
-  { id: "wired", name: "WIRED", domain: "wired.com/feed/rss", unread: 0, color: "#1d1d1f" },
-  { id: "ars", name: "Ars Technica", domain: "feeds.arstechnica.com", unread: 0, color: "#d9682c" },
-  { id: "solidot", name: "Solidot", domain: "solidot.org/index.rss", unread: 0, color: "#3978a8" },
-  { id: "ifanr", name: "爱范儿", domain: "ifanr.com/feed", unread: 0, color: "#2b9b7a" },
+  {
+    id: "wired",
+    url: "https://www.wired.com/feed/rss",
+    name: "WIRED",
+    domain: "wired.com/feed/rss",
+    unread: 0,
+    color: "#1d1d1f",
+  },
+  {
+    id: "ars",
+    url: "https://feeds.arstechnica.com/arstechnica/index",
+    name: "Ars Technica",
+    domain: "feeds.arstechnica.com",
+    unread: 0,
+    color: "#d9682c",
+  },
+  {
+    id: "solidot",
+    url: "https://feeds.feedburner.com/solidot",
+    name: "Solidot",
+    domain: "solidot.org/index.rss",
+    unread: 0,
+    color: "#3978a8",
+  },
+  {
+    id: "ifanr",
+    url: "https://www.ifanr.com/feed",
+    name: "爱范儿",
+    domain: "ifanr.com/feed",
+    unread: 0,
+    color: "#2b9b7a",
+  },
 ];
 
 export function AddFeedDialog({ open, feeds, onAddFeed, onClose }: AddFeedDialogProps) {
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [customUrl, setCustomUrl] = useState("");
   const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
   const addedIds = useMemo(() => new Set(feeds.map(feed => feed.id)), [feeds]);
   const visibleRecommendations = recommendations.filter(feed =>
     `${feed.name} ${feed.domain}`.toLowerCase().includes(query.trim().toLowerCase()),
   );
 
-  const addCustomFeed = (event: FormEvent<HTMLFormElement>) => {
+  useOverlayDialog(open, onClose, searchInputRef);
+
+  const addCustomFeed = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const value = customUrl.trim();
     if (!value) return;
@@ -34,24 +67,28 @@ export function AddFeedDialog({ open, feeds, onAddFeed, onClose }: AddFeedDialog
     try {
       const parsed = new URL(value.includes("://") ? value : `https://${value}`);
       const domain = parsed.hostname.replace(/^www\./, "");
-      onAddFeed({
-        id: `custom-${domain}-${Date.now()}`,
-        name: domain,
-        domain: `${domain}${parsed.pathname === "/" ? "" : parsed.pathname}`,
-        unread: 0,
-        color: "#8f6ac8",
-      });
+      setPending(true);
+      await onAddFeed({ url: parsed.toString(), title: domain });
       setCustomUrl("");
       setError("");
-    } catch {
-      setError("无法识别这个地址");
+      onClose();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "无法添加这个地址");
+    } finally {
+      setPending(false);
     }
   };
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4" role="presentation">
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4"
+      role="presentation"
+      onMouseDown={event => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       <section
         className="w-full max-w-[560px] overflow-hidden rounded-lg border border-[#d8d8d2] bg-[#fbfbf8] shadow-2xl"
         role="dialog"
@@ -81,6 +118,7 @@ export function AddFeedDialog({ open, feeds, onAddFeed, onClose }: AddFeedDialog
             <Search size={16} className="text-[#777a7f]" />
             <span className="sr-only">搜索 RSS 来源</span>
             <input
+              ref={searchInputRef}
               type="search"
               className="min-w-0 flex-1 bg-transparent text-sm text-[#28292c] outline-none placeholder:text-[#9b9c9f]"
               placeholder="搜索名称或网站"
@@ -93,7 +131,7 @@ export function AddFeedDialog({ open, feeds, onAddFeed, onClose }: AddFeedDialog
             <p className="text-[11px] font-semibold text-[#77797e]">推荐来源</p>
             <div className="mt-2 divide-y divide-[#e3e3de] border-y border-[#e3e3de]">
               {visibleRecommendations.map(feed => {
-                const added = addedIds.has(feed.id);
+                const added = addedIds.has(feed.id) || feeds.some(item => item.url === feed.url);
                 return (
                   <div key={feed.id} className="flex min-h-14 items-center gap-3 py-2">
                     <span
@@ -117,8 +155,15 @@ export function AddFeedDialog({ open, feeds, onAddFeed, onClose }: AddFeedDialog
                           ? "bg-[#e8f3ed] text-[#36775a]"
                           : "border border-[#d5d5cf] bg-white text-[#4d4f54] hover:border-[#bcbcb5]"
                       }`}
-                      disabled={added}
-                      onClick={() => onAddFeed(feed)}
+                      disabled={added || pending}
+                      onClick={() => {
+                        setPending(true);
+                        onAddFeed({ url: feed.url, title: feed.name })
+                          .catch(error =>
+                            setError(error instanceof Error ? error.message : "无法添加这个来源"),
+                          )
+                          .finally(() => setPending(false));
+                      }}
                     >
                       {added ? <Check size={14} /> : <Plus size={14} />}
                       {added ? "已添加" : "关注"}
@@ -145,7 +190,7 @@ export function AddFeedDialog({ open, feeds, onAddFeed, onClose }: AddFeedDialog
                 type="submit"
                 className="h-10 rounded-md bg-[#25272b] px-4 text-xs font-medium text-white hover:bg-[#36383d]"
               >
-                添加
+                {pending ? "添加中" : "添加"}
               </button>
             </div>
             <p className="mt-1.5 min-h-4 text-[11px] text-[#b7523c]">{error}</p>

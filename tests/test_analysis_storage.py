@@ -55,7 +55,7 @@ def test_analysis_storage_migrates_and_run_creation_is_idempotent(tmp_path: Path
             "SELECT MAX(version) FROM schema_migrations"
         ).fetchone()[0]
 
-    assert migration_version == 5
+    assert migration_version == 6
     assert {
         "analysis_runs",
         "analysis_steps",
