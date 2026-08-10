@@ -140,6 +140,26 @@ def test_default_selector_requires_llm_configuration(monkeypatch) -> None:
         LLMRelevanceSelector()
 
 
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), float("-inf")])
+def test_selection_rejects_nonfinite_timeout_before_reachable_selector_call(
+    timeout: float,
+) -> None:
+    item = normalized("https://example.com/article", "主题文章", "主题正文。")
+    calls: list[float] = []
+
+    class Selector:
+        def select(self, topic, items, *, limit, timeout):
+            calls.append(timeout)
+            return []
+
+    with pytest.raises(ValueError):
+        select_evidence("主题", [item], selector=Selector(), timeout=timeout)
+
+    assert calls == []
+    select_evidence("主题", [item], selector=Selector(), timeout=1)
+    assert calls == [1]
+
+
 def test_selector_output_cannot_invent_an_article() -> None:
     item = normalized("https://example.com/article", "主题文章", "主题正文。")
 

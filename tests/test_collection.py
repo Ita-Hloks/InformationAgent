@@ -6,12 +6,42 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Barrier, Thread
 from urllib.error import HTTPError, URLError
 
+import pytest
+
 from information_agent.cli import main
 from information_agent.collection import RawFeedEntry
 from information_agent.contracts import CollectionReport, ContentType, RunStatus
 from information_agent.orchestration.collection import collect
 from information_agent.selection import SelectedEvidence
 from information_agent.serialization import collection_report_to_payload
+
+
+@pytest.mark.parametrize(
+    ("timeout_name", "invalid_timeout"),
+    [
+        ("timeout_seconds", float("nan")),
+        ("timeout_seconds", float("inf")),
+        ("timeout_seconds", float("-inf")),
+        ("source_timeout_seconds", float("nan")),
+        ("source_timeout_seconds", float("inf")),
+        ("source_timeout_seconds", float("-inf")),
+    ],
+)
+def test_collect_rejects_nonfinite_timeouts_before_reachable_collector_call(
+    timeout_name: str, invalid_timeout: float
+) -> None:
+    calls: list[str] = []
+
+    def collector(feed: str, _: float) -> list[RawFeedEntry]:
+        calls.append(feed)
+        return []
+
+    with pytest.raises(ValueError):
+        collect("AI", ["feed"], collector=collector, **{timeout_name: invalid_timeout})
+
+    assert calls == []
+    collect("AI", ["feed"], collector=collector)
+    assert calls == ["feed"]
 
 
 def test_collect_uses_semantic_selector_before_reporting() -> None:
