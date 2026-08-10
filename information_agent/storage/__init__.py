@@ -13,8 +13,9 @@ from .models import (
     FeedState,
     PersistedCollection,
     PersistedPlanning,
+    ResearchRunSummary,
 )
-from .store import SQLiteCollectionStore, default_database_path
+from .store import RESEARCH_RUN_STATUSES, SQLiteCollectionStore, default_database_path
 
 __all__ = [
     "AnalysisArtifact",
@@ -29,6 +30,8 @@ __all__ = [
     "FeedState",
     "PersistedCollection",
     "PersistedPlanning",
+    "RESEARCH_RUN_STATUSES",
+    "ResearchRunSummary",
     "SQLiteCollectionStore",
     "default_database_path",
 ]
