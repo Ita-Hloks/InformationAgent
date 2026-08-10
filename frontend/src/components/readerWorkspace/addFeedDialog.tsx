@@ -90,7 +90,7 @@ export function AddFeedDialog({ open, feeds, onAddFeed, onClose }: AddFeedDialog
       }}
     >
       <section
-        className="w-full max-w-[560px] overflow-hidden rounded-lg border border-[var(--reader-workspace-border)] bg-[var(--reader-workspace-reader-surface)] shadow-2xl"
+        className="w-full max-w-[560px] overflow-hidden rounded-lg border border-[var(--reader-workspace-border)] bg-[var(--reader-workspace-raised)] shadow-2xl"
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-feed-title"

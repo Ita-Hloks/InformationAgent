@@ -28,8 +28,8 @@ export function ArticleList({
   onOpenSidebar,
 }: ArticleListProps) {
   return (
-    <section className="flex h-full min-h-0 min-w-0 flex-col border-r border-[var(--reader-workspace-border)] bg-[var(--reader-workspace-bg)]">
-      <header className="shrink-0 border-b border-[var(--reader-workspace-border)] bg-[var(--reader-workspace-list-surface)] px-3 py-3">
+    <section className="flex h-full min-h-0 min-w-0 flex-col border-r border-[var(--reader-workspace-border)] bg-[var(--reader-workspace-surface)]">
+      <header className="shrink-0 border-b border-[var(--reader-workspace-border)] bg-[var(--reader-workspace-surface)] px-3 py-3">
         <div className="flex h-8 items-center gap-2">
           <button
             type="button"
@@ -76,7 +76,10 @@ export function ArticleList({
         </label>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto" aria-label="文章列表">
+      <div
+        className="workspace-scroll flex min-h-0 flex-1 flex-col overflow-y-auto"
+        aria-label="文章列表"
+      >
         {articles.length === 0 ? (
           <div className="grid flex-1 place-items-center px-8 text-center">
             <div>
@@ -94,8 +97,8 @@ export function ArticleList({
                 key={article.id}
                 className={`group relative border-b border-[var(--reader-workspace-border)] transition-colors ${
                   selected
-                    ? "bg-[var(--reader-workspace-selected-surface)]"
-                    : "bg-[var(--reader-workspace-list-surface)] hover:bg-[var(--reader-workspace-selected-surface)]"
+                    ? "bg-[var(--reader-workspace-raised)]"
+                    : "bg-transparent hover:bg-[var(--reader-workspace-raised)]"
                 }`}
               >
                 {selected && <span className="absolute inset-y-0 left-0 w-0.5 bg-[#ef8354]" />}

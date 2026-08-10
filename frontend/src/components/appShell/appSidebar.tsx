@@ -91,7 +91,7 @@ export function AppSidebar({
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-3">
+      <div className="sidebar-scroll min-h-0 flex-1 overflow-y-auto px-2.5 py-3">
         <nav className="space-y-0.5" aria-label="阅读视图">
           {mainNavigation.map(item => {
             const Icon = item.icon;

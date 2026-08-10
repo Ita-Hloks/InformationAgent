@@ -32,7 +32,7 @@ export function ReaderPane({
 }: ReaderPaneProps) {
   if (!article) {
     return (
-      <section className="flex h-full min-h-0 min-w-0 flex-col bg-[var(--reader-workspace-reader-surface)]">
+      <section className="flex h-full min-h-0 min-w-0 flex-col bg-[var(--reader-workspace-surface)]">
         <header className="h-16 shrink-0 border-b border-[var(--reader-workspace-border)]" />
         <div className="grid min-h-0 flex-1 place-items-center px-6 text-center">
           <div>
@@ -45,7 +45,7 @@ export function ReaderPane({
   }
 
   return (
-    <section className="flex h-full min-h-0 min-w-0 flex-col bg-[var(--reader-workspace-reader-surface)]">
+    <section className="flex h-full min-h-0 min-w-0 flex-col bg-[var(--reader-workspace-surface)]">
       <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[var(--reader-workspace-border)] px-3 sm:px-4">
         <div className="flex items-center gap-1">
           <button
@@ -102,7 +102,7 @@ export function ReaderPane({
         <div className="flex items-center gap-1">
           <button
             type="button"
-            className="flex h-9 items-center gap-2 rounded-md border border-[var(--reader-workspace-border)] bg-white px-3 text-xs font-medium text-[#34363a] shadow-sm hover:border-[#c9c8c1] hover:bg-[var(--reader-workspace-list-surface)]"
+            className="flex h-9 items-center gap-2 rounded-md border border-[var(--reader-workspace-border)] bg-white px-3 text-xs font-medium text-[#34363a] shadow-sm hover:border-[#c9c8c1] hover:bg-[var(--reader-workspace-raised)]"
             onClick={onAsk}
           >
             <Bot size={16} className="text-[#b75f39]" />
@@ -119,7 +119,7 @@ export function ReaderPane({
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="workspace-scroll min-h-0 flex-1 overflow-y-auto">
         <article className="mx-auto w-full max-w-[760px] px-6 pt-10 pb-20 sm:px-10 sm:pt-14">
           <div className="flex items-center gap-3 text-xs text-[#77797e]">
             <span className="grid size-8 place-items-center rounded-md bg-[#24272c] text-[10px] font-semibold text-white">
@@ -169,10 +169,10 @@ export function ReaderPane({
           </div>
 
           <div className="mt-5 flex flex-wrap items-center gap-2">
-            <span className="rounded-md bg-[#ecece7] px-2.5 py-1 text-[11px] text-[#66686d]">
+            <span className="rounded-md bg-[var(--reader-workspace-hover)] px-2.5 py-1 text-[11px] text-[#66686d]">
               {article.category}
             </span>
-            <span className="rounded-md bg-[#ecece7] px-2.5 py-1 text-[11px] text-[#66686d]">
+            <span className="rounded-md bg-[var(--reader-workspace-hover)] px-2.5 py-1 text-[11px] text-[#66686d]">
               RSS
             </span>
           </div>
