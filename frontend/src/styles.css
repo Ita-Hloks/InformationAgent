@@ -11,7 +11,13 @@
     "Segoe UI",
     sans-serif;
   color: #242528;
-  background: #f3e8c6;
+  --reader-workspace-bg: #f3e8c6;
+  --reader-workspace-list-surface: #f8f0dc;
+  --reader-workspace-reader-surface: #fcf8ed;
+  --reader-workspace-selected-surface: #fffdf7;
+  --reader-workspace-hover: #f1e7cd;
+  --reader-workspace-border: #ded7c6;
+  background: var(--reader-workspace-bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }

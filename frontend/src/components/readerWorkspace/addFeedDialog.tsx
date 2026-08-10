@@ -90,7 +90,7 @@ export function AddFeedDialog({ open, feeds, onAddFeed, onClose }: AddFeedDialog
       }}
     >
       <section
-        className="w-full max-w-[560px] overflow-hidden rounded-lg border border-[#d8d8d2] bg-[#fbfbf8] shadow-2xl"
+        className="w-full max-w-[560px] overflow-hidden rounded-lg border border-[var(--reader-workspace-border)] bg-[var(--reader-workspace-reader-surface)] shadow-2xl"
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-feed-title"
@@ -104,7 +104,7 @@ export function AddFeedDialog({ open, feeds, onAddFeed, onClose }: AddFeedDialog
           </div>
           <button
             type="button"
-            className="grid size-8 place-items-center rounded-md text-[#6f7277] hover:bg-[#eeeeea]"
+            className="grid size-8 place-items-center rounded-md text-[#6f7277] hover:bg-[var(--reader-workspace-hover)]"
             aria-label="关闭添加来源"
             title="关闭添加来源"
             onClick={onClose}
