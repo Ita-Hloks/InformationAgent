@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from ..common import DEFAULT_LLM_TIMEOUT_SECONDS
 
 DEFAULT_RESULT_COUNT = 5
+MAX_RESULT_COUNT = 50
 DEFAULT_CONTENT_SIZE = "medium"
 DEFAULT_TIMEOUT_SECONDS = DEFAULT_LLM_TIMEOUT_SECONDS
 
@@ -38,7 +39,7 @@ class HostedSearchConfig:
             raise ValueError("SEARCH_LLM_BASE_URL must not contain a query or fragment")
         if parsed_base_url.path.rstrip("/").endswith("/chat/completions"):
             raise ValueError("SEARCH_LLM_BASE_URL 应填写服务根地址，不应包含 chat/completions")
-        if not 1 <= self.result_count <= 50:
+        if not 1 <= self.result_count <= MAX_RESULT_COUNT:
             raise ValueError("SEARCH_LLM_RESULT_COUNT 必须在 1 到 50 之间")
         if self.content_size not in SUPPORTED_CONTENT_SIZES:
             raise ValueError("SEARCH_LLM_CONTENT_SIZE 必须是 low、medium 或 high")

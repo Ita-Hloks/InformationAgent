@@ -10,7 +10,7 @@ from typing import Any
 from ..common import CallBackup, normalize_url
 from ..investigation import SearchPlan
 from .client import create_search_client
-from .config import HostedSearchConfig
+from .config import MAX_RESULT_COUNT, HostedSearchConfig
 from .models import SearchAnswer, SearchAnswerStatus, SearchSource
 
 MAX_SOURCE_TITLE_CHARS = 500
@@ -297,6 +297,8 @@ def _parse_sources(raw_sources: Any) -> tuple[SearchSource, ...]:
                 ),
             )
         )
+        if len(sources) == MAX_RESULT_COUNT:
+            break
     return tuple(sources)
 
 
