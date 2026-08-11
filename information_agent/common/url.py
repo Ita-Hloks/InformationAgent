@@ -31,6 +31,10 @@ def normalize_url(value: str) -> str | None:
     hostname = parsed.hostname.casefold()
     if ":" in hostname:
         hostname = f"[{hostname}]"
+    else:
+        hostname = _normalize_idna_hostname(hostname)
+        if hostname is None:
+            return None
     if port and not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
         hostname = f"{hostname}:{port}"
 
@@ -48,3 +52,16 @@ def normalize_url(value: str) -> str | None:
 def _is_tracking_key(key: str) -> bool:
     normalized = key.casefold()
     return normalized.startswith("utm_") or normalized in TRACKING_QUERY_KEYS
+
+
+def _normalize_idna_hostname(hostname: str) -> str | None:
+    """Encode a hostname as IDNA while rejecting malformed ASCII A-labels."""
+    try:
+        for label in hostname.split("."):
+            if label.startswith("xn--"):
+                decoded = label.encode("ascii").decode("idna")
+                if decoded.encode("idna").decode("ascii") != label:
+                    return None
+        return hostname.encode("idna").decode("ascii")
+    except UnicodeError:
+        return None
