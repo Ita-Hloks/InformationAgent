@@ -53,8 +53,11 @@ def parse_analysis(raw: str) -> Analysis:
     if not isinstance(payload, dict):
         raise ValueError("模型输出必须是 JSON 对象")
 
-    claims_payload = payload.get("claims", [])
-    uncertainties_payload = payload.get("uncertainties", [])
+    if "claims" not in payload or "uncertainties" not in payload:
+        raise ValueError("Model output must include claims and uncertainties")
+
+    claims_payload = payload["claims"]
+    uncertainties_payload = payload["uncertainties"]
     if not isinstance(claims_payload, list) or not isinstance(uncertainties_payload, list):
         raise ValueError("模型输出中的 claims 和 uncertainties 必须是数组")
 
