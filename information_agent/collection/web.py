@@ -48,9 +48,12 @@ _rate_limiter = DomainRateLimiter()
 def _guess_encoding(response) -> str | None:
     content_type = response.headers.get("Content-Type", "")
     for part in content_type.split(";"):
-        part = part.strip()
-        if part.startswith("charset="):
-            return part.removeprefix("charset=").strip()
+        name, separator, value = part.partition("=")
+        if separator and name.strip().casefold() == "charset":
+            encoding = value.strip()
+            if len(encoding) >= 2 and encoding[0] == encoding[-1] and encoding[0] in "\"'":
+                encoding = encoding[1:-1].strip()
+            return encoding
     return None
 
 

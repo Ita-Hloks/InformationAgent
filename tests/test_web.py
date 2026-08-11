@@ -2,7 +2,12 @@ import time
 from urllib.error import HTTPError, URLError
 
 from information_agent.collection import RawFeedEntry
-from information_agent.collection.web import _extract_text, augment_evidence, fetch_article
+from information_agent.collection.web import (
+    _extract_text,
+    _guess_encoding,
+    augment_evidence,
+    fetch_article,
+)
 from information_agent.contracts import ContentType
 
 
@@ -328,3 +333,44 @@ def test_domain_rate_limiter_separates_domains() -> None:
     start = time.monotonic()
     limiter.wait_if_needed("b.example")
     assert time.monotonic() - start < 0.5
+
+
+def test_guess_encoding_accepts_case_insensitive_whitespace_padded_name() -> None:
+    class FakeResponse:
+        headers = {"Content-Type": "text/html;  ChArSeT = gbk"}
+
+    assert _guess_encoding(FakeResponse()) == "gbk"
+
+
+def test_guess_encoding_unwraps_quoted_value() -> None:
+    class FakeResponse:
+        headers = {"Content-Type": 'text/html; charset = "  gbk  "'}
+
+    assert _guess_encoding(FakeResponse()) == "gbk"
+    FakeResponse.headers = {"Content-Type": "text/html; charset = '  gbk  '"}
+    assert _guess_encoding(FakeResponse()) == "gbk"
+
+
+def test_fetch_article_falls_back_from_empty_or_unsupported_charset(monkeypatch) -> None:
+    class FakeResponse:
+        headers: dict[str, str] = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def read(self, _: int) -> bytes:
+            return (
+                b"<html><body><article><p>This UTF-8 text is long enough to extract."
+                b"</p></article></body></html>"
+            )
+
+    monkeypatch.setattr(
+        "information_agent.collection.web.urlopen", lambda *args, **kwargs: FakeResponse()
+    )
+
+    for declared_charset in ("", "unsupported-charset"):
+        FakeResponse.headers = {"Content-Type": f"text/html; charset={declared_charset}"}
+        assert fetch_article(f"https://{declared_charset or 'empty'}.example/fallback") is not None
