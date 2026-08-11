@@ -5,12 +5,56 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 from information_agent.cli import main
 from information_agent.collection import FeedFetchResult, RawFeedEntry
 from information_agent.contracts import CollectionReport, RunStatus
 from information_agent.orchestration.ingestion import ingest
 from information_agent.selection import SelectedEvidence
 from information_agent.storage import PersistedCollection, SQLiteCollectionStore
+
+
+@pytest.mark.parametrize(
+    "invalid_input",
+    [
+        {"topic": " "},
+        {"feeds": []},
+        {"timeout_seconds": 0},
+        {"limit": 0},
+        {"max_workers": 0},
+        {"max_attempts": 0},
+        {"source_timeout_seconds": 0},
+    ],
+)
+def test_ingest_rejects_invalid_input_before_creating_a_run(
+    tmp_path: Path,
+    invalid_input: dict[str, object],
+) -> None:
+    database_path = tmp_path / "information-agent.db"
+    calls: list[str] = []
+
+    def collector(_: str, __: float) -> list[RawFeedEntry]:
+        calls.append("collector")
+        return []
+
+    class Selector:
+        def select(self, *args, **kwargs):
+            calls.append("selector")
+            return []
+
+    inputs = {"topic": "AI", "feeds": ["feed"]} | invalid_input
+
+    with pytest.raises(ValueError):
+        ingest(
+            **inputs,
+            database_path=database_path,
+            collector=collector,
+            relevance_selector=Selector(),
+        )
+
+    assert not database_path.exists()
+    assert calls == []
 
 
 def test_ingest_saves_all_normalized_articles_and_selected_evidence(tmp_path: Path) -> None:
