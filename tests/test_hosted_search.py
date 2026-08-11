@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 from types import SimpleNamespace
+
+import pytest
 
 from information_agent.investigation import QuestionKind, SearchPlan, SearchQuery
 from information_agent.search import HostedSearchAnswerer, HostedSearchConfig, SearchAnswerStatus
@@ -283,6 +286,24 @@ def test_hosted_search_answerer_creates_a_client_when_not_injected(monkeypatch) 
 
     assert answerer.client is client
     assert observed_configs == [_config()]
+
+
+@pytest.mark.parametrize("timeout", [0, -1, math.nan, math.inf, -math.inf])
+def test_hosted_search_answerer_rejects_non_positive_or_non_finite_timeout(timeout) -> None:
+    client = FakeClient(FakeResponse(answer=""))
+
+    with pytest.raises(ValueError):
+        HostedSearchAnswerer(_config(), client).answer(_plan(), timeout=timeout)
+
+    assert client.requests == []
+
+
+def test_hosted_search_answerer_clamps_valid_timeout() -> None:
+    client = FakeClient(FakeResponse(answer=""))
+
+    HostedSearchAnswerer(_config(), client).answer(_plan(), timeout=60)
+
+    assert client.requests[0]["timeout"] == 30
 
 
 def test_parse_sources_normalizes_and_bounds_untrusted_text() -> None:

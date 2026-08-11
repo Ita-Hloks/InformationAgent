@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 from dataclasses import asdict
@@ -37,7 +38,7 @@ class HostedSearchAnswerer:
         self.client = client or create_search_client(self.config)
 
     def answer(self, plan: SearchPlan, timeout: float) -> SearchAnswer:
-        if timeout <= 0:
+        if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("搜索回答时限必须大于 0")
 
         request_timeout = min(timeout, self.config.timeout_seconds)
