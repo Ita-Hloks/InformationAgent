@@ -1,4 +1,5 @@
 import asyncio
+import math
 from urllib.error import HTTPError
 
 import pytest
@@ -14,6 +15,80 @@ from information_agent.collection.rss import (
 )
 from information_agent.contracts import ContentType
 from information_agent.normalization import normalize_evidence
+
+
+@pytest.mark.parametrize("timeout", [0, -1, math.nan, math.inf, -math.inf])
+@pytest.mark.parametrize("fetcher", [fetch_feed, fetch_feed_with_cache])
+def test_sync_fetch_helpers_reject_invalid_timeouts_before_urlopen(
+    monkeypatch, fetcher, timeout
+) -> None:
+    network_calls: list[float] = []
+
+    def fake_urlopen(*_args, **kwargs) -> None:
+        network_calls.append(kwargs["timeout"])
+        raise HTTPError("https://example.com/rss.xml", 304, "Not Modified", {}, None)
+
+    monkeypatch.setattr("information_agent.collection.rss.urlopen", fake_urlopen)
+
+    with pytest.raises(ValueError, match="timeout must be a positive finite number"):
+        fetcher("https://example.com/rss.xml", timeout=timeout)
+
+    assert network_calls == []
+
+    fetcher("https://example.com/rss.xml", timeout=1)
+    assert network_calls == [1]
+
+
+@pytest.mark.parametrize("timeout", [0, -1, math.nan, math.inf, -math.inf])
+def test_fetch_feed_async_rejects_invalid_timeouts_before_session_access(
+    monkeypatch, timeout
+) -> None:
+    request_timeout_calls: list[float] = []
+    session_calls: list[tuple[str, object]] = []
+
+    class FakeContent:
+        async def iter_chunked(self, _: int):
+            yield b"<rss version='2.0'><channel /></rss>"
+
+    class FakeResponse:
+        headers = {"Content-Length": "0"}
+        content = FakeContent()
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class RequestContext:
+        async def __aenter__(self):
+            return FakeResponse()
+
+        async def __aexit__(self, *args) -> None:
+            return None
+
+    class FakeSession:
+        def get(self, url: str, **kwargs) -> RequestContext:
+            session_calls.append((url, kwargs["timeout"]))
+            return RequestContext()
+
+    def fake_client_timeout(*, total: float) -> object:
+        request_timeout_calls.append(total)
+        return object()
+
+    monkeypatch.setattr(
+        "information_agent.collection.rss.aiohttp.ClientTimeout", fake_client_timeout
+    )
+
+    with pytest.raises(ValueError, match="timeout must be a positive finite number"):
+        asyncio.run(fetch_feed_async("https://example.com/rss.xml", timeout, session=FakeSession()))
+
+    assert request_timeout_calls == []
+    assert session_calls == []
+
+    valid_result = asyncio.run(
+        fetch_feed_async("https://example.com/rss.xml", 1, session=FakeSession())
+    )
+    assert valid_result == []
+    assert request_timeout_calls == [1]
+    assert session_calls[0][0] == "https://example.com/rss.xml"
 
 
 def test_plain_text_removes_html_and_decodes_entities() -> None:

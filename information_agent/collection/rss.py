@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from html.parser import HTMLParser
 from typing import Any
@@ -15,6 +16,11 @@ from ._http import content_length_exceeds_limit
 from .models import FeedFetchResult, RawFeedEntry
 
 MAX_FEED_BYTES = 5 * 1024 * 1024
+
+
+def _validate_timeout(timeout: float) -> None:
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be a positive finite number")
 
 
 class _RSSTextParser(HTMLParser):
@@ -113,6 +119,7 @@ def fetch_feed_with_cache(
     etag: str | None = None,
     last_modified: str | None = None,
 ) -> FeedFetchResult:
+    _validate_timeout(timeout)
     normalized_feed_url = normalize_url(feed_url)
     if normalized_feed_url is None:
         raise ValueError("RSS 地址必须使用 http 或 https")
@@ -162,6 +169,7 @@ async def fetch_feed_async(
     session: aiohttp.ClientSession,
 ) -> list[RawFeedEntry]:
     """Fetch one RSS feed with an aiohttp total request timeout."""
+    _validate_timeout(timeout)
     normalized_feed_url = normalize_url(feed_url)
     if normalized_feed_url is None:
         raise ValueError("RSS 地址必须使用 http 或 https")
