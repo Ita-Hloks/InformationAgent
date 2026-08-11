@@ -1,9 +1,15 @@
+import asyncio
 from urllib.error import HTTPError
 
+import pytest
+
+from information_agent.collection._http import content_length_exceeds_limit
 from information_agent.collection.rss import (
+    MAX_FEED_BYTES,
     _entry_content,
     _plain_text,
     fetch_feed,
+    fetch_feed_async,
     fetch_feed_with_cache,
 )
 from information_agent.contracts import ContentType
@@ -182,3 +188,110 @@ def test_fetch_feed_with_cache_sends_validators_and_handles_not_modified(monkeyp
     assert result.feed_url == "https://example.com/rss.xml"
     assert result.not_modified is True
     assert result.entries == []
+
+
+def test_content_length_only_accepts_ascii_decimal_and_compares_without_int_conversion() -> None:
+    assert not content_length_exceeds_limit("0005", 5)
+    assert content_length_exceeds_limit("0006", 5)
+    assert content_length_exceeds_limit("9" * 10_000, MAX_FEED_BYTES)
+
+    for value in (None, "", "+6", "-6", " 6", "6 ", "0x6", "\u0666", "6.0"):
+        assert not content_length_exceeds_limit(value, 5)
+
+
+def test_fetch_feed_rejects_oversized_ascii_content_length_before_read(monkeypatch) -> None:
+    class FakeResponse:
+        headers = {"Content-Length": str(MAX_FEED_BYTES + 1)}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def read(self, _: int) -> bytes:
+            raise AssertionError("body should not be read")
+
+    monkeypatch.setattr(
+        "information_agent.collection.rss.urlopen", lambda *args, **kwargs: FakeResponse()
+    )
+
+    with pytest.raises(ValueError, match="5 MiB"):
+        fetch_feed("https://example.com/rss.xml")
+
+
+def test_fetch_feed_rejects_oversized_body_when_content_length_is_malformed(monkeypatch) -> None:
+    class FakeResponse:
+        headers = {"Content-Length": "+1"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def read(self, limit: int) -> bytes:
+            assert limit == MAX_FEED_BYTES + 1
+            return b"x" * limit
+
+    monkeypatch.setattr(
+        "information_agent.collection.rss.urlopen", lambda *args, **kwargs: FakeResponse()
+    )
+
+    with pytest.raises(ValueError, match="5 MiB"):
+        fetch_feed("https://example.com/rss.xml")
+
+
+def test_fetch_feed_async_rejects_oversized_content_length_before_read() -> None:
+    class FakeContent:
+        def iter_chunked(self, _: int):
+            raise AssertionError("body should not be read")
+
+    class FakeResponse:
+        headers = {"Content-Length": str(MAX_FEED_BYTES + 1)}
+        content = FakeContent()
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class RequestContext:
+        async def __aenter__(self) -> FakeResponse:
+            return FakeResponse()
+
+        async def __aexit__(self, *args) -> None:
+            return None
+
+    class FakeSession:
+        def get(self, *args, **kwargs) -> RequestContext:
+            return RequestContext()
+
+    with pytest.raises(ValueError, match="5 MiB"):
+        asyncio.run(fetch_feed_async("https://example.com/rss.xml", 5, session=FakeSession()))
+
+
+def test_fetch_feed_async_rejects_oversized_body_with_malformed_content_length() -> None:
+    class FakeContent:
+        async def iter_chunked(self, limit: int):
+            assert limit == 64 * 1024
+            yield b"x" * (MAX_FEED_BYTES + 1)
+
+    class FakeResponse:
+        headers = {"Content-Length": "0x1"}
+        content = FakeContent()
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class RequestContext:
+        async def __aenter__(self) -> FakeResponse:
+            return FakeResponse()
+
+        async def __aexit__(self, *args) -> None:
+            return None
+
+    class FakeSession:
+        def get(self, *args, **kwargs) -> RequestContext:
+            return RequestContext()
+
+    with pytest.raises(ValueError, match="5 MiB"):
+        asyncio.run(fetch_feed_async("https://example.com/rss.xml", 5, session=FakeSession()))

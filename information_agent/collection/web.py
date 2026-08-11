@@ -14,6 +14,7 @@ import trafilatura
 
 from ..common import normalize_url
 from ..contracts import ContentType
+from ._http import content_length_exceeds_limit
 from .models import RawFeedEntry
 
 MAX_PAGE_BYTES = 2 * 1024 * 1024
@@ -86,7 +87,7 @@ def fetch_article(
     try:
         with urlopen(request, timeout=timeout) as response:
             content_length = response.headers.get("Content-Length")
-            if content_length and int(content_length) > MAX_PAGE_BYTES:
+            if content_length_exceeds_limit(content_length, MAX_PAGE_BYTES):
                 return None
             payload = response.read(MAX_PAGE_BYTES + 1)
             guessed = _guess_encoding(response)
