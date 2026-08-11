@@ -8,6 +8,7 @@ import pytest
 
 from information_agent.investigation import QuestionKind, SearchPlan, SearchQuery
 from information_agent.search import HostedSearchAnswerer, HostedSearchConfig, SearchAnswerStatus
+from information_agent.search.config import MAX_RESULT_COUNT
 from information_agent.search.hosted import (
     MAX_SOURCE_PUBLISHED_AT_CHARS,
     MAX_SOURCE_REFERENCE_CHARS,
@@ -366,3 +367,27 @@ def test_parse_sources_retains_first_source_and_uses_untruncated_url_title_fallb
     assert [source.url for source in sources] == [url, "https://example.com/second"]
     assert sources[0].title == url
     assert sources[1].title == "Second"
+
+
+def test_parse_sources_caps_unique_valid_sources_without_processing_tail() -> None:
+    class UninspectableTail:
+        def __getattribute__(self, name: str) -> object:
+            raise AssertionError("tail source was inspected")
+
+    raw_sources = [
+        {"link": "not a URL"},
+        {"link": "https://example.com/0"},
+        {"link": "https://example.com/0"},
+        *[
+            {"title": f"Source {index}", "link": f"https://example.com/{index}"}
+            for index in range(1, MAX_RESULT_COUNT)
+        ],
+        UninspectableTail(),
+    ]
+
+    sources = _parse_sources(raw_sources)
+
+    assert len(sources) == MAX_RESULT_COUNT
+    assert [source.url for source in sources] == [
+        f"https://example.com/{index}" for index in range(MAX_RESULT_COUNT)
+    ]
