@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
@@ -355,7 +356,7 @@ def _validate_input(
         raise ValueError("研究主题不能为空")
     if not feeds:
         raise ValueError("至少需要一个 RSS 地址")
-    if timeout_seconds <= 0:
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("任务时限必须大于 0 秒")
     if limit <= 0:
         raise ValueError("证据数量上限必须大于 0")
@@ -363,5 +364,5 @@ def _validate_input(
         raise ValueError("并发数量必须大于 0")
     if max_attempts <= 0:
         raise ValueError("单个来源的尝试次数必须大于 0")
-    if source_timeout_seconds <= 0:
+    if not math.isfinite(source_timeout_seconds) or source_timeout_seconds <= 0:
         raise ValueError("单个来源的请求时限必须大于 0 秒")

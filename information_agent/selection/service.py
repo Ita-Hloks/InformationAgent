@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from ..common import DEFAULT_LLM_TIMEOUT_SECONDS
 from ..normalization import NormalizedArticle
 from .llm import LLMRelevanceSelector
@@ -75,5 +77,5 @@ def _validate_input(topic: str, limit: int, timeout: float) -> None:
         raise ValueError("研究主题不能为空")
     if limit <= 0:
         raise ValueError("证据数量上限必须大于 0")
-    if timeout <= 0:
+    if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("语义筛选时限必须大于 0 秒")
