@@ -141,6 +141,32 @@ def test_default_selector_requires_llm_configuration(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("timeout", [float("nan"), float("inf"), float("-inf")])
+def test_llm_selector_rejects_nonfinite_timeout_before_model_request(
+    monkeypatch, timeout: float
+) -> None:
+    item = normalized("https://example.com/article", "主题文章", "主题正文。")
+    requests: list[dict[str, object]] = []
+
+    def request_json_completion(**kwargs: object) -> str:
+        requests.append(kwargs)
+        return '{"decisions": [{"candidate_id": "candidate-1", "selected": true}]}'
+
+    monkeypatch.setattr(
+        "information_agent.selection.llm.request_json_completion", request_json_completion
+    )
+    selector = LLMRelevanceSelector(client=object())
+
+    with pytest.raises(ValueError):
+        selector.select("主题", [item], limit=1, timeout=timeout)
+
+    assert requests == []
+    selected = selector.select("主题", [item], limit=1, timeout=1)
+    assert [item.article for item in selected] == [item]
+    assert [item.evidence_id for item in selected] == [1]
+    assert 0 < requests[0]["timeout"] <= 1
+
+
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), float("-inf")])
 def test_selection_rejects_nonfinite_timeout_before_reachable_selector_call(
     timeout: float,
 ) -> None:
