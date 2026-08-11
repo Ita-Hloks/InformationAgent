@@ -16,6 +16,21 @@ def test_normalize_url_removes_tracking_and_rejects_non_http() -> None:
     assert normalize_url("mailto:editor@example.com") is None
 
 
+def test_normalize_url_canonicalizes_equivalent_idna_hostnames() -> None:
+    unicode_url = "HTTPS://B\u00dcCHER.Example:8443/article?item=1"
+    ascii_url = "https://XN--BCHER-KVA.example:8443/article?item=1"
+
+    assert normalize_url(unicode_url) == "https://xn--bcher-kva.example:8443/article?item=1"
+    assert normalize_url(ascii_url) == normalize_url(unicode_url)
+
+
+def test_normalize_url_rejects_invalid_idna_hostnames() -> None:
+    assert normalize_url("https://xn--.example/article") is None
+    assert normalize_url("https://xn--a.example/article") is None
+    assert normalize_url("https://xn--fa-hia.example/article") is None
+    assert normalize_url("https://\ud800.example/article") is None
+
+
 def test_normalize_evidence_filters_short_content_and_batches_long_content() -> None:
     items = [
         RawFeedEntry("https://example.com/short", "短内容", "不足二十字"),
