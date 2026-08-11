@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from .call_log import CallBackup
@@ -24,6 +25,9 @@ def request_json_completion(
     timeout: float,
     stage: str,
 ) -> str:
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be a positive finite number")
+
     backup = CallBackup.start(
         stage=stage,
         request={"model": model, "messages": messages},

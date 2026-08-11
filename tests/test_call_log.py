@@ -13,12 +13,16 @@ class FakeClient:
         self.content = content
         self.error = error
         self.chat = SimpleNamespace(completions=self)
+        self.with_options_calls = 0
+        self.create_calls = 0
 
     def with_options(self, *, timeout: float) -> FakeClient:
+        self.with_options_calls += 1
         assert timeout > 0
         return self
 
     def create(self, **_: object) -> SimpleNamespace:
+        self.create_calls += 1
         if self.error is not None:
             raise self.error
         message = SimpleNamespace(content=self.content)
@@ -28,9 +32,10 @@ class FakeClient:
 def test_request_json_completion_backs_up_request_and_response(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("INFORMATION_AGENT_LOG_DIR", str(tmp_path))
     messages = [{"role": "user", "content": "测试正文"}]
+    client = FakeClient(content='{"plans": []}')
 
     result = request_json_completion(
-        client=FakeClient(content='{"plans": []}'),
+        client=client,
         model="test-model",
         messages=messages,
         timeout=1,
@@ -45,6 +50,30 @@ def test_request_json_completion_backs_up_request_and_response(tmp_path, monkeyp
     assert payload["request"]["model"] == "test-model"
     assert payload["request"]["messages"] == messages
     assert payload["response"] == '{"plans": []}'
+    assert client.with_options_calls == 1
+    assert client.create_calls == 1
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf"), float("-inf")])
+def test_request_json_completion_rejects_invalid_timeout_before_side_effects(
+    tmp_path, monkeypatch, timeout
+) -> None:
+    log_dir = tmp_path / "call-backups"
+    monkeypatch.setenv("INFORMATION_AGENT_LOG_DIR", str(log_dir))
+    client = FakeClient()
+
+    with pytest.raises(ValueError, match="positive finite"):
+        request_json_completion(
+            client=client,
+            model="test-model",
+            messages=[{"role": "user", "content": "测试正文"}],
+            timeout=timeout,
+            stage="planning",
+        )
+
+    assert not log_dir.exists()
+    assert client.with_options_calls == 0
+    assert client.create_calls == 0
 
 
 def test_request_json_completion_backs_up_errors(tmp_path, monkeypatch) -> None:
