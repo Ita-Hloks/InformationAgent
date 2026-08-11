@@ -76,6 +76,25 @@ def test_parse_analysis_rejects_wrong_shape() -> None:
         parse_analysis('{"claims": {}, "uncertainties": []}')
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [{"uncertainties": []}, {"claims": []}, {}],
+)
+def test_parse_analysis_rejects_missing_required_fields(
+    payload: dict[str, list[object]],
+) -> None:
+    with pytest.raises(ValueError, match="claims and uncertainties"):
+        parse_analysis(json.dumps(payload))
+
+
+def test_parse_analysis_accepts_explicit_empty_required_fields() -> None:
+    result = parse_analysis('{"claims": [], "uncertainties": []}')
+
+    assert result.summary == ""
+    assert result.claims == []
+    assert result.uncertainties == []
+
+
 def test_llm_safe_text_removes_code_fences_and_inline_code() -> None:
     assert llm_safe_text("事实\n```python\nprint('secret')\n```\n结论 `x < 1`") == "事实\n结论"
 
