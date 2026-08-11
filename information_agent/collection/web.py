@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -70,6 +71,9 @@ def fetch_article(
     *,
     timeout: float = 15,
 ) -> str | None:
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be a positive finite number")
+
     normalized_url = normalize_url(article_url)
     if normalized_url is None:
         return None
@@ -129,6 +133,11 @@ def augment_evidence(
     timeout: float = 15,
     max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> list[RawFeedEntry]:
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be a positive finite number")
+    if max_workers <= 0:
+        raise ValueError("max_workers must be positive")
+
     to_fetch: list[tuple[int, RawFeedEntry]] = []
     results: dict[int, RawFeedEntry] = {}
 
