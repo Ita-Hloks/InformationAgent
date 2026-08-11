@@ -32,6 +32,10 @@ class HostedSearchConfig:
         parsed_base_url = urlparse(self.base_url)
         if parsed_base_url.scheme not in {"http", "https"} or not parsed_base_url.netloc:
             raise ValueError("SEARCH_LLM_BASE_URL 必须是有效的 HTTP(S) 地址")
+        if parsed_base_url.username is not None or parsed_base_url.password is not None:
+            raise ValueError("SEARCH_LLM_BASE_URL must not contain userinfo")
+        if "?" in self.base_url or "#" in self.base_url:
+            raise ValueError("SEARCH_LLM_BASE_URL must not contain a query or fragment")
         if parsed_base_url.path.rstrip("/").endswith("/chat/completions"):
             raise ValueError("SEARCH_LLM_BASE_URL 应填写服务根地址，不应包含 chat/completions")
         if not 1 <= self.result_count <= 50:
