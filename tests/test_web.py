@@ -3,6 +3,7 @@ from urllib.error import HTTPError, URLError
 
 from information_agent.collection import RawFeedEntry
 from information_agent.collection.web import (
+    MAX_PAGE_BYTES,
     _extract_text,
     _guess_encoding,
     augment_evidence,
@@ -161,7 +162,7 @@ def test_fetch_article_respects_max_page_bytes(monkeypatch) -> None:
             return None
 
         def read(self, _: int) -> bytes:
-            return b""
+            raise AssertionError("body should not be read")
 
     def fake_urlopen(request, timeout: float) -> FakeResponse:
         return FakeResponse()
@@ -169,6 +170,27 @@ def test_fetch_article_respects_max_page_bytes(monkeypatch) -> None:
     monkeypatch.setattr("information_agent.collection.web.urlopen", fake_urlopen)
 
     assert fetch_article("https://example.com/huge") is None
+
+
+def test_fetch_article_rejects_oversized_body_with_malformed_content_length(monkeypatch) -> None:
+    class FakeResponse:
+        headers = {"Content-Length": " 1"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def read(self, limit: int) -> bytes:
+            assert limit == MAX_PAGE_BYTES + 1
+            return b"x" * limit
+
+    monkeypatch.setattr(
+        "information_agent.collection.web.urlopen", lambda *args, **kwargs: FakeResponse()
+    )
+
+    assert fetch_article("https://example.com/malformed-content-length") is None
 
 
 def test_augment_evidence_skips_non_summary_items() -> None:

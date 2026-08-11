@@ -11,6 +11,7 @@ import feedparser
 
 from ..common import normalize_url
 from ..contracts import ContentType
+from ._http import content_length_exceeds_limit
 from .models import FeedFetchResult, RawFeedEntry
 
 MAX_FEED_BYTES = 5 * 1024 * 1024
@@ -128,7 +129,7 @@ def fetch_feed_with_cache(
     try:
         with urlopen(request, timeout=timeout) as response:
             content_length = response.headers.get("Content-Length")
-            if content_length and int(content_length) > MAX_FEED_BYTES:
+            if content_length_exceeds_limit(content_length, MAX_FEED_BYTES):
                 raise ValueError("RSS 响应超过 5 MiB 限制")
             payload = response.read(MAX_FEED_BYTES + 1)
             response_etag = _header(response.headers, "ETag")
@@ -173,7 +174,7 @@ async def fetch_feed_async(
     ) as response:
         response.raise_for_status()
         content_length = response.headers.get("Content-Length")
-        if content_length and int(content_length) > MAX_FEED_BYTES:
+        if content_length_exceeds_limit(content_length, MAX_FEED_BYTES):
             raise ValueError("RSS 响应超过 5 MiB 限制")
         payload = await _read_feed_payload(response)
 
