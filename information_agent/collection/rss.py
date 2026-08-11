@@ -223,8 +223,8 @@ def _parse_feed(payload: bytes, normalized_feed_url: str) -> list[RawFeedEntry]:
 
 def _entry_content(entry: dict[str, Any]) -> tuple[str, ContentType]:
     content_blocks = entry.get("content") or []
-    if content_blocks:
-        content = _plain_text(str(content_blocks[0].get("value", "")))
+    for content_block in content_blocks:
+        content = _plain_text(str(content_block.get("value", "")))
         if content:
             return content, ContentType.RSS_CONTENT
     summary = _plain_text(str(entry.get("summary") or entry.get("description") or ""))

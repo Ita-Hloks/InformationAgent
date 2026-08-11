@@ -1,6 +1,11 @@
 from urllib.error import HTTPError
 
-from information_agent.collection.rss import _plain_text, fetch_feed, fetch_feed_with_cache
+from information_agent.collection.rss import (
+    _entry_content,
+    _plain_text,
+    fetch_feed,
+    fetch_feed_with_cache,
+)
 from information_agent.contracts import ContentType
 from information_agent.normalization import normalize_evidence
 
@@ -22,6 +27,36 @@ def test_plain_text_ignores_embedded_scripts_and_styles() -> None:
 def test_plain_text_ignores_code_elements() -> None:
     html = "<p>正文</p><pre>print('secret')</pre><p>结论 <code>x &lt; 1</code></p>"
     assert _plain_text(html) == "正文\n结论"
+
+
+def test_entry_content_uses_later_non_empty_content_block() -> None:
+    content, content_type = _entry_content(
+        {"content": [{"value": "<p> </p>"}, {"value": "<p>完整正文</p>"}]}
+    )
+
+    assert content == "完整正文"
+    assert content_type is ContentType.RSS_CONTENT
+
+
+def test_entry_content_falls_back_to_summary_when_blocks_are_empty() -> None:
+    content, content_type = _entry_content(
+        {
+            "content": [{"value": ""}, {"value": "<script>empty</script>"}],
+            "summary": "<p>摘要正文</p>",
+        }
+    )
+
+    assert content == "摘要正文"
+    assert content_type is ContentType.RSS_SUMMARY
+
+
+def test_entry_content_uses_earliest_non_empty_content_block() -> None:
+    content, content_type = _entry_content(
+        {"content": [{"value": "<p>第一个正文</p>"}, {"value": "<p>第二个正文</p>"}]}
+    )
+
+    assert content == "第一个正文"
+    assert content_type is ContentType.RSS_CONTENT
 
 
 def test_fetch_feed_keeps_each_entry_as_a_separate_article(monkeypatch) -> None:
