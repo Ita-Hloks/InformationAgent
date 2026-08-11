@@ -4,6 +4,7 @@ import pytest
 
 from information_agent.analysis.llm import _analysis_input, parse_analysis
 from information_agent.collection import RawFeedEntry
+from information_agent.common.text import split_content
 from information_agent.normalization import llm_safe_text, normalize_evidence
 from information_agent.selection import SelectedEvidence
 
@@ -77,6 +78,22 @@ def test_parse_analysis_rejects_wrong_shape() -> None:
 
 def test_llm_safe_text_removes_code_fences_and_inline_code() -> None:
     assert llm_safe_text("事实\n```python\nprint('secret')\n```\n结论 `x < 1`") == "事实\n结论"
+
+
+@pytest.mark.parametrize("content", ["", "content"])
+@pytest.mark.parametrize("batch_chars", [0, -1])
+def test_split_content_rejects_non_positive_batch_chars(content: str, batch_chars: int) -> None:
+    with pytest.raises(ValueError, match="batch_chars must be positive"):
+        split_content(content, batch_chars)
+
+
+def test_split_content_preserves_content_order_and_natural_boundaries() -> None:
+    content = "first.\nsecond.\nthird"
+
+    chunks = split_content(content, batch_chars=10)
+
+    assert chunks == ["first.\n", "second.\n", "third"]
+    assert "".join(chunks) == content
 
 
 def test_parse_analysis_omits_non_string_text_and_uncertainties() -> None:
