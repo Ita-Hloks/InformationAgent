@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from information_agent.search import HostedSearchConfig
+from information_agent.search import HostedSearchAnswerer, HostedSearchConfig
 
 
 def test_hosted_search_config_reads_defaults() -> None:
@@ -115,3 +115,50 @@ def test_hosted_search_config_requires_http_base_url(base_url: str) -> None:
                 "SEARCH_LLM_BASE_URL": base_url,
             }
         )
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://user:password@api.example.com/v1",
+        "https://%75ser:%70assword@api.example.com/v1",
+        "https://api.example.com/v1?query=value",
+        "https://api.example.com/v1?",
+        "https://api.example.com/v1#fragment",
+        "https://api.example.com/v1#",
+    ],
+)
+def test_hosted_search_config_rejects_unsafe_service_roots_before_client_creation(
+    base_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[HostedSearchConfig] = []
+
+    def failing_factory(config: HostedSearchConfig) -> object:
+        calls.append(config)
+        raise AssertionError("client factory was called")
+
+    monkeypatch.setattr("information_agent.search.hosted.create_search_client", failing_factory)
+
+    with pytest.raises(ValueError, match="SEARCH_LLM_BASE_URL"):
+        HostedSearchAnswerer(HostedSearchConfig("secret", "search-model", base_url))
+
+    assert calls == []
+
+    config = HostedSearchConfig("secret", "search-model", "https://api.example.com/v1")
+    with pytest.raises(AssertionError, match="client factory was called"):
+        HostedSearchAnswerer(config)
+    assert calls == [config]
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://api.example.com/v1",
+        "https://api.example.com/v1/%E6%90%9C%E7%B4%A2",
+        "https://api.example.com/v1/",
+    ],
+)
+def test_hosted_search_config_accepts_safe_service_roots(base_url: str) -> None:
+    config = HostedSearchConfig("secret", "search-model", base_url)
+
+    assert config.base_url == base_url
