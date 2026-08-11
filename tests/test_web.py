@@ -1,5 +1,9 @@
+import math
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.error import HTTPError, URLError
+
+import pytest
 
 from information_agent.collection import RawFeedEntry
 from information_agent.collection.web import (
@@ -133,6 +137,36 @@ def test_fetch_article_returns_none_for_non_http_url() -> None:
     assert fetch_article("not-a-url") is None
 
 
+@pytest.mark.parametrize("timeout", [0, -1, math.nan, math.inf, -math.inf])
+def test_fetch_article_rejects_invalid_timeout_before_downstream_calls(
+    monkeypatch, timeout
+) -> None:
+    rate_limiter_calls: list[str] = []
+    network_calls: list[float] = []
+
+    def fake_rate_limiter(domain: str) -> None:
+        rate_limiter_calls.append(domain)
+
+    def fake_urlopen(request, timeout: float) -> None:
+        network_calls.append(timeout)
+        raise URLError("unavailable")
+
+    monkeypatch.setattr(
+        "information_agent.collection.web._rate_limiter.wait_if_needed", fake_rate_limiter
+    )
+    monkeypatch.setattr("information_agent.collection.web.urlopen", fake_urlopen)
+
+    with pytest.raises(ValueError, match="timeout must be a positive finite number"):
+        fetch_article("https://example.com/article", timeout=timeout)
+
+    assert rate_limiter_calls == []
+    assert network_calls == []
+
+    assert fetch_article("https://example.com/article", timeout=1) is None
+    assert rate_limiter_calls == ["example.com"]
+    assert network_calls == [1]
+
+
 def test_fetch_article_returns_none_on_network_error(monkeypatch) -> None:
     def fake_urlopen(request, timeout: float) -> None:
         raise URLError("连接失败")
@@ -206,6 +240,55 @@ def test_augment_evidence_skips_non_summary_items() -> None:
     assert len(result) == 1
     assert result[0].content_type is ContentType.RSS_CONTENT
     assert result[0].content == "这是完整的正文内容。"
+
+
+@pytest.mark.parametrize(
+    "timeout,max_workers",
+    [(0, 1), (-1, 1), (math.nan, 1), (math.inf, 1), (-math.inf, 1), (1, 0), (1, -1)],
+)
+def test_augment_evidence_rejects_invalid_resources_before_downstream_calls(
+    monkeypatch, timeout, max_workers
+) -> None:
+    pool_calls: list[int] = []
+
+    def fake_pool(*args, **kwargs):
+        pool_calls.append(kwargs["max_workers"])
+        return ThreadPoolExecutor(*args, **kwargs)
+
+    monkeypatch.setattr("information_agent.collection.web.ThreadPoolExecutor", fake_pool)
+    all_content = RawFeedEntry(
+        "https://example.com/content",
+        "Complete",
+        "Full article",
+        content_type=ContentType.RSS_CONTENT,
+    )
+
+    for items in ([], [object()], [all_content]):
+        with pytest.raises(ValueError):
+            augment_evidence(items, timeout=timeout, max_workers=max_workers)
+
+    assert pool_calls == []
+
+    monkeypatch.setattr(
+        "information_agent.collection.web.fetch_article",
+        lambda *_args, **_kwargs: "Fetched article",
+    )
+    result = augment_evidence(
+        [
+            RawFeedEntry(
+                "https://example.com/summary",
+                "Summary",
+                "Brief",
+                content_type=ContentType.RSS_SUMMARY,
+            )
+        ],
+        timeout=1,
+        max_workers=1,
+    )
+
+    assert pool_calls == [1]
+    assert result[0].content == "Fetched article"
+    assert result[0].content_type is ContentType.RSS_CONTENT
 
 
 def test_augment_evidence_fetches_for_summary_items(monkeypatch) -> None:
