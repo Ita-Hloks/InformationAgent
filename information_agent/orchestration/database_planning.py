@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -35,8 +36,8 @@ def plan_run(
 ) -> PersistedPlanning:
     """从已持久化证据生成问题计划，并将结果写回同一数据库。"""
 
-    if timeout_seconds <= 0:
-        raise ValueError("任务时限必须大于 0 秒")
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be a finite positive number")
 
     store = SQLiteCollectionStore(database_path or default_database_path())
     topic, evidence = store.load_planning_input(run_id)

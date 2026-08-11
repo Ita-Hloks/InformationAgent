@@ -5,6 +5,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 from information_agent.cli import main
 from information_agent.collection import RawFeedEntry
 from information_agent.contracts import RunStatus
@@ -16,6 +18,7 @@ from information_agent.investigation import (
     SearchPlan,
     SearchQuery,
 )
+from information_agent.orchestration import database_planning
 from information_agent.orchestration.database_planning import plan_run
 from information_agent.orchestration.ingestion import ingest
 from information_agent.selection import SelectedEvidence
@@ -25,6 +28,8 @@ from information_agent.storage import PersistedPlanning, SQLiteCollectionStore
 class RecordingPlanner:
     def __init__(self) -> None:
         self.evidence: list[SelectedEvidence] = []
+        self.calls = 0
+        self.timeout: float | None = None
 
     def plan(
         self,
@@ -42,6 +47,8 @@ class RecordingPlanner:
     ) -> PlanningResult:
         assert topic == "AI 芯片"
         assert timeout > 0
+        self.calls += 1
+        self.timeout = timeout
         self.evidence = evidence
         plan = SearchPlan(
             evidence_id=evidence[0].evidence_id,
@@ -114,10 +121,12 @@ def test_plan_run_loads_database_evidence_and_saves_plans(tmp_path: Path) -> Non
     result = plan_run(
         collection.run_id,
         database_path=database_path,
+        timeout_seconds=12.5,
         planner=planner,
     )
 
     assert result.report.status is RunStatus.COMPLETED
+    assert planner.timeout == 12.5
     assert planner.evidence[0].content.startswith("厂商发布了新一代 AI 芯片")
     assert result.report.articles[0] is planner.evidence[0]
     assert result.report.plans[0].question == "推理成本降幅采用了什么比较基线？"
@@ -217,6 +226,43 @@ def test_plan_run_rejects_collection_that_is_still_running(tmp_path: Path) -> No
         assert str(exc) == f"研究运行尚未产生可规划结果：{run_id}"
     else:
         raise AssertionError("尚未完成粗处理的运行必须被拒绝")
+
+
+@pytest.mark.parametrize("timeout_seconds", [0, -1, float("nan"), float("inf"), float("-inf")])
+def test_plan_run_rejects_invalid_timeout_before_storage_or_planner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    timeout_seconds: float,
+) -> None:
+    database_path = tmp_path / "information-agent.db"
+    supplied_planner = RecordingPlanner()
+    storage_calls: list[object] = []
+    default_planner_calls: list[object] = []
+
+    def unexpected_store(*args: object) -> None:
+        storage_calls.append(args)
+        raise AssertionError("storage must not be constructed")
+
+    def unexpected_default_planner() -> None:
+        default_planner_calls.append(None)
+        raise AssertionError("default planner must not be constructed")
+
+    monkeypatch.setattr(database_planning, "SQLiteCollectionStore", unexpected_store)
+    monkeypatch.setattr(database_planning, "LLMQuestionPlanner", unexpected_default_planner)
+
+    for planner in (supplied_planner, None):
+        with pytest.raises(ValueError, match="finite positive"):
+            database_planning.plan_run(
+                "run-id",
+                database_path=database_path,
+                timeout_seconds=timeout_seconds,
+                planner=planner,
+            )
+
+    assert storage_calls == []
+    assert default_planner_calls == []
+    assert supplied_planner.calls == 0
+    assert not database_path.exists()
 
 
 def test_plan_run_cli_accepts_ingestion_run_id(monkeypatch, capsys) -> None:
