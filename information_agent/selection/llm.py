@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -60,6 +61,8 @@ class LLMRelevanceSelector:
     ) -> list[SelectedEvidence]:
         if not items:
             return []
+        if not math.isfinite(timeout):
+            raise ValueError("语义筛选时限必须是有限数值")
         if timeout <= 0:
             raise TimeoutError("语义筛选超时")
 
