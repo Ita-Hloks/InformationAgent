@@ -29,6 +29,9 @@ def llm_safe_text(value: str) -> str:
 
 
 def split_content(content: str, batch_chars: int) -> list[str]:
+    if batch_chars <= 0:
+        raise ValueError("batch_chars must be positive")
+
     chunks: list[str] = []
     start = 0
     while start < len(content):
