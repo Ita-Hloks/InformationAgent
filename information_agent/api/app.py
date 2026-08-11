@@ -80,7 +80,7 @@ def create_app(service: ReaderService | None = None) -> FastAPI:
     def get_article(article_id: str) -> ArticleResponse:
         try:
             return article_response(reader.get_article(article_id))
-        except FeedNotFoundError as exc:
+        except ArticleNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return app

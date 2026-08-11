@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
+from math import inf, nan
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from information_agent.api import create_app
 from information_agent.collection import FeedFetchResult, RawFeedEntry
 from information_agent.contracts import PROJECT_TIMEZONE, ContentType
-from information_agent.reader import ReaderService
+from information_agent.reader import ArticleNotFoundError, ReaderService
 
 
 def _fetcher(feed_url: str, timeout: float, **_: object) -> FeedFetchResult:
@@ -99,3 +101,57 @@ def test_feed_api_reports_invalid_and_unavailable_sources(tmp_path: Path) -> Non
 
     unknown = client.get("/api/articles", params={"feed_id": "missing"})
     assert unknown.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("limit", "offset"),
+    [(0, 0), (201, 0), (1, -1), (200, -1)],
+)
+def test_reader_rejects_invalid_pagination_before_listing(
+    tmp_path: Path, limit: int, offset: int
+) -> None:
+    service = ReaderService(tmp_path / "api.db", fetcher=_fetcher)
+    listing_calls = []
+
+    def list_reader_articles(**kwargs: object) -> list[object]:
+        listing_calls.append(kwargs)
+        return []
+
+    service.store.list_reader_articles = list_reader_articles
+
+    with pytest.raises(ValueError):
+        service.list_articles(limit=limit, offset=offset)
+
+    service.list_articles(limit=1, offset=0)
+    service.list_articles(limit=200, offset=0)
+    assert len(listing_calls) == 2
+
+
+@pytest.mark.parametrize("timeout", [0, -1, nan, inf, -inf])
+def test_reader_rejects_invalid_feed_timeout_before_fetch(tmp_path: Path, timeout: float) -> None:
+    fetcher_called = False
+
+    def fetcher(*_: object, **__: object) -> FeedFetchResult:
+        nonlocal fetcher_called
+        fetcher_called = True
+        return _fetcher("https://example.com/rss.xml", 1)
+
+    with pytest.raises(ValueError):
+        ReaderService(tmp_path / "api.db", feed_timeout_seconds=timeout, fetcher=fetcher)
+
+    assert fetcher_called is False
+    service = ReaderService(tmp_path / "api.db", feed_timeout_seconds=1, fetcher=fetcher)
+    service.subscribe("https://example.com/rss.xml")
+    assert fetcher_called is True
+
+
+def test_missing_article_uses_article_not_found_error_and_returns_404(
+    tmp_path: Path,
+) -> None:
+    service = ReaderService(tmp_path / "api.db", fetcher=_fetcher)
+
+    with pytest.raises(ArticleNotFoundError):
+        service.get_article("missing")
+
+    response = TestClient(create_app(service)).get("/api/articles/missing")
+    assert response.status_code == 404

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -38,6 +39,8 @@ class ReaderService:
         feed_timeout_seconds: float = 15,
         fetcher: FeedFetcher = fetch_feed_with_cache,
     ) -> None:
+        if not math.isfinite(feed_timeout_seconds) or feed_timeout_seconds <= 0:
+            raise ValueError("feed_timeout_seconds must be a finite positive number")
         self.store = SQLiteCollectionStore(database_path or default_database_path())
         self.feed_timeout_seconds = feed_timeout_seconds
         self.fetcher = fetcher
@@ -95,6 +98,10 @@ class ReaderService:
         limit: int = 100,
         offset: int = 0,
     ) -> list[ReaderArticle]:
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
         if feed_id is not None and self.store.get_subscription(feed_id) is None:
             raise FeedNotFoundError(f"不存在的订阅：{feed_id}")
         return self.store.list_reader_articles(feed_id=feed_id, limit=limit, offset=offset)
@@ -102,7 +109,7 @@ class ReaderService:
     def get_article(self, article_id: str) -> ReaderArticle:
         article = self.store.get_reader_article(article_id)
         if article is None:
-            raise FeedNotFoundError(f"不存在的文章：{article_id}")
+            raise ArticleNotFoundError(f"不存在的文章：{article_id}")
         return article
 
     def update_article_states(
