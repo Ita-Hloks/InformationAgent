@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from datetime import datetime
 from math import inf, nan
 from pathlib import Path
@@ -7,10 +8,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from information_agent.agent import AgentReport, AgentStopReason
 from information_agent.api import create_app
 from information_agent.collection import FeedFetchResult, RawFeedEntry
-from information_agent.contracts import PROJECT_TIMEZONE, ContentType
+from information_agent.contracts import PROJECT_TIMEZONE, CollectionReport, ContentType, RunStatus
 from information_agent.reader import ArticleNotFoundError, ReaderService
+from information_agent.storage import PersistedCollection, SQLiteCollectionStore
 
 
 def _fetcher(feed_url: str, timeout: float, **_: object) -> FeedFetchResult:
@@ -155,3 +158,101 @@ def test_missing_article_uses_article_not_found_error_and_returns_404(
 
     response = TestClient(create_app(service)).get("/api/articles/missing")
     assert response.status_code == 404
+
+
+def test_research_runs_api_lists_persisted_runs(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "api.db"
+    run_id = SQLiteCollectionStore(database_path).start_run("AI", ["https://example.com/rss.xml"])
+
+    response = _client(tmp_path).get("/api/research/runs")
+
+    assert response.status_code == 200
+    assert response.json()["runs"][0]["run_id"] == run_id
+    assert response.json()["runs"][0]["topic"] == "AI"
+
+
+def test_research_ingest_api_returns_persisted_collection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_ingest(topic: str, feeds: list[str], **kwargs: object) -> PersistedCollection:
+        calls.append({"topic": topic, "feeds": feeds, **kwargs})
+        return PersistedCollection(
+            run_id="run-api",
+            report=CollectionReport(topic, RunStatus.COMPLETED, []),
+        )
+
+    api_app_module = importlib.import_module("information_agent.api.app")
+    monkeypatch.setattr(api_app_module, "ingest", fake_ingest)
+
+    response = _client(tmp_path).post(
+        "/api/research/ingest",
+        json={
+            "topic": "AI",
+            "feeds": ["https://example.com/rss.xml"],
+            "timeout_seconds": 12,
+            "limit": 3,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["run_id"] == "run-api"
+    assert response.json()["status"] == "completed"
+    assert calls == [
+        {
+            "topic": "AI",
+            "feeds": ["https://example.com/rss.xml"],
+            "database_path": tmp_path / "api.db",
+            "timeout_seconds": 12.0,
+            "limit": 3,
+        }
+    ]
+
+
+def test_research_agent_api_returns_agent_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_agent_run(run_id: str, **kwargs: object) -> AgentReport:
+        calls.append({"run_id": run_id, **kwargs})
+        return AgentReport(
+            run_id=run_id,
+            topic="AI",
+            status=RunStatus.COMPLETED,
+            articles=[],
+            plans=[],
+            answers=[],
+            final_answer="已完成核查。",
+            evidence_ids=(),
+            uncertainties=(),
+            steps=1,
+            stop_reason=AgentStopReason.FINISHED,
+            analysis_run_id="analysis-api",
+        )
+
+    api_app_module = importlib.import_module("information_agent.api.app")
+    monkeypatch.setattr(api_app_module, "agent_run", fake_agent_run)
+
+    response = _client(tmp_path).post(
+        "/api/research/runs/run-api/agent",
+        json={"timeout_seconds": 30, "max_steps": 2, "max_attempts": 1},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["analysis_run_id"] == "analysis-api"
+    assert response.json()["final_answer"] == "已完成核查。"
+    assert calls == [
+        {
+            "run_id": "run-api",
+            "database_path": tmp_path / "api.db",
+            "timeout_seconds": 30.0,
+            "max_steps": 2,
+            "max_attempts": 1,
+        }
+    ]

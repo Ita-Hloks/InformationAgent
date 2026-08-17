@@ -180,6 +180,12 @@ log/
 
 # 本地粗处理数据库
 /data/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 
 # 独立前端本地生成内容
 frontend/node_modules/

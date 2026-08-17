@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from ..storage import FeedSubscription, ReaderArticle, ReaderArticleState
@@ -53,6 +55,23 @@ class ArticleResponse(BaseModel):
     content: str
     is_read: bool
     is_saved: bool
+
+
+class ResearchIngestRequest(BaseModel):
+    topic: str = Field(min_length=1, max_length=200)
+    feeds: list[str] = Field(min_length=1, max_length=20)
+    timeout_seconds: float = Field(default=300, gt=0, le=600)
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class AgentRunRequest(BaseModel):
+    timeout_seconds: float = Field(default=180, gt=0, le=600)
+    max_steps: int = Field(default=3, ge=1, le=10)
+    max_attempts: int = Field(default=3, ge=1, le=10)
+
+
+class ResearchRunsResponse(BaseModel):
+    runs: list[dict[str, Any]]
 
 
 def feed_response(subscription: FeedSubscription) -> FeedResponse:

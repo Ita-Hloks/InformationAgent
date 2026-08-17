@@ -1,4 +1,4 @@
-import type { Article, Feed } from "../types";
+import type { AgentReport, Article, Feed, ResearchIngestResult, ResearchRun } from "../types";
 
 type FeedPayload = {
   id: string;
@@ -26,6 +26,17 @@ type ArticleStatePayload = {
   read_at: string | null;
   saved_at: string | null;
   updated_at: string;
+};
+type ResearchRunPayload = {
+  run_id: string;
+  topic: string;
+  status: ResearchRun["status"];
+  started_at: string;
+  finished_at?: string;
+  feed_count: number;
+  snapshot_count: number;
+  selected_evidence_count: number;
+  collection_error_count: number;
 };
 
 export type ArticleStateUpdate = {
@@ -107,6 +118,55 @@ export async function updateArticleStates(
       article_ids: articleIds,
       is_read: update.isRead,
       is_saved: update.isSaved,
+    }),
+  });
+}
+
+function toResearchRun(run: ResearchRunPayload): ResearchRun {
+  return {
+    id: run.run_id,
+    title: run.topic,
+    status: run.status,
+    articleCount: run.selected_evidence_count,
+    feedCount: run.feed_count,
+    errorCount: run.collection_error_count,
+    startedAt: run.started_at,
+    finishedAt: run.finished_at,
+  };
+}
+
+export async function getResearchRuns(): Promise<ResearchRun[]> {
+  const payload = await request<{ runs: ResearchRunPayload[] }>("/api/research/runs");
+  return payload.runs.map(toResearchRun);
+}
+
+export async function createResearchRun(input: {
+  topic: string;
+  feeds: string[];
+  timeoutSeconds: number;
+  limit: number;
+}): Promise<ResearchIngestResult> {
+  return request<ResearchIngestResult>("/api/research/ingest", {
+    method: "POST",
+    body: JSON.stringify({
+      topic: input.topic,
+      feeds: input.feeds,
+      timeout_seconds: input.timeoutSeconds,
+      limit: input.limit,
+    }),
+  });
+}
+
+export async function runResearchAgent(
+  runId: string,
+  input: { timeoutSeconds: number; maxSteps: number; maxAttempts: number },
+): Promise<AgentReport> {
+  return request<AgentReport>(`/api/research/runs/${encodeURIComponent(runId)}/agent`, {
+    method: "POST",
+    body: JSON.stringify({
+      timeout_seconds: input.timeoutSeconds,
+      max_steps: input.maxSteps,
+      max_attempts: input.maxAttempts,
     }),
   });
 }
