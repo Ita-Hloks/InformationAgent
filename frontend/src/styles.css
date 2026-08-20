@@ -66,6 +66,11 @@ textarea:focus-visible {
   scrollbar-width: thin;
 }
 
+.workspace-scroll,
+.sidebar-scroll {
+  scrollbar-gutter: stable;
+}
+
 .workspace-scroll::-webkit-scrollbar,
 .sidebar-scroll::-webkit-scrollbar {
   width: 8px;

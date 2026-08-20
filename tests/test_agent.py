@@ -32,6 +32,7 @@ from information_agent.orchestration.agent_workflow import agent_run
 from information_agent.orchestration.ingestion import ingest
 from information_agent.search import SearchAnswer, SearchAnswerStatus, SearchSource
 from information_agent.selection import SelectedEvidence
+from information_agent.storage import AnalysisRunStatus, AnalysisStepStatus, SQLiteCollectionStore
 
 
 def _collector(_: str, __: float) -> list[RawFeedEntry]:
@@ -374,6 +375,73 @@ def test_parse_agent_finish_rejects_source_from_insufficient_observation() -> No
         parse_agent_decision(raw, evidence, [observation])
 
 
+def test_agent_observation_history_marks_uncitable_sources() -> None:
+    plan = _plan()
+    observations = [
+        AgentObservation(
+            plan,
+            SearchAnswer(
+                evidence_id=1,
+                question=plan.question,
+                answer="没有找到完整比较基线。",
+                status=SearchAnswerStatus.INSUFFICIENT_EVIDENCE,
+                sources=(SearchSource("低相关搜索结果", "https://example.com/weak-source"),),
+            ),
+        ),
+        AgentObservation(
+            plan,
+            SearchAnswer(
+                evidence_id=1,
+                question=plan.question,
+                answer="独立测试披露了完整比较基线。",
+                status=SearchAnswerStatus.ANSWERED,
+                sources=(SearchSource("独立测试报告", "https://example.com/independent-test"),),
+            ),
+        ),
+    ]
+
+    history = agent_decider._observation_history(observations)
+
+    assert "候选来源（不可写入 source_urls）" in history
+    assert "可写入 finish.citations[].source_urls 的 URL" in history
+    assert "- https://example.com/independent-test" in history
+
+
+def test_agent_validation_feedback_lists_only_answered_sources() -> None:
+    plan = _plan()
+    observations = [
+        AgentObservation(
+            plan,
+            SearchAnswer(
+                evidence_id=1,
+                question=plan.question,
+                answer="没有找到完整比较基线。",
+                status=SearchAnswerStatus.INSUFFICIENT_EVIDENCE,
+                sources=(SearchSource("低相关搜索结果", "https://example.com/weak-source"),),
+            ),
+        ),
+        AgentObservation(
+            plan,
+            SearchAnswer(
+                evidence_id=1,
+                question=plan.question,
+                answer="独立测试披露了完整比较基线。",
+                status=SearchAnswerStatus.ANSWERED,
+                sources=(SearchSource("独立测试报告", "https://example.com/independent-test"),),
+            ),
+        ),
+    ]
+
+    feedback = agent_decider._validation_feedback(
+        "citation 引用了本次搜索观察中不存在的来源",
+        observations,
+    )
+
+    assert "https://example.com/independent-test" in feedback
+    assert "https://example.com/weak-source" not in feedback
+    assert "insufficient_evidence" in feedback
+
+
 def test_parse_agent_search_reuses_search_plan_validation() -> None:
     evidence = ingest_evidence()
     raw = json.dumps(
@@ -601,6 +669,72 @@ def test_agent_allows_finish_after_maximum_search_actions(tmp_path: Path) -> Non
     assert answerer.calls == plans
     assert len(decider.calls) == 4
     assert len(decider.calls[-1]) == 3
+
+
+def test_agent_persists_decisions_searches_and_final_report(tmp_path: Path) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+    plan = _plan()
+
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=SequenceDecider([SearchDecision(plan), _finish()]),
+        answerer=RecordingAnswerer(),
+    )
+
+    assert report.analysis_run_id is not None
+    state = SQLiteCollectionStore(database_path).load_analysis_state(report.analysis_run_id)
+
+    assert state.run.analysis_type == "agent_research"
+    assert state.run.status is AnalysisRunStatus.COMPLETED
+    assert [step.step_key for step in state.steps] == [
+        "decision-1",
+        "search-1",
+        "decision-2",
+        "finalize",
+    ]
+    assert {step.status for step in state.steps} == {AnalysisStepStatus.SUCCEEDED}
+    assert {artifact.kind for artifact in state.artifacts} >= {
+        "request",
+        "agent_decision",
+        "search_answer",
+        "agent_report",
+    }
+    final_artifact = next(
+        artifact for artifact in state.artifacts if artifact.kind == "agent_report"
+    )
+    assert final_artifact.payload["final_answer"] == report.final_answer
+
+
+def test_agent_persists_partial_report_after_decision_failure(tmp_path: Path) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+
+    class FailingDecider:
+        def decide(
+            self,
+            topic: str,
+            evidence: list[SelectedEvidence],
+            observations: list[AgentObservation],
+            timeout: float,
+            validation_feedback: str | None = None,
+        ):
+            raise RuntimeError("决策服务不可用")
+
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=FailingDecider(),
+    )
+
+    assert report.analysis_run_id is not None
+    state = SQLiteCollectionStore(database_path).load_analysis_state(report.analysis_run_id)
+
+    assert state.run.status is AnalysisRunStatus.PARTIAL
+    assert state.steps[0].status is AnalysisStepStatus.FAILED
+    final_artifact = next(
+        artifact for artifact in state.artifacts if artifact.kind == "agent_report"
+    )
+    assert final_artifact.payload["errors"] == report.errors
 
 
 def test_agent_run_cli_uses_separate_command(monkeypatch, capsys) -> None:

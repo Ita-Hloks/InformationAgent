@@ -26,6 +26,7 @@ type AppSidebarProps = {
   onClose: () => void;
   onSelectView: (view: LibraryView) => void;
   onSelectFeed: (feedId: string) => void;
+  onSelectResearchRun: (runId: string) => void;
   onAddFeed: () => void;
 };
 
@@ -47,6 +48,7 @@ export function AppSidebar({
   onClose,
   onSelectView,
   onSelectFeed,
+  onSelectResearchRun,
   onAddFeed,
 }: AppSidebarProps) {
   const selectView = (view: LibraryView) => {
@@ -59,9 +61,14 @@ export function AppSidebar({
     onClose();
   };
 
+  const selectResearchRun = (runId: string) => {
+    onSelectResearchRun(runId);
+    onClose();
+  };
+
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-40 flex w-[252px] flex-col border-r border-white/8 bg-[#17191d] text-[#ecece7] transition-transform duration-200 xl:static xl:z-auto xl:translate-x-0 ${
+      className={`fixed inset-y-0 left-0 z-40 flex min-h-0 w-[252px] flex-col border-r border-white/8 bg-[#17191d] text-[#ecece7] transition-transform duration-200 xl:static xl:h-full xl:translate-x-0 xl:self-stretch xl:z-auto ${
         open ? "translate-x-0" : "-translate-x-full"
       }`}
       aria-label="资料库导航"
@@ -148,15 +155,17 @@ export function AppSidebar({
               key={run.id}
               type="button"
               className="group flex min-h-8 w-full items-center gap-2 rounded-md py-1 pr-2 pl-8 text-left text-xs text-[#858a92] hover:bg-white/6 hover:text-[#d7d8da]"
-              onClick={() => selectView("research")}
+              onClick={() => selectResearchRun(run.id)}
             >
               <span
                 className={`size-1.5 shrink-0 rounded-full ${
                   run.status === "completed"
                     ? "bg-[#63b68d]"
-                    : run.status === "running"
+                    : run.status === "collecting"
                       ? "bg-[#ef8354]"
-                      : "bg-[#c4a460]"
+                      : run.status === "failed"
+                        ? "bg-[#b85c4c]"
+                        : "bg-[#c4a460]"
                 }`}
               />
               <span className="min-w-0 flex-1 truncate">{run.title}</span>

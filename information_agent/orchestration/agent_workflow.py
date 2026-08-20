@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from ..agent import (
     AgentDecision,
@@ -24,13 +27,136 @@ from ..search import (
     SearchAnswerer,
     SearchAnswerStatus,
 )
-from ..storage import SQLiteCollectionStore, default_database_path
+from ..storage import (
+    AnalysisAttemptStatus,
+    AnalysisRunStatus,
+    AnalysisStepStatus,
+    SQLiteCollectionStore,
+    default_database_path,
+)
 from .execution import ExecutionBudget
 
 DEFAULT_MAX_AGENT_STEPS = 3
 DEFAULT_MAX_ATTEMPTS = 3
 
 T = TypeVar("T")
+
+
+class _AgentRunRecorder:
+    """Store agent decisions, search observations, and the final report as analysis artifacts."""
+
+    def __init__(
+        self,
+        store: SQLiteCollectionStore,
+        research_run_id: str,
+        *,
+        timeout_seconds: float,
+        max_steps: int,
+        max_attempts: int,
+    ) -> None:
+        self._store = store
+        self._run = store.create_analysis_run(
+            research_run_id,
+            "agent_research",
+            {
+                "timeout_seconds": timeout_seconds,
+                "max_steps": max_steps,
+                "max_attempts": max_attempts,
+            },
+        )
+        self._position = 0
+
+    @property
+    def analysis_run_id(self) -> str:
+        return self._run.id
+
+    def execute(
+        self,
+        step_key: str,
+        operation: str,
+        request_payload: dict[str, Any],
+        action: Callable[[], T],
+        *,
+        result_kind: str,
+        result_payload: Callable[[T], dict[str, Any]],
+    ) -> T:
+        self._position += 1
+        step = self._store.create_analysis_step(self._run.id, self._position, step_key)
+        self._store.set_analysis_step_status(step.id, AnalysisStepStatus.RUNNING)
+        attempt = self._store.create_analysis_attempt(
+            step.id,
+            operation,
+            _payload_hash(request_payload),
+            f"{step_key}:attempt-1",
+        )
+        self._store.record_analysis_artifact(
+            self._run.id,
+            "request",
+            request_payload,
+            artifact_key=f"{step_key}:attempt-1:request",
+            metadata={"operation": operation},
+            step_id=step.id,
+            attempt_id=attempt.id,
+        )
+        try:
+            result = action()
+        except Exception as exc:
+            self._store.record_analysis_artifact(
+                self._run.id,
+                "error",
+                {"type": type(exc).__name__, "message": str(exc)},
+                artifact_key=f"{step_key}:attempt-1:error",
+                metadata={"operation": operation},
+                step_id=step.id,
+                attempt_id=attempt.id,
+            )
+            self._store.set_analysis_attempt_status(
+                attempt.id,
+                AnalysisAttemptStatus.FAILED,
+                error=exc,
+            )
+            self._store.set_analysis_step_status(
+                step.id,
+                AnalysisStepStatus.FAILED,
+                error=exc,
+            )
+            raise
+
+        self._store.record_analysis_artifact(
+            self._run.id,
+            result_kind,
+            result_payload(result),
+            artifact_key=f"{step_key}:attempt-1:result",
+            metadata={"operation": operation},
+            step_id=step.id,
+            attempt_id=attempt.id,
+        )
+        self._store.set_analysis_attempt_status(attempt.id, AnalysisAttemptStatus.SUCCEEDED)
+        self._store.set_analysis_step_status(step.id, AnalysisStepStatus.SUCCEEDED)
+        return result
+
+    def finalize(self, report: AgentReport) -> AgentReport:
+        persisted_report = replace(report, analysis_run_id=self._run.id)
+        self.execute(
+            "finalize",
+            "agent_finalize",
+            {"run_id": report.run_id, "stop_reason": report.stop_reason.value},
+            lambda: persisted_report,
+            result_kind="agent_report",
+            result_payload=_agent_report_payload,
+        )
+        status = (
+            AnalysisRunStatus.COMPLETED
+            if persisted_report.status is RunStatus.COMPLETED
+            else AnalysisRunStatus.PARTIAL
+        )
+        error = (
+            {"type": "AgentRunError", "message": "; ".join(persisted_report.errors)}
+            if persisted_report.errors
+            else None
+        )
+        self._store.set_analysis_run_status(self._run.id, status, error=error)
+        return persisted_report
 
 
 def agent_run(
@@ -48,19 +174,28 @@ def agent_run(
     _validate_input(timeout_seconds, max_steps, max_attempts)
     store = SQLiteCollectionStore(database_path or default_database_path())
     topic, evidence = store.load_planning_input(run_id)
+    recorder = _AgentRunRecorder(
+        store,
+        run_id,
+        timeout_seconds=timeout_seconds,
+        max_steps=max_steps,
+        max_attempts=max_attempts,
+    )
     if not evidence:
-        return AgentReport(
-            run_id,
-            topic,
-            RunStatus.PARTIAL,
-            [],
-            [],
-            [],
-            None,
-            (),
-            ("没有可供 Agent 判断的已选证据",),
-            0,
-            AgentStopReason.NO_EVIDENCE,
+        return recorder.finalize(
+            AgentReport(
+                run_id,
+                topic,
+                RunStatus.PARTIAL,
+                [],
+                [],
+                [],
+                None,
+                (),
+                ("没有可供 Agent 判断的已选证据",),
+                0,
+                AgentStopReason.NO_EVIDENCE,
+            )
         )
 
     budget = ExecutionBudget.start(timeout_seconds)
@@ -73,15 +208,17 @@ def agent_run(
     try:
         active_decider = decider or LLMResearchDecider()
     except Exception as exc:
-        return _failed_report(
-            run_id,
-            topic,
-            evidence,
-            plans,
-            answers,
-            observations,
-            AgentStopReason.ERROR,
-            f"Agent 决策器初始化失败：{exc}",
+        return recorder.finalize(
+            _failed_report(
+                run_id,
+                topic,
+                evidence,
+                plans,
+                answers,
+                observations,
+                AgentStopReason.ERROR,
+                f"Agent 决策器初始化失败：{exc}",
+            )
         )
 
     active_answerer = answerer
@@ -89,115 +226,144 @@ def agent_run(
     decision_count = 0
     while True:
         if budget.remaining() <= 0:
-            return _failed_report(
-                run_id,
-                topic,
-                evidence,
-                plans,
-                answers,
-                observations,
-                AgentStopReason.TIMEOUT,
-                "Agent 在作出下一步决策前超时",
-                steps=decision_count,
+            return recorder.finalize(
+                _failed_report(
+                    run_id,
+                    topic,
+                    evidence,
+                    plans,
+                    answers,
+                    observations,
+                    AgentStopReason.TIMEOUT,
+                    "Agent 在作出下一步决策前超时",
+                    steps=decision_count,
+                )
             )
         decision_count += 1
         search_limit_reached = search_count >= max_steps
         try:
-            decision = _call_decider_with_retries(
-                active_decider,
-                topic,
-                evidence,
-                observations,
-                budget,
-                max_attempts,
-                initial_validation_feedback=(
-                    f"已达到最大搜索动作数 {max_steps}；本轮只能输出 finish，不能继续 search。"
-                    if search_limit_reached
-                    else None
+            decision = recorder.execute(
+                f"decision-{decision_count}",
+                "agent_decision",
+                _decision_request_payload(topic, evidence, observations, budget),
+                lambda search_limit_reached=search_limit_reached: _call_decider_with_retries(
+                    active_decider,
+                    topic,
+                    evidence,
+                    observations,
+                    budget,
+                    max_attempts,
+                    initial_validation_feedback=(
+                        f"已达到最大搜索动作数 {max_steps}；本轮只能输出 finish，不能继续 search。"
+                        if search_limit_reached
+                        else None
+                    ),
                 ),
+                result_kind="agent_decision",
+                result_payload=_agent_decision_payload,
             )
         except Exception as exc:
-            return _failed_report(
-                run_id,
-                topic,
-                evidence,
-                plans,
-                answers,
-                observations,
-                _failure_reason(budget),
-                f"Agent 决策失败：{exc}",
-                steps=decision_count,
+            return recorder.finalize(
+                _failed_report(
+                    run_id,
+                    topic,
+                    evidence,
+                    plans,
+                    answers,
+                    observations,
+                    _failure_reason(budget),
+                    f"Agent 决策失败：{exc}",
+                    steps=decision_count,
+                )
             )
 
         if isinstance(decision, FinishDecision):
-            return _finish_report(
-                run_id,
-                topic,
-                evidence,
-                plans,
-                answers,
-                observations,
-                decision,
-                decision_count,
-                errors,
+            return recorder.finalize(
+                _finish_report(
+                    run_id,
+                    topic,
+                    evidence,
+                    plans,
+                    answers,
+                    observations,
+                    decision,
+                    decision_count,
+                    errors,
+                )
             )
 
         if search_limit_reached:
             errors.append(f"Agent 达到最大搜索动作数 {max_steps}，未收到 finish 决策")
-            return AgentReport(
-                run_id,
-                topic,
-                RunStatus.PARTIAL,
-                evidence,
-                plans,
-                answers,
-                None,
-                (),
-                ("Agent 在搜索动作限制内未完成研究",),
-                decision_count,
-                AgentStopReason.MAX_STEPS,
-                errors,
+            return recorder.finalize(
+                AgentReport(
+                    run_id,
+                    topic,
+                    RunStatus.PARTIAL,
+                    evidence,
+                    plans,
+                    answers,
+                    None,
+                    (),
+                    ("Agent 在搜索动作限制内未完成研究",),
+                    decision_count,
+                    AgentStopReason.MAX_STEPS,
+                    errors,
+                )
             )
 
         if not isinstance(decision, SearchDecision):
             raise TypeError("Agent 决策类型不受支持")
         normalized_queries = {_normalize_query(query.query) for query in decision.plan.queries}
         if normalized_queries & seen_queries:
-            return _failed_report(
-                run_id,
-                topic,
-                evidence,
-                plans,
-                answers,
-                observations,
-                AgentStopReason.REPEATED_QUERY,
-                "Agent 生成了重复搜索查询",
+            return recorder.finalize(
+                _failed_report(
+                    run_id,
+                    topic,
+                    evidence,
+                    plans,
+                    answers,
+                    observations,
+                    AgentStopReason.REPEATED_QUERY,
+                    "Agent 生成了重复搜索查询",
+                )
             )
         seen_queries.update(normalized_queries)
         plans.append(decision.plan)
         search_count += 1
 
         try:
-            if active_answerer is None:
-                active_answerer = HostedSearchAnswerer()
-            answer = _call_with_retries(
-                lambda timeout, answerer=active_answerer, plan=decision.plan: answerer.answer(
-                    plan, timeout
-                ),
-                budget,
-                max_attempts,
+
+            def answer_search(plan=decision.plan) -> SearchAnswer:
+                nonlocal active_answerer
+                if active_answerer is None:
+                    active_answerer = HostedSearchAnswerer()
+                return _call_with_retries(
+                    lambda timeout: active_answerer.answer(plan, timeout),
+                    budget,
+                    max_attempts,
+                )
+
+            answer = recorder.execute(
+                f"search-{search_count}",
+                "hosted_search",
+                _search_request_payload(decision.plan, budget),
+                answer_search,
+                result_kind="search_answer",
+                result_payload=_search_answer_payload,
             )
         except Exception as exc:
-            return _failed_report(
-                run_id,
-                topic,
-                evidence,
-                plans,
-                answers,
-                observations,
-                _failure_reason(budget),
-                f"Agent 搜索工具失败：{exc}",
-                steps=decision_count,
+            return recorder.finalize(
+                _failed_report(
+                    run_id,
+                    topic,
+                    evidence,
+                    plans,
+                    answers,
+                    observations,
+                    _failure_reason(budget),
+                    f"Agent 搜索工具失败：{exc}",
+                    steps=decision_count,
+                )
             )
         answers.append(answer)
         observations.append(AgentObservation(decision.plan, answer))
@@ -335,6 +501,112 @@ def _failure_reason(budget: ExecutionBudget) -> AgentStopReason:
 
 def _normalize_query(value: str) -> str:
     return " ".join(value.casefold().split())
+
+
+def _payload_hash(payload: dict[str, Any]) -> str:
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _decision_request_payload(
+    topic: str,
+    evidence,
+    observations: list[AgentObservation],
+    budget: ExecutionBudget,
+) -> dict[str, Any]:
+    return {
+        "topic": topic,
+        "evidence_ids": [item.id for item in evidence],
+        "observations": [
+            {
+                "plan": _search_plan_payload(observation.plan),
+                "answer": _search_answer_payload(observation.answer),
+            }
+            for observation in observations
+        ],
+        "remaining_seconds": round(budget.remaining(), 6),
+    }
+
+
+def _search_request_payload(plan, budget: ExecutionBudget) -> dict[str, Any]:
+    return {
+        "plan": _search_plan_payload(plan),
+        "remaining_seconds": round(budget.remaining(), 6),
+    }
+
+
+def _agent_decision_payload(decision: AgentDecision) -> dict[str, Any]:
+    if isinstance(decision, SearchDecision):
+        return {"decision": "search", "plan": _search_plan_payload(decision.plan)}
+    return {
+        "decision": "finish",
+        "reason": decision.reason.value,
+        "citations": [
+            {
+                "claim": citation.claim,
+                "evidence_ids": list(citation.evidence_ids),
+                "source_urls": list(citation.source_urls),
+            }
+            for citation in decision.citations
+        ],
+        "uncertainties": list(decision.uncertainties),
+    }
+
+
+def _search_plan_payload(plan) -> dict[str, Any]:
+    return {
+        "evidence_id": plan.evidence_id,
+        "trigger_quote": plan.trigger_quote,
+        "question": plan.question,
+        "kind": plan.kind.value,
+        "priority": plan.priority,
+        "queries": [{"query": query.query, "purpose": query.purpose} for query in plan.queries],
+    }
+
+
+def _search_answer_payload(answer: SearchAnswer) -> dict[str, Any]:
+    return {
+        "evidence_id": answer.evidence_id,
+        "question": answer.question,
+        "answer": answer.answer,
+        "status": answer.status.value,
+        "sources": [
+            {
+                "title": source.title,
+                "url": source.url,
+                "site_name": source.site_name,
+                "published_at": source.published_at,
+                "snippet": source.snippet,
+                "reference": source.reference,
+            }
+            for source in answer.sources
+        ],
+    }
+
+
+def _agent_report_payload(report: AgentReport) -> dict[str, Any]:
+    return {
+        "run_id": report.run_id,
+        "topic": report.topic,
+        "status": report.status.value,
+        "articles": [item.id for item in report.articles],
+        "plans": [_search_plan_payload(plan) for plan in report.plans],
+        "answers": [_search_answer_payload(answer) for answer in report.answers],
+        "final_answer": report.final_answer,
+        "evidence_ids": list(report.evidence_ids),
+        "citations": [
+            {
+                "claim": citation.claim,
+                "evidence_ids": list(citation.evidence_ids),
+                "source_urls": list(citation.source_urls),
+            }
+            for citation in report.citations
+        ],
+        "uncertainties": list(report.uncertainties),
+        "steps": report.steps,
+        "stop_reason": report.stop_reason.value,
+        "errors": report.errors,
+    }
 
 
 def _validate_input(timeout_seconds: float, max_steps: int, max_attempts: int) -> None:

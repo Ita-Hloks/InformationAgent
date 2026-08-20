@@ -88,7 +88,10 @@ class LLMResearchDecider:
         try:
             return parse_agent_decision(raw, selected, observations)
         except ValueError as exc:
-            raise AgentDecisionResponseError(str(exc), raw) from exc
+            raise AgentDecisionResponseError(
+                _validation_feedback(str(exc), observations),
+                raw,
+            ) from exc
 
 
 def parse_agent_decision(
@@ -280,6 +283,11 @@ def _observation_history(observations: list[AgentObservation]) -> str:
     blocks: list[str] = []
     for index, observation in enumerate(observations, start=1):
         answer = observation.answer
+        source_label = (
+            "可引用来源"
+            if answer.status is SearchAnswerStatus.ANSWERED
+            else "候选来源（不可写入 source_urls）"
+        )
         sources = "\n".join(
             f"- {source.title} | {source.url} | 摘要："
             f"{(source.snippet or '')[:MAX_SOURCE_SNIPPET_CHARS]}"
@@ -292,7 +300,44 @@ def _observation_history(observations: list[AgentObservation]) -> str:
             f"查询：{query_text}\n"
             f"状态：{SearchAnswerStatus(answer.status).value}\n"
             f"回答：{answer.answer[:MAX_OBSERVATION_ANSWER_CHARS]}\n"
-            f"来源：\n{sources or '无'}\n"
+            f"{source_label}：\n{sources or '无'}\n"
             "</observation>"
         )
-    return "\n\n".join(blocks)
+    allowed_urls = _answered_source_urls(observations)
+    allowed_text = "\n".join(f"- {url}" for url in sorted(allowed_urls))
+    return (
+        "\n\n".join(blocks)
+        + "\n\n可写入 finish.citations[].source_urls 的 URL：\n"
+        + (
+            allowed_text
+            if allowed_text
+            else "无。finish 时 source_urls 必须为 []，并引用原始文章 evidence_ids。"
+        )
+    )
+
+
+def _answered_source_urls(observations: list[AgentObservation]) -> set[str]:
+    return {
+        normalized_url
+        for observation in observations
+        if observation.answer.status is SearchAnswerStatus.ANSWERED
+        for source in observation.answer.sources
+        if (normalized_url := normalize_url(source.url)) is not None
+    }
+
+
+def _validation_feedback(message: str, observations: list[AgentObservation]) -> str:
+    if "本次搜索观察中不存在的来源" not in message:
+        return message
+
+    allowed_urls = _answered_source_urls(observations)
+    if not allowed_urls:
+        return (
+            f"{message}。当前没有可写入 source_urls 的搜索来源；请把所有 source_urls 输出为 []，"
+            "并用 evidence_ids 引用产生待核验主张的原始文章。"
+        )
+    allowed_text = "；".join(sorted(allowed_urls))
+    return (
+        f"{message}。source_urls 只能从以下 URL 中逐字选择：{allowed_text}。"
+        "若某条搜索观察状态为 insufficient_evidence，其中的候选来源不能写入 source_urls。"
+    )
