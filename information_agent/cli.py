@@ -102,6 +102,25 @@ def build_parser() -> argparse.ArgumentParser:
         default_limit=5,
         default_timeout=DEFAULT_LLM_TIMEOUT_SECONDS,
     )
+    opinion_run_parser = commands.add_parser(
+        "opinion-run",
+        help="主动获取文章的哔哩哔哩舆情分析",
+    )
+    opinion_run_parser.add_argument("article_id", help="阅读器中的文章 ID")
+    opinion_run_parser.add_argument(
+        "--timeout", type=float, default=DEFAULT_LLM_TIMEOUT_SECONDS, help="舆情分析总时限（秒）"
+    )
+    opinion_run_parser.add_argument(
+        "--limit", type=_opinion_limit, default=100, help="最多采集的评论数（1-200）"
+    )
+    opinion_run_parser.add_argument(
+        "--refresh", action="store_true", help="忽略最近一次已完成结果并重新采集"
+    )
+    opinion_status_parser = commands.add_parser(
+        "opinion-status",
+        help="读取文章最近一次舆情分析状态",
+    )
+    opinion_status_parser.add_argument("article_id", help="阅读器中的文章 ID")
     verification_parser = commands.add_parser(
         "verify-search",
         help="验证联网搜索配置、请求和来源返回",
@@ -118,6 +137,8 @@ def build_parser() -> argparse.ArgumentParser:
         list_runs_parser,
         agent_run_parser,
         search_parser,
+        opinion_run_parser,
+        opinion_status_parser,
         verification_parser,
     ):
         command_parser.add_argument(
@@ -148,6 +169,16 @@ def _research_run_limit(value: str) -> int:
         raise argparse.ArgumentTypeError("limit must be an integer between 1 and 100") from error
     if not 1 <= limit <= 100:
         raise argparse.ArgumentTypeError("limit must be between 1 and 100")
+    return limit
+
+
+def _opinion_limit(value: str) -> int:
+    try:
+        limit = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("limit must be an integer between 1 and 200") from error
+    if not 1 <= limit <= 200:
+        raise argparse.ArgumentTypeError("limit must be between 1 and 200")
     return limit
 
 
@@ -209,6 +240,25 @@ def main() -> None:
         load_dotenv()
         report = search(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
         payload = search_report_to_payload(report)
+    elif args.command == "opinion-run":
+        from .opinion import OpinionAnalysisService
+
+        load_dotenv()
+        report = OpinionAnalysisService(
+            timeout_seconds=args.timeout,
+            comment_limit=args.limit,
+        ).request(args.article_id, force_refresh=args.refresh)
+        from .serialization import opinion_report_to_payload
+
+        payload = opinion_report_to_payload(report)
+    elif args.command == "opinion-status":
+        from .opinion import OpinionAnalysisService
+
+        load_dotenv()
+        report = OpinionAnalysisService().get_status(args.article_id)
+        from .serialization import opinion_report_to_payload
+
+        payload = opinion_report_to_payload(report)
     else:
         from .search import verify_connection
 

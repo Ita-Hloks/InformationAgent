@@ -9,16 +9,19 @@ from .models import (
     AnalysisState,
     AnalysisStep,
     AnalysisStepStatus,
+    ArticleSnapshotMismatchError,
     FeedObservation,
     FeedState,
     FeedSubscription,
+    OpinionRunRecord,
     PersistedCollection,
     PersistedPlanning,
     ReaderArticle,
     ReaderArticleState,
     ResearchRunSummary,
 )
-from .store import RESEARCH_RUN_STATUSES, SQLiteCollectionStore, default_database_path
+from .run_listing import RESEARCH_RUN_STATUSES
+from .store import SQLiteCollectionStore, default_database_path
 
 __all__ = [
     "AnalysisArtifact",
@@ -29,9 +32,11 @@ __all__ = [
     "AnalysisState",
     "AnalysisStep",
     "AnalysisStepStatus",
+    "ArticleSnapshotMismatchError",
     "FeedObservation",
     "FeedState",
     "FeedSubscription",
+    "OpinionRunRecord",
     "PersistedCollection",
     "PersistedPlanning",
     "RESEARCH_RUN_STATUSES",

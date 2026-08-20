@@ -155,3 +155,20 @@ def test_missing_article_uses_article_not_found_error_and_returns_404(
 
     response = TestClient(create_app(service)).get("/api/articles/missing")
     assert response.status_code == 404
+
+
+def test_opinion_api_uses_contract_error_objects(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    client.post("/api/feeds", json={"url": "https://example.com/rss.xml"})
+    article_id = client.get("/api/articles").json()[0]["id"]
+
+    unsupported = client.post(f"/api/articles/{article_id}/opinion")
+    assert unsupported.status_code == 422
+    assert unsupported.json()["detail"]["code"] == "unsupported_target"
+
+    invalid_body = client.post(
+        f"/api/articles/{article_id}/opinion",
+        json={"force_refresh": "true"},
+    )
+    assert invalid_body.status_code == 422
+    assert invalid_body.json()["detail"]["code"] == "invalid_request"

@@ -7,7 +7,12 @@ from typing import Protocol
 from ..analysis import LLMAnalyst, evaluate_analysis
 from ..collection import fetch_feed
 from ..contracts import Analysis, CollectionReport, Report, RunStatus
-from ..investigation import LLMQuestionPlanner, PlanningReport, QuestionPlanner
+from ..investigation import (
+    LLMQuestionPlanner,
+    PlanningReport,
+    QuestionPlanner,
+    ResultQuestionPlanner,
+)
 from ..selection import RelevanceSelector, SelectedEvidence
 from .collection import (
     DEFAULT_MAX_ATTEMPTS,
@@ -99,13 +104,19 @@ class WorkflowRunner:
 
         try:
             active_planner = self.planner or LLMQuestionPlanner()
-            plans = active_planner.plan(self.topic, articles, remaining)
+            if isinstance(active_planner, ResultQuestionPlanner):
+                planning_result = active_planner.plan_with_result(self.topic, articles, remaining)
+                plans = planning_result.plans
+                opinion_plans = planning_result.opinion_plans
+            else:
+                plans = active_planner.plan(self.topic, articles, remaining)
+                opinion_plans = []
         except Exception as exc:
             errors.append(f"搜索计划生成失败：{exc}")
             return PlanningReport(self.topic, RunStatus.PARTIAL, articles, [], errors)
 
         status = RunStatus.COMPLETED if not errors else RunStatus.PARTIAL
-        return PlanningReport(self.topic, status, articles, plans, errors)
+        return PlanningReport(self.topic, status, articles, plans, errors, opinion_plans)
 
     def _collect(self) -> CollectionReport:
         return _execute_collection(

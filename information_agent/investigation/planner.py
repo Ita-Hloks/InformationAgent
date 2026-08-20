@@ -3,18 +3,19 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from openai import OpenAI
 
 from ..common import llm_safe_text, request_json_completion
 from ..selection import SelectedEvidence
-from .models import PlanningResult, QuestionKind, SearchPlan, SearchQuery
+from .models import OpinionPlan, PlanningResult, QuestionKind, SearchPlan, SearchQuery
 
 MAX_ARTICLES = 5
 MAX_ARTICLE_CHARS = 4_000
 MAX_PLANS = 3
 MAX_PLANS_PER_ARTICLE = 1
+MAX_OPINION_PLANS = MAX_ARTICLES
 MAX_QUOTE_CHARS = 400
 MAX_QUESTION_CHARS = 300
 MAX_QUERY_CHARS = 200
@@ -33,6 +34,16 @@ SEARCH_PLAN_CONTRACT = (
     "不要添加 confidence、answer 等结论字段。"
 )
 
+OPINION_PLAN_CONTRACT = (
+    "opinion_plans 中的每项必须只包含 evidence_id、trigger_quote、question、queries。\n"
+    "它只用于标记文章存在值得用户查看的争议，并预填哔哩哔哩检索词；"
+    "不要输出 platform 或 window_hours，"
+    "系统会固定使用哔哩哔哩和最近 72 小时。\n"
+    "只有文章存在可能改变读者理解、且值得查看不同观点的争议时才生成；没有争议时返回空数组。\n"
+    "question 和 purpose 必须使用中文，query 使用适合哔哩哔哩搜索的语言。\n"
+    "queries 必须是 1 到 2 项的 JSON 数组；每项必须是只包含 query 和 purpose 的对象。"
+)
+
 
 class QuestionPlanner(Protocol):
     def plan(
@@ -41,6 +52,16 @@ class QuestionPlanner(Protocol):
         evidence: list[SelectedEvidence],
         timeout: float,
     ) -> list[SearchPlan]: ...
+
+
+@runtime_checkable
+class ResultQuestionPlanner(Protocol):
+    def plan_with_result(
+        self,
+        topic: str,
+        evidence: list[SelectedEvidence],
+        timeout: float,
+    ) -> PlanningResult: ...
 
 
 class PlanningResponseError(ValueError):
@@ -75,7 +96,7 @@ class LLMQuestionPlanner:
     ) -> PlanningResult:
         selected = evidence[:MAX_ARTICLES]
         if not selected:
-            return PlanningResult('{"plans": []}', [])
+            return PlanningResult('{"plans": [], "opinion_plans": []}', [])
 
         validation_feedback: str | None = None
         last_error: PlanningResponseError | None = None
@@ -94,23 +115,38 @@ class LLMQuestionPlanner:
                 ],
             )
             try:
-                plans = parse_search_plans(raw, selected)
+                plans, opinion_plans = parse_planning_result(raw, selected)
             except ValueError as exc:
                 last_error = PlanningResponseError(str(exc), raw)
                 if attempt + 1 == MAX_PLANNING_ATTEMPTS:
                     raise last_error from exc
                 validation_feedback = str(exc)
                 continue
-            return PlanningResult(raw, plans)
+            return PlanningResult(raw, plans, opinion_plans)
         raise AssertionError("规划重试循环必须返回或抛出异常") from last_error
 
 
 def parse_search_plans(raw: str, evidence: list[SelectedEvidence]) -> list[SearchPlan]:
-    payload = json.loads(raw)
-    if not isinstance(payload, dict) or set(payload) != {"plans"}:
-        raise ValueError("模型输出必须是仅包含 plans 的 JSON 对象")
+    return parse_planning_result(raw, evidence)[0]
 
-    raw_plans = payload["plans"]
+
+def parse_opinion_plans(raw: str, evidence: list[SelectedEvidence]) -> list[OpinionPlan]:
+    return parse_planning_result(raw, evidence)[1]
+
+
+def parse_planning_result(
+    raw: str,
+    evidence: list[SelectedEvidence],
+) -> tuple[list[SearchPlan], list[OpinionPlan]]:
+    payload = json.loads(raw)
+    if not isinstance(payload, dict) or set(payload) not in (
+        {"plans"},
+        {"plans", "opinion_plans"},
+        {"opinion_plans"},
+    ):
+        raise ValueError("模型输出必须是仅包含 plans 的 JSON 对象，或包含 opinion_plans 的扩展对象")
+
+    raw_plans = payload.get("plans", [])
     if not isinstance(raw_plans, list) or len(raw_plans) > MAX_PLANS:
         raise ValueError(f"plans 必须是最多 {MAX_PLANS} 项的数组")
 
@@ -129,7 +165,61 @@ def parse_search_plans(raw: str, evidence: list[SelectedEvidence]) -> list[Searc
         if plan_counts[plan.evidence_id] > MAX_PLANS_PER_ARTICLE:
             raise ValueError(f"每篇文章最多生成 {MAX_PLANS_PER_ARTICLE} 个搜索计划")
         plans.append(plan)
-    return plans
+
+    opinion_plans = _parse_opinion_plans(payload.get("opinion_plans", []), evidence)
+    return plans, opinion_plans
+
+
+def _parse_opinion_plans(
+    raw_opinion_plans: Any,
+    evidence: list[SelectedEvidence],
+) -> list[OpinionPlan]:
+    if not isinstance(raw_opinion_plans, list) or len(raw_opinion_plans) > MAX_OPINION_PLANS:
+        raise ValueError(f"opinion_plans 必须是最多 {MAX_OPINION_PLANS} 项的数组")
+    evidence_by_id = {item.id: item for item in evidence}
+    opinion_plans: list[OpinionPlan] = []
+    opinion_counts: dict[int, int] = {}
+    seen_opinion_anchors: set[tuple[int, str]] = set()
+    seen_opinion_queries: set[str] = set()
+    for item in raw_opinion_plans:
+        opinion_plan = _parse_opinion_plan(item, evidence_by_id, seen_opinion_queries)
+        anchor = (opinion_plan.evidence_id, opinion_plan.trigger_quote)
+        if anchor in seen_opinion_anchors:
+            raise ValueError("同一文章原文锚点不能生成重复舆情提示")
+        seen_opinion_anchors.add(anchor)
+        opinion_counts[opinion_plan.evidence_id] = (
+            opinion_counts.get(opinion_plan.evidence_id, 0) + 1
+        )
+        if opinion_counts[opinion_plan.evidence_id] > 1:
+            raise ValueError("每篇文章最多生成 1 个舆情提示")
+        opinion_plans.append(opinion_plan)
+    return opinion_plans
+
+
+def _parse_opinion_plan(
+    item: Any,
+    evidence_by_id: dict[int, SelectedEvidence],
+    seen_queries: set[str],
+) -> OpinionPlan:
+    if not isinstance(item, dict):
+        raise ValueError("每个舆情提示必须是 JSON 对象")
+    expected_fields = {"evidence_id", "trigger_quote", "question", "queries"}
+    if set(item) != expected_fields:
+        raise ValueError("舆情提示字段不符合约定")
+
+    evidence_id = parse_evidence_id(item["evidence_id"])
+    if evidence_id not in evidence_by_id:
+        valid_ids = ", ".join(str(value) for value in sorted(evidence_by_id))
+        raise ValueError(f"舆情提示引用了文章编号 {evidence_id}，有效编号为：{valid_ids}")
+    trigger_quote = _required_text(item["trigger_quote"], "trigger_quote", MAX_QUOTE_CHARS)
+    if trigger_quote not in llm_safe_text(evidence_by_id[evidence_id].content):
+        raise ValueError("舆情提示的 trigger_quote 未出现在对应文章正文中")
+    question = _required_chinese_text(item["question"], "question", MAX_QUESTION_CHARS)
+    raw_queries = item["queries"]
+    if not isinstance(raw_queries, list) or not 1 <= len(raw_queries) <= 2:
+        raise ValueError("每个舆情提示必须包含 1 到 2 条查询")
+    queries = tuple(_parse_query(value, seen_queries) for value in raw_queries)
+    return OpinionPlan(evidence_id, trigger_quote, question, queries)
 
 
 def _parse_plan(
@@ -210,7 +300,7 @@ def _system_prompt() -> str:
 你的职责不是逐条核对文章事实，而是只挑出会显著改变后续分析结论的研究缺口。零个计划是
 正常且优先的结果；宁可遗漏边缘问题，也不要为了凑数生成查询。
 
-只有同时满足以下条件时才生成计划：
+只有同时满足以下条件时才生成事实核查计划：
 1. 该主张是文章的核心结论、重要前提或会影响读者决策的内容；
 2. 文章没有给出足够的方法、证据、比较范围或独立来源；
 3. 外部检索有机会找到原始材料、独立评测、反例或竞争解释；
@@ -226,10 +316,14 @@ def _system_prompt() -> str:
 独立评测是否在相同场景得到相近结果”。query 应寻找不同角色的材料，不能只复述原文。
 
 不要判断主张真假，不要给出结论、置信度或答案。每项计划必须引用输入文章正文中的精确短句。
-输出 JSON 对象，且只包含 plans 数组。
+如果文章存在可能显著影响读者理解、且用户会希望查看不同观点的争议，才在 opinion_plans
+中添加舆情提示。舆情提示不是结论，不表示文章有错，也不表示已经知道公众观点；它只为阅读页
+侧栏预填哔哩哔哩查询词。不要为普通分歧、没有公共讨论价值的细节或无法用公开讨论验证的内容生成提示。
+输出 JSON 对象，包含 plans 和 opinion_plans 两个数组。
 {SEARCH_PLAN_CONTRACT}
-每篇文章最多生成 1 个计划，整次最多生成 3 个计划。若没有值得外查的主张，也必须返回
-{{\"plans\": []}}，不得返回 {{}}。"""
+{OPINION_PLAN_CONTRACT}
+每篇文章最多生成 1 个事实核查计划和 1 个舆情提示，事实核查计划整次最多生成 3 个。
+如果没有值得外查的内容，必须返回 {{\"plans\": [], \"opinion_plans\": []}}，不得返回 {{}}。"""
 
 
 def _planning_input(

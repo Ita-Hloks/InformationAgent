@@ -40,13 +40,16 @@ def persisted_collection_to_payload(result: PersistedCollection) -> dict[str, An
 
 
 def planning_report_to_payload(report: PlanningReport) -> dict[str, Any]:
-    return {
+    payload = {
         "topic": report.topic,
         "status": report.status.value,
         "articles": [_selected_evidence_to_payload(item) for item in report.articles],
         "plans": [_search_plan_to_payload(item) for item in report.plans],
         "errors": report.errors,
     }
+    if report.opinion_plans:
+        payload["opinion_plans"] = [_opinion_plan_to_payload(item) for item in report.opinion_plans]
+    return payload
 
 
 def persisted_planning_to_payload(result: PersistedPlanning) -> dict[str, Any]:
@@ -89,13 +92,99 @@ def search_answer_to_payload(answer: SearchAnswer) -> dict[str, Any]:
 
 
 def search_report_to_payload(report: SearchReport) -> dict[str, Any]:
-    return {
+    payload = {
         "topic": report.topic,
         "status": report.status.value,
         "articles": [_selected_evidence_to_payload(item) for item in report.articles],
         "plans": [_search_plan_to_payload(item) for item in report.plans],
         "answers": [search_answer_to_payload(item) for item in report.answers],
         "errors": report.errors,
+    }
+    if report.opinion_plans:
+        payload["opinion_plans"] = [_opinion_plan_to_payload(item) for item in report.opinion_plans]
+    return payload
+
+
+def opinion_report_to_payload(report: Any) -> dict[str, Any]:
+    return {
+        "product_name": report.product_name,
+        "article_id": report.article_id,
+        "article_snapshot_id": report.article_snapshot_id,
+        "content_hash": report.content_hash,
+        "source_url": report.source_url,
+        "status": report.status.value,
+        "platform": report.platform,
+        "window_hours": report.window_hours,
+        "requested_limit": report.requested_limit,
+        "collected_count": report.collected_count,
+        "analyzed_count": report.analyzed_count,
+        "classification_total": report.classification_total,
+        "classified_count": report.classified_count,
+        "unclassified_count": report.unclassified_count,
+        "status_reason": report.status_reason,
+        "run_id": report.run_id,
+        "requested_at": report.requested_at,
+        "finished_at": report.finished_at,
+        "last_heartbeat_at": report.last_heartbeat_at,
+        "controversy_points": [
+            _opinion_plan_to_payload(item) for item in report.controversy_points
+        ],
+        "comments": [
+            {
+                "comment_id": item.comment_id,
+                "source_url": item.source_url,
+                "author": item.author,
+                "content": item.content,
+                "likes": item.likes,
+                "published_at": item.published_at.isoformat() if item.published_at else None,
+            }
+            for item in report.comments
+        ],
+        "classifications": [
+            {
+                "run_id": item.run_id,
+                "evidence_id": item.evidence_id,
+                "comment_id": item.comment_id,
+                "classification_status": item.classification_status.value,
+                "stance": item.stance.value if item.stance else None,
+                "error_code": item.error_code,
+            }
+            for item in report.classifications
+        ],
+        "summary": report.summary,
+        "points": [
+            {
+                "evidence_id": item.evidence_id,
+                "question": item.question,
+                "summary": item.summary,
+                "stance_counts": item.stance_counts,
+                "representative_comment_ids": list(item.representative_comment_ids),
+            }
+            for item in report.points
+        ],
+        "uncertainties": list(report.uncertainties),
+        "errors": [
+            {
+                "code": item.code,
+                "stage": item.stage,
+                "message": item.message,
+                "retryable": item.retryable,
+                "attempt": item.attempt,
+            }
+            for item in report.errors
+        ],
+        "attempts": [
+            {
+                "stage": item.stage,
+                "attempt": item.attempt,
+                "started_at": item.started_at,
+                "finished_at": item.finished_at,
+                "outcome": item.outcome,
+                "error_code": item.error_code,
+                "error_summary": item.error_summary,
+            }
+            for item in report.attempts
+        ],
     }
 
 
@@ -106,6 +195,17 @@ def _search_plan_to_payload(item: Any) -> dict[str, Any]:
         "question": item.question,
         "kind": item.kind.value,
         "priority": item.priority,
+        "queries": [{"query": query.query, "purpose": query.purpose} for query in item.queries],
+    }
+
+
+def _opinion_plan_to_payload(item: Any) -> dict[str, Any]:
+    return {
+        "evidence_id": item.evidence_id,
+        "trigger_quote": item.trigger_quote,
+        "question": item.question,
+        "platform": item.platform,
+        "window_hours": item.window_hours,
         "queries": [{"query": query.query, "purpose": query.purpose} for query in item.queries],
     }
 

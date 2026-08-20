@@ -172,6 +172,7 @@ cython_debug/
 
 # 本地测试临时目录
 .test-*/
+.pytest-*/
 
 # 本地 LLM 调用备份
 log/
