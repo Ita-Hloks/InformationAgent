@@ -30,6 +30,11 @@ flowchart LR
     G --> K[plan 生成搜索计划]
     I --> L[plan-run 从 run_id 读取证据]
     I --> M[agent-run 从 run_id 运行受限 Agent]
+    I --> R{用户主动请求文章舆情?}
+    R -->|是| S[opinion-run / POST opinion]
+    S --> T[哔哩哔哩评论采集和争议点分析]
+    T --> U[opinion_runs / opinion_comments]
+    L --> V[保存 opinion_plans 提示]
     K --> N[search 执行联网回答]
     L --> N
     M --> O[finish 生成带引用结论]
@@ -67,6 +72,8 @@ RSS/Atom -> 采集 -> 规范化 -> 相关性筛选 -> 证据编号
 | `plan-run` | `ingest` 返回的 `run_id` | `planning_run_id`、搜索计划和错误 | 是 |
 | `search` | 主题、一个或多个 RSS/Atom 地址 | 文章、计划、联网回答和来源 | 否 |
 | `agent-run` | `ingest` 返回的 `run_id` | 搜索观察、最终结论、引用和停止原因 | 当前不写研究数据库 |
+| `opinion-run` | 阅读器中的 `article_id` | 哔哩哔哩评论样本、争议点分析和状态 | 是，只有显式调用才运行 |
+| `opinion-status` | 阅读器中的 `article_id` | 最近一次舆情运行状态和结果 | 否，只读 |
 | `verify-search` | 搜索超时参数 | 固定的联网搜索连通性结果 | 否 |
 
 默认参数的关键点：
@@ -170,6 +177,10 @@ RSS 只提供摘要时，项目不会先抓取所有文章正文，而是在相�
 | `planning_runs` | 保存基于 `run_id` 的规划运行及原始响应 |
 | `search_plans` | 保存问题、原文锚点、问题类型和优先级 |
 | `search_queries` | 保存每个计划的查询及查询目的 |
+| `opinion_plans` | 保存 Planner 判断为值得查看公开讨论的文章提示，平台固定为哔哩哔哩、时间窗固定为最近 72 小时 |
+| `opinion_queries` | 保存舆情提示预填的哔哩哔哩查询及查询目的 |
+| `opinion_runs` | 保存用户主动触发的哔哩哔哩舆情运行状态和结构化结果 |
+| `opinion_comments` | 保存该次舆情运行采集到的评论快照，不跨运行混用 |
 
 `run_evidence.selected = 1` 的记录才会被 `plan-run` 和 `agent-run` 读取。普通代码会在入库前校验文章快照和证据编号，LLM 不能凭空扩大证据集合。
 
@@ -178,8 +189,9 @@ RSS 只提供摘要时，项目不会先抓取所有文章正文，而是在相�
 `ingest` 返回的 `run_id` 是后续数据库流程的入口：
 
 ```text
-ingest -> run_id -> plan-run -> planning_run_id / search_plans
+ingest -> run_id -> plan-run -> planning_run_id / search_plans / opinion_plans
        \-> agent-run -> bounded search -> final_answer / citations
+article_id -> opinion-run (显式触发) -> 哔哩哔哩评论 -> opinion_runs / opinion_comments
 ```
 
 `plan-run` 和 `agent-run` 只接受状态为 `completed` 或 `partial` 的研究运行，并且只读取已经被选中的证据。
@@ -198,7 +210,15 @@ ingest -> run_id -> plan-run -> planning_run_id / search_plans
 - `priority` 只能是 1
 - 每个计划包含 1 到 2 条不重复查询
 - 每篇文章最多生成 1 个计划，整次最多生成 3 个计划
-- 没有值得外查的缺口时返回 `{"plans": []}`
+- 没有值得外查的缺口时返回 `{"plans": [], "opinion_plans": []}`
+
+Planner 同时判断文章是否存在值得读者即时查看的争议，并可为文章生成 `opinion_plans` 预填提示；`plan-run` 只生成并持久化提示，不抓取评论。用户显式调用 `opinion-run` 或 HTTP `POST /api/articles/{article_id}/opinion` 后，系统才校验直接关联的哔哩哔哩视频/专栏 URL、采集时间窗内评论并调用 LLM 分析争议点；如果文章没有最近的规划提示，显式请求会直接调用争议点识别 LLM。每篇提示最多 1 个，平台固定为哔哩哔哩，时间窗固定为最近 72 小时。当前不做长期监测，也不接入前端操作界面。
+
+舆情分析不判断文章主张真假。结果只描述最近 72 小时内获取到的哔哩哔哩公开评论样本，不代表总体民意或全体观众意见，也不用于证明文章主张为真。LLM 只输出文章争议点、评论样本中的讨论立场、摘要、代表评论编号和不确定性；评论数量和立场分布不能替代事实证据。重复的 `opinion-run` 默认复用最近一次已完成或部分完成的结果，使用 `--refresh` 才重新采集。
+
+舆情报告的数量从样本和关系行核对：`collected_count` 是当前运行保存的评论数，`analyzed_count` 是送入分类阶段的评论数，`classification_total` 是实际建立的争议点-评论关系数，后两个分类数量按 `classification_status` 逐行统计，`points.stance_counts` 只由 `classified` 关系重新聚合。没有分类关系时不保留模型返回的立场数量或代表评论。
+
+状态原因按流程收口：没有争议点为 `completed/no_controversy_points`；评论接口正常但样本为空为 `completed/sample_empty`；有评论或分类结果但分类不完整为 `partial/partial_classification`；没有可用结果的关键失败为 `failed`。遗留 `running` 运行会在后续请求的原子收口中变为 `failed/stale_running`，然后才允许创建新运行。
 
 `plan` 是临时流程，只返回 JSON。`plan-run` 先创建 `planning_runs`，再把规划结果、查询和原始模型响应写回 SQLite；模型输出校验失败时保留错误和原始响应，并把业务报告标记为 `partial`。
 
@@ -326,6 +346,7 @@ LLM 和联网搜索调用会通过 `CallBackup` 写入 JSON：
 | `LLM_API_KEY` | 相关性筛选、分析、规划和 Agent 决策 |
 | `LLM_BASE_URL` | 主 LLM 的 OpenAI 兼容 API 根地址 |
 | `LLM_MODEL` | 主 LLM 模型名 |
+| `BILIBILI_COOKIE` | 可选的哔哩哔哩评论接口 Cookie；只从运行环境读取，不读取浏览器配置文件，也不写入 SQLite |
 | `SEARCH_LLM_API_KEY` | 联网搜索服务凭据 |
 | `SEARCH_LLM_BASE_URL` | 联网搜索服务 API 根地址 |
 | `SEARCH_LLM_MODEL` | 支持 `web_search` 的搜索模型 |
@@ -370,6 +391,7 @@ frontend/src/main.tsx -> App.tsx -> AppRoutes -> ReaderWorkspacePage
 - 没有分析任务创建、状态轮询、SSE 或 WebSocket
 - 没有把 HTTP 请求路由到 Python CLI 的长任务生命周期
 - 前端不能直接读取 LLM 密钥、调用 SQLite 或替代后端编排
+- 后端已提供舆情 `GET/POST` 接口，但前端暂未接入；`GET` 只读，只有显式 `POST` 才触发评论采集和 LLM 分析
 
 后续接入 LLM 分析时，至少需要增加分析运行创建/状态查询、证据和结果查询、取消操作，以及将长任务状态映射为 `queued`、`running`、`completed`、`partial`、`failed`、`cancelled` 和 `insufficient_evidence`。这些接口当前尚未实现。
 
@@ -389,6 +411,7 @@ frontend/src/main.tsx -> App.tsx -> AppRoutes -> ReaderWorkspacePage
 | `information_agent/orchestration/agent_workflow.py` | 有界 Agent 决策、搜索、结束和引用校验 |
 | `information_agent/analysis/` | LLM 分析和引用质量评估 |
 | `information_agent/investigation/` | 搜索问题、计划契约和解析 |
+| `information_agent/opinion/` | 哔哩哔哩目标解析、评论采集、争议点和评论分析 |
 | `information_agent/search/` | 联网搜索客户端、来源解析和连通性验证 |
 | `information_agent/storage/` | 研究运行、文章快照、Feed 缓存、规划和分析生命周期存储 |
 | `information_agent/contracts.py` | 跨阶段状态和报告数据契约 |
@@ -436,6 +459,15 @@ frontend/src/main.tsx -> App.tsx -> AppRoutes -> ReaderWorkspacePage
   "https://example.com/feed.xml"
 ```
 
+### 主动获取文章舆情
+
+```powershell
+.\.venv\Scripts\python.exe -m information_agent.cli opinion-status ARTICLE_ID
+.\.venv\Scripts\python.exe -m information_agent.cli opinion-run ARTICLE_ID --limit 100
+```
+
+首版只接受文章本身是哔哩哔哩视频或专栏 URL。`opinion-status` 不会触发采集；`opinion-run` 才会在最近 72 小时内获取最多 200 条评论并分析争议点。输出仅是限定时间窗的公开评论样本观察，不代表总体民意、全体观众意见或事实核验结果。
+
 ## 15. 追踪一次运行时的检查顺序
 
 当结果数量异常、状态为 `partial` 或输出为空时，按以下顺序排查：
@@ -445,8 +477,9 @@ frontend/src/main.tsx -> App.tsx -> AppRoutes -> ReaderWorkspacePage
 3. 检查规范化阶段是否因 URL 无效或正文少于 20 个字符丢弃 entry
 4. 检查 `relevance-selection` 调用备份中的请求、响应和状态
 5. 对 `ingest` 检查 `research_runs`、`article_snapshots` 和 `run_evidence`
-6. 对 `plan-run` 检查 `planning_runs`、`search_plans` 和 `search_queries`
+6. 对 `plan-run` 检查 `planning_runs`、`search_plans`、`search_queries`、`opinion_plans` 和 `opinion_queries`
 7. 对 `agent-run` 检查 `answers`、`citations`、`stop_reason` 和搜索调用备份
-8. 最后区分“没有待处理工作”“确定性过滤”“模型未选中”“证据不足”和“真正失败”
+8. 对 `opinion-status` / `opinion-run` 检查 `opinion_runs`、`opinion_comments`、评论采集错误和分析不确定性
+9. 最后区分“没有待处理工作”“确定性过滤”“模型未选中”“证据不足”和“真正失败”
 
 这套检查顺序能保持数据从来源、快照、证据编号到最终结论的可追溯关系，避免把空结果直接解释成采集失败或模型拒绝。

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from ..collection import fetch_feed
 from ..common import DEFAULT_LLM_TIMEOUT_SECONDS
 from ..contracts import RunStatus
-from ..investigation import QuestionPlanner, SearchPlan
+from ..investigation import OpinionPlan, QuestionPlanner, SearchPlan
 from ..search import HostedSearchAnswerer, SearchAnswer, SearchAnswerer
 from ..selection import SelectedEvidence
 from .collection import (
@@ -26,6 +26,7 @@ class SearchReport:
     plans: list[SearchPlan]
     answers: list[SearchAnswer]
     errors: list[str] = field(default_factory=list)
+    opinion_plans: list[OpinionPlan] = field(default_factory=list)
 
 
 def search(
@@ -63,6 +64,7 @@ def search(
             planning_report.plans,
             answers,
             errors,
+            planning_report.opinion_plans,
         )
 
     for item in planning_report.plans:
@@ -84,4 +86,5 @@ def search(
         planning_report.plans,
         answers,
         errors,
+        planning_report.opinion_plans,
     )

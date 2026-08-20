@@ -1,28 +1,55 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Query
+import sqlite3
 
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+from ..opinion import BilibiliTargetError, OpinionAnalysisService, OpinionStatus
+from ..opinion.service import OpinionArticleNotFoundError, OpinionSnapshotMismatchError
 from ..reader import (
     ArticleNotFoundError,
     FeedNotFoundError,
     FeedUnavailableError,
     ReaderService,
 )
+from ..serialization import opinion_report_to_payload
 from .models import (
     ArticleResponse,
     ArticleStateResponse,
     ArticleStateUpdate,
     FeedCreate,
     FeedResponse,
+    OpinionRequest,
+    OpinionResponse,
     article_response,
     article_state_response,
     feed_response,
 )
 
 
-def create_app(service: ReaderService | None = None) -> FastAPI:
+def create_app(
+    service: ReaderService | None = None,
+    opinion_service: OpinionAnalysisService | None = None,
+) -> FastAPI:
     reader = service or ReaderService()
+    opinion = opinion_service or OpinionAnalysisService(store=reader.store)
     app = FastAPI(title="Information Agent API", version="0.1.0")
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error(
+        _request: Request, _error: RequestValidationError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": {
+                    "code": "invalid_request",
+                    "message": "请求参数不符合约定",
+                }
+            },
+        )
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -82,5 +109,59 @@ def create_app(service: ReaderService | None = None) -> FastAPI:
             return article_response(reader.get_article(article_id))
         except ArticleNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/articles/{article_id}/opinion", response_model=OpinionResponse)
+    def get_opinion_status(article_id: str) -> OpinionResponse:
+        try:
+            return OpinionResponse(**opinion_report_to_payload(opinion.get_status(article_id)))
+        except OpinionArticleNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "article_not_found", "message": str(exc)},
+            ) from exc
+        except OpinionSnapshotMismatchError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        except (sqlite3.Error, ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "storage_failed", "message": "舆情状态读取失败"},
+            ) from exc
+
+    @app.post("/api/articles/{article_id}/opinion", response_model=OpinionResponse)
+    def request_opinion_analysis(
+        article_id: str,
+        request: OpinionRequest | None = None,
+    ) -> OpinionResponse | JSONResponse:
+        try:
+            report = opinion.request(
+                article_id, force_refresh=request.force_refresh if request else False
+            )
+            payload = opinion_report_to_payload(report)
+            if report.status is OpinionStatus.RUNNING:
+                return JSONResponse(status_code=202, content=payload)
+            return OpinionResponse(**payload)
+        except OpinionArticleNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "article_not_found", "message": str(exc)},
+            ) from exc
+        except OpinionSnapshotMismatchError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        except BilibiliTargetError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        except (sqlite3.Error, ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "storage_failed", "message": "舆情运行收尾失败"},
+            ) from exc
 
     return app

@@ -2,37 +2,61 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import sqlite3
-from contextlib import contextmanager
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from ..collection import RawFeedEntry
 from ..contracts import CollectionReport, ContentType, project_now
-from ..investigation import SearchPlan
+from ..investigation import (
+    OPINION_PLATFORM,
+    OPINION_WINDOW_HOURS,
+    OpinionPlan,
+    SearchPlan,
+    SearchQuery,
+)
 from ..normalization import NormalizedArticle
 from ..selection import SelectedEvidence
 from .analysis_schema import migrate_analysis_schema
 from .analysis_store import AnalysisPersistenceMixin
 from .common import (
     _format_datetime,
+    _load_json_object,
     _optional_text,
     _parse_datetime,
     _required_datetime,
 )
 from .models import (
+    ArticleSnapshotMismatchError,
     FeedObservation,
     FeedState,
     FeedSubscription,
+    OpinionRunRecord,
     ReaderArticle,
     ReaderArticleState,
-    ResearchRunSummary,
 )
+from .run_listing import ResearchRunListingMixin
 
-RESEARCH_RUN_STATUSES = ("collecting", "completed", "partial", "failed")
+_OPINION_STATUS_REASONS = {
+    "completed": {"completed", "no_controversy_points", "sample_empty"},
+    "partial": {"partial_collection", "partial_classification", "timeout", "retry_exhausted"},
+    "failed": {"timeout", "retry_exhausted", "stale_running", "failed"},
+}
+_OPINION_STANCES = {"support", "oppose", "mixed", "unclear"}
+_OPINION_CLASSIFICATION_STATUSES = {"classified", "unclassified"}
+_OPINION_ATTEMPT_STAGES = {
+    "opinion_planning",
+    "aid_resolution",
+    "comment_collection",
+    "opinion_analysis",
+    "classification",
+}
+_OPINION_ATTEMPT_OUTCOMES = {"succeeded", "failed", "timed_out", "skipped"}
 
 
 def default_database_path() -> Path:
@@ -42,7 +66,7 @@ def default_database_path() -> Path:
     return Path("data") / "information_agent.db"
 
 
-class SQLiteCollectionStore(AnalysisPersistenceMixin):
+class SQLiteCollectionStore(AnalysisPersistenceMixin, ResearchRunListingMixin):
     """保存粗处理文章快照与运行内证据关系。"""
 
     def __init__(self, database_path: str | Path) -> None:
@@ -237,7 +261,8 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
         parameters: list[object] = []
         if feed_id is not None:
             query = """
-                SELECT entries.feed_id, snapshots.payload_json,
+                SELECT entries.feed_id, snapshots.id AS snapshot_id, snapshots.content_hash,
+                       snapshots.payload_json,
                        COALESCE(states.is_read, 0) AS is_read,
                        COALESCE(states.is_saved, 0) AS is_saved
                 FROM feed_entries AS entries
@@ -260,7 +285,8 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
             parameters.append(feed_id)
         else:
             query = """
-                SELECT entries.feed_id, snapshots.payload_json,
+                SELECT entries.feed_id, snapshots.id AS snapshot_id, snapshots.content_hash,
+                       snapshots.payload_json,
                        COALESCE(states.is_read, 0) AS is_read,
                        COALESCE(states.is_saved, 0) AS is_saved
                 FROM feed_entries AS entries
@@ -288,6 +314,8 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
                 article=_article_from_payload(json.loads(row["payload_json"])),
                 is_read=bool(row["is_read"]),
                 is_saved=bool(row["is_saved"]),
+                snapshot_id=str(row["snapshot_id"]),
+                content_hash=str(row["content_hash"]),
             )
             for row in rows
         ]
@@ -296,7 +324,8 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT entries.feed_id, snapshots.payload_json,
+                SELECT entries.feed_id, snapshots.id AS snapshot_id, snapshots.content_hash,
+                       snapshots.payload_json,
                        COALESCE(states.is_read, 0) AS is_read,
                        COALESCE(states.is_saved, 0) AS is_saved
                 FROM feed_entries AS entries
@@ -319,6 +348,8 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
             article=_article_from_payload(json.loads(row["payload_json"])),
             is_read=bool(row["is_read"]),
             is_saved=bool(row["is_saved"]),
+            snapshot_id=str(row["snapshot_id"]),
+            content_hash=str(row["content_hash"]),
         )
 
     def update_reader_article_states(
@@ -411,6 +442,587 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
         }
         return [states_by_id[article_id] for article_id in unique_ids]
 
+    def get_latest_opinion_run(
+        self,
+        article_id: str,
+        *,
+        platform: str = OPINION_PLATFORM,
+        window_hours: int = OPINION_WINDOW_HOURS,
+    ) -> OpinionRunRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM opinion_runs
+                WHERE article_id = ? AND platform = ? AND window_hours = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (article_id, platform, window_hours),
+            ).fetchone()
+        return _opinion_run_from_row(row) if row is not None else None
+
+    def load_opinion_plans_for_article(
+        self,
+        article_id: str,
+        *,
+        article_snapshot_id: str | None = None,
+        content_hash: str | None = None,
+    ) -> list[OpinionPlan]:
+        if (article_snapshot_id is None) != (content_hash is None):
+            raise ValueError("article_snapshot_id 和 content_hash 必须同时存在")
+        with self._connect() as connection:
+            latest_run = connection.execute(
+                """
+                SELECT planning_runs.id, article_snapshots.id AS snapshot_id,
+                       article_snapshots.content_hash
+                FROM planning_runs
+                JOIN run_evidence
+                    ON run_evidence.run_id = planning_runs.run_id
+                   AND run_evidence.selected = 1
+                JOIN article_snapshots
+                    ON article_snapshots.id = run_evidence.snapshot_id
+                WHERE article_snapshots.article_id = ?
+                  AND planning_runs.status = 'completed'
+                ORDER BY planning_runs.created_at DESC, planning_runs.rowid DESC
+                LIMIT 1
+                """,
+                (article_id,),
+            ).fetchone()
+            if latest_run is None:
+                return []
+            if article_snapshot_id is not None and (
+                str(latest_run["snapshot_id"]) != article_snapshot_id
+                or str(latest_run["content_hash"]) != content_hash
+            ):
+                raise ArticleSnapshotMismatchError(
+                    "文章规划与当前文章快照不一致：article_snapshot_mismatch"
+                )
+            rows = connection.execute(
+                """
+                SELECT plans.id, plans.planning_run_id, plans.evidence_no,
+                       plans.trigger_quote, plans.question, plans.platform,
+                       plans.window_hours, queries.position, queries.query, queries.purpose,
+                       planning_runs.created_at
+                FROM opinion_plans AS plans
+                JOIN article_snapshots AS snapshots
+                    ON snapshots.id = plans.snapshot_id
+                JOIN planning_runs
+                    ON planning_runs.id = plans.planning_run_id
+                LEFT JOIN opinion_queries AS queries
+                    ON queries.plan_id = plans.id
+                WHERE plans.planning_run_id = ?
+                  AND plans.snapshot_id = ?
+                  AND plans.platform = ?
+                ORDER BY plans.id, queries.position
+                """,
+                (latest_run["id"], latest_run["snapshot_id"], OPINION_PLATFORM),
+            ).fetchall()
+
+        if not rows:
+            return []
+        grouped: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            evidence_no = int(row["evidence_no"])
+            item = grouped.setdefault(
+                evidence_no,
+                {
+                    "trigger_quote": str(row["trigger_quote"]),
+                    "question": str(row["question"]),
+                    "platform": str(row["platform"]),
+                    "window_hours": int(row["window_hours"]),
+                    "queries": [],
+                },
+            )
+            if row["position"] is not None:
+                item["queries"].append(SearchQuery(str(row["query"]), str(row["purpose"])))
+        return [
+            OpinionPlan(
+                evidence_id=evidence_no,
+                trigger_quote=item["trigger_quote"],
+                question=item["question"],
+                queries=tuple(item["queries"]),
+                platform=item["platform"],
+                window_hours=item["window_hours"],
+            )
+            for evidence_no, item in sorted(grouped.items())
+        ]
+
+    def start_opinion_run(
+        self,
+        article_id: str,
+        *,
+        platform: str = OPINION_PLATFORM,
+        window_hours: int = OPINION_WINDOW_HOURS,
+        article_snapshot_id: str | None = None,
+        content_hash: str | None = None,
+        requested_limit: int | None = None,
+        timeout_seconds: float = 300.0,
+        stale_grace_seconds: float = 30.0,
+    ) -> OpinionRunRecord:
+        record, _ = self.acquire_opinion_run(
+            article_id,
+            platform=platform,
+            window_hours=window_hours,
+            article_snapshot_id=article_snapshot_id,
+            content_hash=content_hash,
+            requested_limit=requested_limit,
+            timeout_seconds=timeout_seconds,
+            stale_grace_seconds=stale_grace_seconds,
+        )
+        return record
+
+    def acquire_opinion_run(
+        self,
+        article_id: str,
+        *,
+        platform: str = OPINION_PLATFORM,
+        window_hours: int = OPINION_WINDOW_HOURS,
+        article_snapshot_id: str | None = None,
+        content_hash: str | None = None,
+        requested_limit: int | None = None,
+        timeout_seconds: float = 300.0,
+        stale_grace_seconds: float = 30.0,
+    ) -> tuple[OpinionRunRecord, bool]:
+        """Atomically reuse an active run or create the only active run for a target."""
+        if platform != OPINION_PLATFORM:
+            raise ValueError(f"舆情平台固定为 {OPINION_PLATFORM}")
+        if window_hours != OPINION_WINDOW_HOURS:
+            raise ValueError(f"舆情时间窗固定为 {OPINION_WINDOW_HOURS} 小时")
+        if (article_snapshot_id is None) != (content_hash is None):
+            raise ValueError("article_snapshot_id 和 content_hash 必须同时存在")
+        if requested_limit is not None and not 1 <= requested_limit <= 200:
+            raise ValueError("requested_limit 必须在 1 到 200 之间")
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be a positive finite number")
+        if not math.isfinite(stale_grace_seconds) or stale_grace_seconds < 0:
+            raise ValueError("stale_grace_seconds must be a non-negative finite number")
+        run_id = uuid4().hex
+        now = project_now()
+        created_at = _format_datetime(now)
+        metadata = {
+            "article_snapshot_id": article_snapshot_id,
+            "content_hash": content_hash,
+            "requested_limit": requested_limit,
+            "timeout_seconds": timeout_seconds,
+        }
+        record: OpinionRunRecord | None = None
+        created = False
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            article = connection.execute(
+                "SELECT 1 FROM articles WHERE id = ?", (article_id,)
+            ).fetchone()
+            if article is None:
+                raise ValueError(f"不存在的文章：{article_id}")
+
+            active = connection.execute(
+                """
+                SELECT * FROM opinion_runs
+                WHERE article_id = ? AND platform = ? AND window_hours = ?
+                  AND status = 'running'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (article_id, platform, window_hours),
+            ).fetchone()
+            if active is not None:
+                heartbeat = _opinion_heartbeat(active)
+                active_timeout = _opinion_timeout_seconds(active)
+                if heartbeat + timedelta(seconds=active_timeout + stale_grace_seconds) > now:
+                    record = _opinion_run_from_row(active)
+                else:
+                    _mark_stale_opinion_run(connection, active, now)
+
+            if record is None:
+                try:
+                    connection.execute(
+                        """
+                        INSERT INTO opinion_runs (
+                            id, article_id, platform, window_hours, status,
+                            created_at, started_at, finished_at, last_heartbeat_at,
+                            timeout_seconds, article_snapshot_id, content_hash,
+                            requested_limit, collected_count, analyzed_count,
+                            classification_total, classified_count, unclassified_count,
+                            status_reason, errors_json, result_json
+                        ) VALUES (
+                            ?, ?, ?, ?, 'running', ?, ?, NULL, ?, ?, ?, ?, ?,
+                            0, 0, 0, 0, 0, 'running', '[]', ?
+                        )
+                        """,
+                        (
+                            run_id,
+                            article_id,
+                            platform,
+                            window_hours,
+                            created_at,
+                            created_at,
+                            created_at,
+                            timeout_seconds,
+                            article_snapshot_id,
+                            content_hash,
+                            requested_limit,
+                            json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                        ),
+                    )
+                except sqlite3.IntegrityError:
+                    active = connection.execute(
+                        """
+                        SELECT * FROM opinion_runs
+                        WHERE article_id = ? AND platform = ? AND window_hours = ?
+                          AND status = 'running'
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 1
+                        """,
+                        (article_id, platform, window_hours),
+                    ).fetchone()
+                    if active is None:
+                        raise
+                    record = _opinion_run_from_row(active)
+                else:
+                    created = True
+                    row = connection.execute(
+                        "SELECT * FROM opinion_runs WHERE id = ?", (run_id,)
+                    ).fetchone()
+                    assert row is not None
+                    record = _opinion_run_from_row(row)
+        assert record is not None
+        return record, created
+
+    def complete_opinion_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        result_payload: dict[str, Any],
+        comments: list[dict[str, Any]],
+        errors: list[dict[str, Any]] | list[str] | None = None,
+        classifications: list[dict[str, Any]] | None = None,
+        attempts: list[dict[str, Any]] | None = None,
+    ) -> OpinionRunRecord:
+        if status not in {"completed", "partial", "failed"}:
+            raise ValueError("舆情运行结束状态无效")
+        if status == "completed":
+            summary = result_payload.get("summary")
+            if not isinstance(summary, str) or not summary.strip():
+                raise ValueError("completed 舆情结果必须包含非空 summary")
+        finished_at = _format_datetime(project_now())
+        errors_payload = [
+            dict(error) if isinstance(error, dict) else {"type": "OpinionError", "message": error}
+            for error in errors or []
+        ]
+        persisted_comments = _opinion_comment_rows(comments)
+        persisted_classifications = _opinion_classification_rows(
+            classifications
+            if classifications is not None
+            else result_payload.get("classifications", []),
+            run_id=run_id,
+        )
+        persisted_attempts = _opinion_attempt_rows(
+            attempts if attempts is not None else result_payload.get("attempts", [])
+        )
+        comment_ids = {item["comment_id"] for item in persisted_comments}
+        for item in persisted_classifications:
+            if item["comment_id"] not in comment_ids:
+                raise ValueError("分类关系引用了当前运行之外的评论")
+
+        with self._connect() as connection:
+            run = connection.execute(
+                "SELECT * FROM opinion_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise ValueError(f"不存在的舆情运行：{run_id}")
+            if run["status"] != "running":
+                raise ValueError(f"无法完成不存在或已结束的舆情运行：{run_id}")
+
+            snapshot_id = _optional_text(
+                result_payload.get("article_snapshot_id") or run["article_snapshot_id"]
+            )
+            content_hash = _optional_text(result_payload.get("content_hash") or run["content_hash"])
+            if (snapshot_id is None) != (content_hash is None):
+                raise ValueError("article_snapshot_id 和 content_hash 必须同时存在")
+            requested_limit = result_payload.get("requested_limit")
+            if requested_limit is None:
+                requested_limit = run["requested_limit"]
+            if requested_limit is not None and (
+                type(requested_limit) is not int or not 1 <= requested_limit <= 200
+            ):
+                raise ValueError("requested_limit 必须在 1 到 200 之间")
+            collected_count = len(persisted_comments)
+            analyzed_value = result_payload.get("analyzed_count")
+            if analyzed_value is None:
+                analyzed_value = run["analyzed_count"]
+            analyzed_count = _opinion_nonnegative_int(analyzed_value, "analyzed_count")
+            if requested_limit is not None and collected_count > requested_limit:
+                raise ValueError("collected_count 不能超过 requested_limit")
+            if analyzed_count > collected_count:
+                raise ValueError("analyzed_count 不能超过 collected_count")
+            classification_total = len(persisted_classifications)
+            classified_count = sum(
+                item["classification_status"] == "classified" for item in persisted_classifications
+            )
+            unclassified_count = classification_total - classified_count
+            status_reason = str(
+                result_payload.get("status_reason") or _default_opinion_status_reason(status)
+            )
+            if status_reason not in _OPINION_STATUS_REASONS[status]:
+                raise ValueError(f"{status} 不允许使用状态原因 {status_reason}")
+
+            persisted_payload = dict(result_payload)
+            persisted_payload.update(
+                {
+                    "status": status,
+                    "status_reason": status_reason,
+                    "article_snapshot_id": snapshot_id,
+                    "content_hash": content_hash,
+                    "requested_limit": requested_limit,
+                    "collected_count": collected_count,
+                    "analyzed_count": analyzed_count,
+                    "classification_total": classification_total,
+                    "classified_count": classified_count,
+                    "unclassified_count": unclassified_count,
+                    "comments": [dict(item) for item in persisted_comments],
+                    "classifications": [dict(item) for item in persisted_classifications],
+                    "attempts": [dict(item) for item in persisted_attempts],
+                    "errors": [dict(item) for item in errors_payload],
+                }
+            )
+            persisted_payload.setdefault("requested_at", str(run["created_at"]))
+            persisted_payload["finished_at"] = finished_at
+            persisted_payload["last_heartbeat_at"] = finished_at
+            for comment in persisted_comments:
+                payload_json = json.dumps(comment, ensure_ascii=False, sort_keys=True)
+                connection.execute(
+                    """
+                    INSERT INTO opinion_comments (
+                        run_id, comment_id, source_url, author, content,
+                        likes, published_at, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        comment["comment_id"],
+                        comment["source_url"],
+                        comment["author"],
+                        comment["content"],
+                        comment["likes"],
+                        comment.get("published_at"),
+                        payload_json,
+                    ),
+                )
+            for classification in persisted_classifications:
+                connection.execute(
+                    """
+                    INSERT INTO opinion_classifications (
+                        run_id, evidence_id, comment_id, classification_status,
+                        stance, error_code
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        classification["evidence_id"],
+                        classification["comment_id"],
+                        classification["classification_status"],
+                        classification["stance"],
+                        classification["error_code"],
+                    ),
+                )
+            for attempt in persisted_attempts:
+                connection.execute(
+                    """
+                    INSERT INTO opinion_attempts (
+                        run_id, stage, attempt_no, started_at, finished_at,
+                        outcome, error_code, error_summary
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(run_id, stage, attempt_no) DO UPDATE SET
+                        started_at = excluded.started_at,
+                        finished_at = excluded.finished_at,
+                        outcome = excluded.outcome,
+                        error_code = excluded.error_code,
+                        error_summary = excluded.error_summary
+                    """,
+                    (
+                        run_id,
+                        attempt["stage"],
+                        attempt["attempt"],
+                        attempt["started_at"],
+                        attempt["finished_at"],
+                        attempt["outcome"],
+                        attempt["error_code"],
+                        attempt["error_summary"],
+                    ),
+                )
+            updated = connection.execute(
+                """
+                UPDATE opinion_runs
+                SET status = ?, finished_at = ?, last_heartbeat_at = ?,
+                    article_snapshot_id = ?, content_hash = ?, requested_limit = ?,
+                    collected_count = ?, analyzed_count = ?, classification_total = ?,
+                    classified_count = ?, unclassified_count = ?, status_reason = ?,
+                    errors_json = ?, result_json = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (
+                    status,
+                    finished_at,
+                    finished_at,
+                    snapshot_id,
+                    content_hash,
+                    requested_limit,
+                    collected_count,
+                    analyzed_count,
+                    classification_total,
+                    classified_count,
+                    unclassified_count,
+                    status_reason,
+                    json.dumps(errors_payload, ensure_ascii=False, sort_keys=True),
+                    json.dumps(persisted_payload, ensure_ascii=False, sort_keys=True),
+                    run_id,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise ValueError(f"无法完成不存在或已结束的舆情运行：{run_id}")
+            row = connection.execute(
+                "SELECT * FROM opinion_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        assert row is not None
+        return _opinion_run_from_row(row)
+
+    def heartbeat_opinion_run(
+        self,
+        run_id: str,
+        *,
+        attempts: list[dict[str, Any]] | None = None,
+    ) -> OpinionRunRecord:
+        heartbeat_at = _format_datetime(project_now())
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM opinion_runs WHERE id = ? AND status = 'running'",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"无法更新不存在或已结束的舆情运行：{run_id}")
+            result_payload = (
+                _load_json_object(row["result_json"], "opinion_runs.result_json")
+                if row["result_json"] is not None
+                else {}
+            )
+            if attempts is not None:
+                persisted_attempts = _opinion_attempt_rows(attempts)
+                result_payload["attempts"] = attempts
+                for attempt in persisted_attempts:
+                    connection.execute(
+                        """
+                        INSERT INTO opinion_attempts (
+                            run_id, stage, attempt_no, started_at, finished_at,
+                            outcome, error_code, error_summary
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(run_id, stage, attempt_no) DO UPDATE SET
+                            started_at = excluded.started_at,
+                            finished_at = excluded.finished_at,
+                            outcome = excluded.outcome,
+                            error_code = excluded.error_code,
+                            error_summary = excluded.error_summary
+                        """,
+                        (
+                            run_id,
+                            attempt["stage"],
+                            attempt["attempt"],
+                            attempt["started_at"],
+                            attempt["finished_at"],
+                            attempt["outcome"],
+                            attempt["error_code"],
+                            attempt["error_summary"],
+                        ),
+                    )
+            connection.execute(
+                """
+                UPDATE opinion_runs
+                SET last_heartbeat_at = ?, result_json = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (
+                    heartbeat_at,
+                    json.dumps(result_payload, ensure_ascii=False, sort_keys=True),
+                    run_id,
+                ),
+            )
+            updated = connection.execute(
+                "SELECT * FROM opinion_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        assert updated is not None
+        return _opinion_run_from_row(updated)
+
+    def load_opinion_comments(self, run_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT comment_id, source_url, author, content, likes, published_at
+                FROM opinion_comments
+                WHERE run_id = ? ORDER BY published_at DESC, comment_id
+                """,
+                (run_id,),
+            ).fetchall()
+        return [
+            {
+                "comment_id": str(row["comment_id"]),
+                "source_url": str(row["source_url"]),
+                "author": str(row["author"]),
+                "content": str(row["content"]),
+                "likes": int(row["likes"]),
+                "published_at": _optional_text(row["published_at"]),
+            }
+            for row in rows
+        ]
+
+    def load_opinion_classifications(self, run_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT run_id, evidence_id, comment_id, classification_status,
+                       stance, error_code
+                FROM opinion_classifications
+                WHERE run_id = ?
+                ORDER BY evidence_id, comment_id
+                """,
+                (run_id,),
+            ).fetchall()
+        return [
+            {
+                "run_id": str(row["run_id"]),
+                "evidence_id": int(row["evidence_id"]),
+                "comment_id": str(row["comment_id"]),
+                "classification_status": str(row["classification_status"]),
+                "stance": _optional_text(row["stance"]),
+                "error_code": _optional_text(row["error_code"]),
+            }
+            for row in rows
+        ]
+
+    def load_opinion_attempts(self, run_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT stage, attempt_no, started_at, finished_at, outcome,
+                       error_code, error_summary
+                FROM opinion_attempts
+                WHERE run_id = ?
+                ORDER BY stage, attempt_no
+                """,
+                (run_id,),
+            ).fetchall()
+        return [
+            {
+                "stage": str(row["stage"]),
+                "attempt": int(row["attempt_no"]),
+                "started_at": str(row["started_at"]),
+                "finished_at": str(row["finished_at"]),
+                "outcome": str(row["outcome"]),
+                "error_code": _optional_text(row["error_code"]),
+                "error_summary": _optional_text(row["error_summary"]),
+            }
+            for row in rows
+        ]
+
     def new_feed_entries(
         self,
         state: FeedState,
@@ -444,52 +1056,6 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
                 """,
                 (finished_at, json.dumps(payload, ensure_ascii=False), run_id),
             )
-
-    def list_runs(self, *, limit: int, status: str | None = None) -> list[ResearchRunSummary]:
-        """Return aggregate run metadata without opening the source database for writing."""
-        if not 1 <= limit <= 100:
-            raise ValueError("limit must be between 1 and 100")
-        if status is not None and status not in RESEARCH_RUN_STATUSES:
-            raise ValueError(f"unknown research run status: {status}")
-
-        query = """
-            SELECT runs.id AS run_id, runs.topic, runs.status,
-                runs.created_at AS started_at, runs.finished_at,
-                json_array_length(runs.feeds_json) AS feed_count,
-                COUNT(evidence.snapshot_id) AS snapshot_count,
-                COALESCE(SUM(CASE WHEN evidence.selected = 1 THEN 1 ELSE 0 END), 0)
-                    AS selected_evidence_count,
-                json_array_length(runs.errors_json) AS collection_error_count
-            FROM research_runs AS runs
-            LEFT JOIN run_evidence AS evidence ON evidence.run_id = runs.id
-        """
-        parameters: list[object] = []
-        if status is not None:
-            query += " WHERE runs.status = ?"
-            parameters.append(status)
-        query += """
-            GROUP BY runs.id
-            ORDER BY runs.created_at DESC, runs.id ASC
-            LIMIT ?
-        """
-        parameters.append(limit)
-
-        with _read_only_snapshot_connection(self.database_path) as connection:
-            rows = connection.execute(query, parameters).fetchall()
-        return [
-            ResearchRunSummary(
-                run_id=str(row["run_id"]),
-                topic=str(row["topic"]),
-                status=str(row["status"]),
-                started_at=_required_datetime(row["started_at"]),
-                finished_at=_parse_datetime(row["finished_at"]),
-                feed_count=int(row["feed_count"]),
-                snapshot_count=int(row["snapshot_count"]),
-                selected_evidence_count=int(row["selected_evidence_count"]),
-                collection_error_count=int(row["collection_error_count"]),
-            )
-            for row in rows
-        ]
 
     def load_selected_evidence(self, run_id: str) -> list[SelectedEvidence]:
         with self._connect() as connection:
@@ -548,6 +1114,8 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
         run_id: str,
         plans: list[SearchPlan],
         raw_response: str | None,
+        *,
+        opinion_plans: list[OpinionPlan] | None = None,
     ) -> None:
         finished_at = _format_datetime(project_now())
         with self._connect() as connection:
@@ -588,6 +1156,45 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
                         VALUES (?, ?, ?, ?)
                         """,
                         (plan_id, position, query.query, query.purpose),
+                    )
+
+            for opinion_plan in opinion_plans or []:
+                evidence = connection.execute(
+                    """
+                    SELECT snapshot_id FROM run_evidence
+                    WHERE run_id = ? AND evidence_no = ? AND selected = 1
+                    """,
+                    (run_id, opinion_plan.evidence_id),
+                ).fetchone()
+                if evidence is None:
+                    raise ValueError(f"舆情提示引用了不存在的已选证据：{opinion_plan.evidence_id}")
+                opinion_plan_id = uuid4().hex
+                connection.execute(
+                    """
+                    INSERT INTO opinion_plans (
+                        id, planning_run_id, run_id, snapshot_id, evidence_no,
+                        trigger_quote, question, platform, window_hours
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        opinion_plan_id,
+                        planning_run_id,
+                        run_id,
+                        evidence["snapshot_id"],
+                        opinion_plan.evidence_id,
+                        opinion_plan.trigger_quote,
+                        opinion_plan.question,
+                        opinion_plan.platform,
+                        opinion_plan.window_hours,
+                    ),
+                )
+                for position, query in enumerate(opinion_plan.queries, start=1):
+                    connection.execute(
+                        """
+                        INSERT INTO opinion_queries (plan_id, position, query, purpose)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (opinion_plan_id, position, query.query, query.purpose),
                     )
 
             updated = connection.execute(
@@ -726,6 +1333,7 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute("PRAGMA busy_timeout = 5000")
         self._migrate(connection)
+        connection.commit()
         return connection
 
     @staticmethod
@@ -916,6 +1524,438 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin):
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                 (7, _format_datetime(project_now())),
             )
+        applied_versions = {
+            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
+        }
+        planning_tables_exist = (
+            connection.execute(
+                """
+                SELECT COUNT(*) FROM sqlite_master
+                WHERE type = 'table' AND name IN ('planning_runs', 'run_evidence')
+                """
+            ).fetchone()[0]
+            == 2
+        )
+        if 8 not in applied_versions and planning_tables_exist:
+            connection.executescript(
+                """
+                CREATE TABLE opinion_plans (
+                    id TEXT PRIMARY KEY,
+                    planning_run_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    snapshot_id TEXT NOT NULL,
+                    evidence_no INTEGER NOT NULL,
+                    trigger_quote TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    platform TEXT NOT NULL CHECK (platform = 'bilibili'),
+                    window_hours INTEGER NOT NULL CHECK (window_hours = 72),
+                    UNIQUE (planning_run_id, evidence_no),
+                    FOREIGN KEY (planning_run_id, run_id)
+                        REFERENCES planning_runs(id, run_id),
+                    FOREIGN KEY (run_id, snapshot_id)
+                        REFERENCES run_evidence(run_id, snapshot_id)
+                );
+
+                CREATE TABLE opinion_queries (
+                    plan_id TEXT NOT NULL REFERENCES opinion_plans(id),
+                    position INTEGER NOT NULL,
+                    query TEXT NOT NULL,
+                    purpose TEXT NOT NULL,
+                    PRIMARY KEY (plan_id, position)
+                );
+
+                CREATE INDEX opinion_plans_planning_run_id_idx
+                    ON opinion_plans(planning_run_id);
+                """
+            )
+            connection.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                (8, _format_datetime(project_now())),
+            )
+        applied_versions = {
+            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
+        }
+        article_tables_exist = (
+            connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'articles'"
+            ).fetchone()[0]
+            == 1
+        )
+        if 9 not in applied_versions and article_tables_exist:
+            connection.executescript(
+                """
+                CREATE TABLE opinion_runs (
+                    id TEXT PRIMARY KEY,
+                    article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                    platform TEXT NOT NULL CHECK (platform = 'bilibili'),
+                    window_hours INTEGER NOT NULL CHECK (window_hours = 72),
+                    status TEXT NOT NULL CHECK (
+                        status IN ('running', 'completed', 'partial', 'failed')
+                    ),
+                    created_at TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    errors_json TEXT NOT NULL,
+                    result_json TEXT
+                );
+
+                CREATE TABLE opinion_comments (
+                    run_id TEXT NOT NULL REFERENCES opinion_runs(id) ON DELETE CASCADE,
+                    comment_id TEXT NOT NULL,
+                    source_url TEXT NOT NULL,
+                    author TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    likes INTEGER NOT NULL CHECK (likes >= 0),
+                    published_at TEXT,
+                    payload_json TEXT NOT NULL,
+                    PRIMARY KEY (run_id, comment_id)
+                );
+
+                CREATE INDEX opinion_runs_article_id_idx
+                    ON opinion_runs(article_id, created_at);
+                CREATE INDEX opinion_comments_run_id_idx
+                    ON opinion_comments(run_id, published_at);
+                """
+            )
+            connection.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                (9, _format_datetime(project_now())),
+            )
+        applied_versions = {
+            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
+        }
+        opinion_table_exists = (
+            connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'opinion_runs'"
+            ).fetchone()[0]
+            == 1
+        )
+        if 10 not in applied_versions and opinion_table_exists:
+            connection.executescript(
+                """
+                ALTER TABLE opinion_runs ADD COLUMN last_heartbeat_at TEXT;
+                ALTER TABLE opinion_runs ADD COLUMN timeout_seconds REAL NOT NULL DEFAULT 300.0;
+                UPDATE opinion_runs
+                SET last_heartbeat_at = COALESCE(last_heartbeat_at, started_at, created_at);
+                """
+            )
+            duplicate_groups = connection.execute(
+                """
+                SELECT article_id, platform, window_hours
+                FROM opinion_runs
+                WHERE status = 'running'
+                GROUP BY article_id, platform, window_hours
+                HAVING COUNT(*) > 1
+                """
+            ).fetchall()
+            for group in duplicate_groups:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM opinion_runs
+                    WHERE article_id = ? AND platform = ? AND window_hours = ?
+                      AND status = 'running'
+                    ORDER BY created_at DESC, id DESC
+                    """,
+                    (group["article_id"], group["platform"], group["window_hours"]),
+                ).fetchall()
+                for row in rows[1:]:
+                    _mark_stale_opinion_run(connection, row, project_now())
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX opinion_runs_active_target_idx
+                    ON opinion_runs(article_id, platform, window_hours)
+                    WHERE status = 'running'
+                """
+            )
+            connection.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                (10, _format_datetime(project_now())),
+            )
+        applied_versions = {
+            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
+        }
+        if 11 not in applied_versions and opinion_table_exists:
+            opinion_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(opinion_runs)").fetchall()
+            }
+            opinion_column_definitions = {
+                "article_snapshot_id": "TEXT",
+                "content_hash": "TEXT",
+                "requested_limit": "INTEGER",
+                "collected_count": "INTEGER NOT NULL DEFAULT 0",
+                "analyzed_count": "INTEGER NOT NULL DEFAULT 0",
+                "classification_total": "INTEGER NOT NULL DEFAULT 0",
+                "classified_count": "INTEGER NOT NULL DEFAULT 0",
+                "unclassified_count": "INTEGER NOT NULL DEFAULT 0",
+                "status_reason": "TEXT NOT NULL DEFAULT 'failed'",
+            }
+            for column, definition in opinion_column_definitions.items():
+                if column not in opinion_columns:
+                    connection.execute(f"ALTER TABLE opinion_runs ADD COLUMN {column} {definition}")
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS opinion_comments (
+                    run_id TEXT NOT NULL REFERENCES opinion_runs(id) ON DELETE CASCADE,
+                    comment_id TEXT NOT NULL,
+                    source_url TEXT NOT NULL,
+                    author TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    likes INTEGER NOT NULL CHECK (likes >= 0),
+                    published_at TEXT,
+                    payload_json TEXT NOT NULL,
+                    PRIMARY KEY (run_id, comment_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS opinion_classifications (
+                    run_id TEXT NOT NULL REFERENCES opinion_runs(id) ON DELETE CASCADE,
+                    evidence_id INTEGER NOT NULL CHECK (evidence_id > 0),
+                    comment_id TEXT NOT NULL,
+                    classification_status TEXT NOT NULL CHECK (
+                        classification_status IN ('classified', 'unclassified')
+                    ),
+                    stance TEXT CHECK (
+                        stance IS NULL OR stance IN ('support', 'oppose', 'mixed', 'unclear')
+                    ),
+                    error_code TEXT,
+                    PRIMARY KEY (run_id, evidence_id, comment_id),
+                    FOREIGN KEY (run_id, comment_id)
+                        REFERENCES opinion_comments(run_id, comment_id),
+                    CHECK (
+                        (classification_status = 'classified'
+                         AND stance IS NOT NULL AND error_code IS NULL)
+                        OR
+                        (classification_status = 'unclassified'
+                         AND stance IS NULL AND error_code IS NOT NULL)
+                    )
+                );
+
+                CREATE TABLE IF NOT EXISTS opinion_attempts (
+                    run_id TEXT NOT NULL REFERENCES opinion_runs(id) ON DELETE CASCADE,
+                    stage TEXT NOT NULL CHECK (
+                        stage IN (
+                            'opinion_planning', 'aid_resolution', 'comment_collection',
+                            'opinion_analysis', 'classification'
+                        )
+                    ),
+                    attempt_no INTEGER NOT NULL CHECK (attempt_no > 0),
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT NOT NULL,
+                    outcome TEXT NOT NULL CHECK (
+                        outcome IN ('succeeded', 'failed', 'timed_out', 'skipped')
+                    ),
+                    error_code TEXT,
+                    error_summary TEXT,
+                    PRIMARY KEY (run_id, stage, attempt_no)
+                );
+
+                CREATE INDEX IF NOT EXISTS opinion_runs_identity_idx
+                    ON opinion_runs(
+                        article_id, article_snapshot_id, content_hash,
+                        platform, window_hours, requested_limit, created_at
+                    );
+                CREATE INDEX IF NOT EXISTS opinion_classifications_run_id_idx
+                    ON opinion_classifications(run_id, evidence_id, comment_id);
+                CREATE INDEX IF NOT EXISTS opinion_attempts_run_id_idx
+                    ON opinion_attempts(run_id, stage, attempt_no);
+                """
+            )
+
+            legacy_runs = connection.execute(
+                "SELECT * FROM opinion_runs ORDER BY created_at, id"
+            ).fetchall()
+            for run in legacy_runs:
+                payload = {}
+                if run["result_json"] is not None:
+                    try:
+                        candidate = json.loads(run["result_json"])
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        candidate = None
+                    if isinstance(candidate, dict):
+                        payload = candidate
+
+                raw_comments = payload.get("comments", [])
+                try:
+                    legacy_comments = _opinion_comment_rows(raw_comments)
+                except ValueError:
+                    legacy_comments = []
+                existing_comment_ids = {
+                    str(item[0])
+                    for item in connection.execute(
+                        "SELECT comment_id FROM opinion_comments WHERE run_id = ?",
+                        (run["id"],),
+                    ).fetchall()
+                }
+                for comment in legacy_comments:
+                    if comment["comment_id"] in existing_comment_ids:
+                        continue
+                    try:
+                        connection.execute(
+                            """
+                            INSERT INTO opinion_comments (
+                                run_id, comment_id, source_url, author, content,
+                                likes, published_at, payload_json
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                run["id"],
+                                comment["comment_id"],
+                                comment["source_url"],
+                                comment["author"],
+                                comment["content"],
+                                comment["likes"],
+                                comment["published_at"],
+                                json.dumps(comment, ensure_ascii=False, sort_keys=True),
+                            ),
+                        )
+                    except sqlite3.IntegrityError:
+                        continue
+
+                raw_classifications = payload.get("classifications", [])
+                if isinstance(raw_classifications, list):
+                    for item in raw_classifications:
+                        if not isinstance(item, dict):
+                            continue
+                        legacy_item = dict(item)
+                        legacy_item.setdefault("run_id", str(run["id"]))
+                        try:
+                            classifications = _opinion_classification_rows(
+                                [legacy_item], run_id=str(run["id"])
+                            )
+                        except ValueError:
+                            continue
+                        comment_exists = connection.execute(
+                            """
+                            SELECT 1 FROM opinion_comments
+                            WHERE run_id = ? AND comment_id = ?
+                            """,
+                            (run["id"], classifications[0]["comment_id"]),
+                        ).fetchone()
+                        if comment_exists is None:
+                            continue
+                        connection.execute(
+                            """
+                            INSERT OR IGNORE INTO opinion_classifications (
+                                run_id, evidence_id, comment_id, classification_status,
+                                stance, error_code
+                            ) VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                run["id"],
+                                classifications[0]["evidence_id"],
+                                classifications[0]["comment_id"],
+                                classifications[0]["classification_status"],
+                                classifications[0]["stance"],
+                                classifications[0]["error_code"],
+                            ),
+                        )
+
+                raw_attempts = payload.get("attempts", [])
+                if isinstance(raw_attempts, list):
+                    for item in raw_attempts:
+                        if not isinstance(item, dict):
+                            continue
+                        try:
+                            attempt = _opinion_attempt_rows([item])[0]
+                        except ValueError:
+                            continue
+                        connection.execute(
+                            """
+                            INSERT OR IGNORE INTO opinion_attempts (
+                                run_id, stage, attempt_no, started_at, finished_at,
+                                outcome, error_code, error_summary
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                run["id"],
+                                attempt["stage"],
+                                attempt["attempt"],
+                                attempt["started_at"],
+                                attempt["finished_at"],
+                                attempt["outcome"],
+                                attempt["error_code"],
+                                attempt["error_summary"],
+                            ),
+                        )
+
+                stored_comment_count = connection.execute(
+                    "SELECT COUNT(*) FROM opinion_comments WHERE run_id = ?",
+                    (run["id"],),
+                ).fetchone()[0]
+                stored_classifications = connection.execute(
+                    """
+                    SELECT classification_status, COUNT(*) AS count
+                    FROM opinion_classifications
+                    WHERE run_id = ?
+                    GROUP BY classification_status
+                    """,
+                    (run["id"],),
+                ).fetchall()
+                classification_counts = {
+                    str(item["classification_status"]): int(item["count"])
+                    for item in stored_classifications
+                }
+                requested_limit = _opinion_optional_limit(
+                    payload.get("requested_limit", run["requested_limit"])
+                )
+                analyzed_count = payload.get("analyzed_count", run["analyzed_count"])
+                if type(analyzed_count) is not int or analyzed_count < 0:
+                    analyzed_count = 0
+                if analyzed_count > stored_comment_count:
+                    analyzed_count = stored_comment_count
+                status = str(run["status"])
+                status_reason = str(payload.get("status_reason") or "")
+                if status_reason not in _OPINION_STATUS_REASONS.get(status, set()):
+                    status_reason = _default_opinion_status_reason(status)
+                snapshot_id = _optional_text(
+                    payload.get("article_snapshot_id", run["article_snapshot_id"])
+                )
+                content_hash = _optional_text(payload.get("content_hash", run["content_hash"]))
+                if (snapshot_id is None) != (content_hash is None):
+                    snapshot_id = None
+                    content_hash = None
+                payload.update(
+                    {
+                        "article_snapshot_id": snapshot_id,
+                        "content_hash": content_hash,
+                        "requested_limit": requested_limit,
+                        "collected_count": int(stored_comment_count),
+                        "analyzed_count": analyzed_count,
+                        "classification_total": sum(classification_counts.values()),
+                        "classified_count": classification_counts.get("classified", 0),
+                        "unclassified_count": classification_counts.get("unclassified", 0),
+                        "status": status,
+                        "status_reason": status_reason,
+                    }
+                )
+                connection.execute(
+                    """
+                    UPDATE opinion_runs
+                    SET article_snapshot_id = ?, content_hash = ?, requested_limit = ?,
+                        collected_count = ?, analyzed_count = ?, classification_total = ?,
+                        classified_count = ?, unclassified_count = ?, status_reason = ?,
+                        result_json = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        snapshot_id,
+                        content_hash,
+                        requested_limit,
+                        int(stored_comment_count),
+                        analyzed_count,
+                        sum(classification_counts.values()),
+                        classification_counts.get("classified", 0),
+                        classification_counts.get("unclassified", 0),
+                        status_reason,
+                        json.dumps(payload, ensure_ascii=False, sort_keys=True)
+                        if payload
+                        else run["result_json"],
+                        run["id"],
+                    ),
+                )
+            connection.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                (11, _format_datetime(project_now())),
+            )
 
 
 def _article_payload(article: NormalizedArticle) -> dict[str, object]:
@@ -929,6 +1969,275 @@ def _article_payload(article: NormalizedArticle) -> dict[str, object]:
     )
     payload["collected_at"] = _format_datetime(article.collected_at)
     return payload
+
+
+def _opinion_comment_rows(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError("comments 必须是数组")
+    rows: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("comments 中存在无效项目")
+        comment_id = _opinion_required_text(item.get("comment_id"), "comment_id")
+        if comment_id in seen_ids:
+            raise ValueError("同一运行内 comment_id 不能重复")
+        seen_ids.add(comment_id)
+        source_url = _opinion_required_text(item.get("source_url"), "source_url")
+        author = _opinion_required_text(item.get("author"), "author")
+        content = _opinion_required_text(item.get("content"), "content")
+        likes = item.get("likes")
+        if type(likes) is not int or likes < 0:
+            raise ValueError("likes 必须是非负整数")
+        published_at = item.get("published_at")
+        if published_at is not None:
+            published_at = _opinion_required_text(published_at, "published_at")
+        rows.append(
+            {
+                "comment_id": comment_id,
+                "source_url": source_url,
+                "author": author,
+                "content": content,
+                "likes": likes,
+                "published_at": published_at,
+            }
+        )
+    return rows
+
+
+def _opinion_classification_rows(value: object, *, run_id: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError("classifications 必须是数组")
+    rows: list[dict[str, Any]] = []
+    seen_relations: set[tuple[int, str]] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("classifications 中存在无效项目")
+        item_run_id = _opinion_required_text(item.get("run_id"), "run_id")
+        if item_run_id != run_id:
+            raise ValueError("分类关系不属于当前运行")
+        evidence_id = item.get("evidence_id")
+        if type(evidence_id) is not int or evidence_id <= 0:
+            raise ValueError("evidence_id 必须是正整数")
+        comment_id = _opinion_required_text(item.get("comment_id"), "comment_id")
+        relation = (evidence_id, comment_id)
+        if relation in seen_relations:
+            raise ValueError("同一争议点-评论关系不能重复")
+        seen_relations.add(relation)
+        classification_status = _opinion_required_text(
+            item.get("classification_status"), "classification_status"
+        )
+        if classification_status not in _OPINION_CLASSIFICATION_STATUSES:
+            raise ValueError("classification_status 不是支持的分类状态")
+        stance = item.get("stance")
+        error_code = item.get("error_code")
+        if classification_status == "classified":
+            stance = _opinion_required_text(stance, "stance")
+            if stance not in _OPINION_STANCES:
+                raise ValueError("stance 不是支持的立场")
+            if error_code is not None:
+                raise ValueError("classified 分类不能包含 error_code")
+        else:
+            if stance is not None:
+                raise ValueError("unclassified 分类不能包含 stance")
+            error_code = _opinion_required_text(error_code, "error_code")
+        rows.append(
+            {
+                "run_id": run_id,
+                "evidence_id": evidence_id,
+                "comment_id": comment_id,
+                "classification_status": classification_status,
+                "stance": stance,
+                "error_code": error_code,
+            }
+        )
+    return rows
+
+
+def _opinion_attempt_rows(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError("attempts 必须是数组")
+    rows: list[dict[str, Any]] = []
+    seen_attempts: set[tuple[str, int]] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("attempts 中存在无效项目")
+        stage = _opinion_required_text(item.get("stage"), "stage")
+        if stage not in _OPINION_ATTEMPT_STAGES:
+            raise ValueError("stage 不是支持的尝试阶段")
+        attempt = item.get("attempt")
+        if type(attempt) is not int or attempt < 1:
+            raise ValueError("attempt 必须是正整数")
+        key = (stage, attempt)
+        if key in seen_attempts:
+            raise ValueError("同一运行内尝试编号不能重复")
+        seen_attempts.add(key)
+        started_at = _opinion_required_text(item.get("started_at"), "started_at")
+        finished_at = _opinion_required_text(item.get("finished_at"), "finished_at")
+        outcome = _opinion_required_text(item.get("outcome"), "outcome")
+        if outcome not in _OPINION_ATTEMPT_OUTCOMES:
+            raise ValueError("outcome 不是支持的尝试结果")
+        error_code = item.get("error_code")
+        if error_code is not None:
+            error_code = _opinion_required_text(error_code, "error_code")
+        error_summary = item.get("error_summary")
+        if error_summary is not None:
+            error_summary = _opinion_required_text(error_summary, "error_summary")
+        rows.append(
+            {
+                "stage": stage,
+                "attempt": attempt,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "outcome": outcome,
+                "error_code": error_code,
+                "error_summary": error_summary,
+            }
+        )
+    return rows
+
+
+def _opinion_required_text(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} 必须是非空字符串")
+    return value.strip()
+
+
+def _opinion_error_rows(raw: object) -> list[dict[str, Any]]:
+    try:
+        value = json.loads(str(raw))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            rows.append(dict(item))
+        else:
+            rows.append({"type": "OpinionError", "message": str(item)})
+    return rows
+
+
+def _opinion_nonnegative_int(value: object, name: str) -> int:
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{name} 必须是非负整数")
+    return value
+
+
+def _opinion_optional_limit(value: object) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int or not 1 <= value <= 200:
+        return None
+    return value
+
+
+def _default_opinion_status_reason(status: str) -> str:
+    if status == "running":
+        return "running"
+    if status == "completed":
+        return "completed"
+    if status == "partial":
+        return "partial_classification"
+    return "failed"
+
+
+def _opinion_run_from_row(row: sqlite3.Row) -> OpinionRunRecord:
+    result_payload = (
+        _load_json_object(row["result_json"], "opinion_runs.result_json")
+        if row["result_json"] is not None
+        else None
+    )
+    return OpinionRunRecord(
+        id=str(row["id"]),
+        article_id=str(row["article_id"]),
+        platform=str(row["platform"]),
+        window_hours=int(row["window_hours"]),
+        status=str(row["status"]),
+        created_at=str(row["created_at"]),
+        started_at=_optional_text(row["started_at"]),
+        finished_at=_optional_text(row["finished_at"]),
+        errors=tuple(_opinion_error_rows(row["errors_json"])),
+        result_payload=result_payload,
+        last_heartbeat_at=_optional_text(row["last_heartbeat_at"]),
+        timeout_seconds=float(row["timeout_seconds"]),
+        article_snapshot_id=_optional_text(row["article_snapshot_id"]),
+        content_hash=_optional_text(row["content_hash"]),
+        requested_limit=_opinion_optional_limit(row["requested_limit"]),
+        collected_count=int(row["collected_count"]),
+        analyzed_count=int(row["analyzed_count"]),
+        classification_total=int(row["classification_total"]),
+        classified_count=int(row["classified_count"]),
+        unclassified_count=int(row["unclassified_count"]),
+        status_reason=str(row["status_reason"]),
+        attempts=tuple(
+            item for item in (result_payload or {}).get("attempts", []) if isinstance(item, dict)
+        ),
+    )
+
+
+def _opinion_heartbeat(row: sqlite3.Row) -> datetime:
+    value = row["last_heartbeat_at"] or row["started_at"] or row["created_at"]
+    try:
+        return _required_datetime(value)
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=project_now().tzinfo)
+
+
+def _opinion_timeout_seconds(row: sqlite3.Row) -> float:
+    value = row["timeout_seconds"]
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 300.0
+    if not math.isfinite(parsed) or parsed <= 0:
+        return 300.0
+    return parsed
+
+
+def _mark_stale_opinion_run(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    now: datetime,
+) -> None:
+    finished_at = _format_datetime(now)
+    stale_error = {
+        "code": "stale_running",
+        "stage": "persistence",
+        "message": "运行心跳超过总时限和宽限期，已收口为遗留运行",
+        "retryable": False,
+        "attempt": None,
+    }
+    result_payload = (
+        _load_json_object(row["result_json"], "opinion_runs.result_json")
+        if row["result_json"] is not None
+        else {}
+    )
+    result_payload.update(
+        {
+            "status": "failed",
+            "status_reason": "stale_running",
+            "finished_at": finished_at,
+            "last_heartbeat_at": finished_at,
+            "errors": [stale_error],
+        }
+    )
+    connection.execute(
+        """
+        UPDATE opinion_runs
+        SET status = 'failed', finished_at = ?, last_heartbeat_at = ?,
+            status_reason = 'stale_running', errors_json = ?, result_json = ?
+        WHERE id = ? AND status = 'running'
+        """,
+        (
+            finished_at,
+            finished_at,
+            json.dumps([stale_error], ensure_ascii=False, sort_keys=True),
+            json.dumps(result_payload, ensure_ascii=False, sort_keys=True),
+            row["id"],
+        ),
+    )
 
 
 def _subscription_from_row(row: sqlite3.Row) -> FeedSubscription:
@@ -1001,18 +2310,3 @@ def _article_from_payload(payload: dict[str, object]) -> NormalizedArticle:
         collected_at=_required_datetime(payload["collected_at"]),
         processing_warnings=tuple(str(item) for item in payload["processing_warnings"]),
     )
-
-
-@contextmanager
-def _read_only_snapshot_connection(database_path: Path):
-    """Open one SQLite-managed read-only snapshot for inspection."""
-    if not database_path.is_file():
-        raise FileNotFoundError(f"database does not exist: {database_path}")
-    database_uri = f"{database_path.resolve().as_uri()}?mode=ro"
-    connection = sqlite3.connect(database_uri, uri=True)
-    connection.row_factory = sqlite3.Row
-    try:
-        connection.execute("BEGIN")
-        yield connection
-    finally:
-        connection.close()

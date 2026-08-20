@@ -1,23 +1,45 @@
-from .models import PlanningReport, PlanningResult, QuestionKind, SearchPlan, SearchQuery
+from .models import (
+    OPINION_PLATFORM,
+    OPINION_WINDOW_HOURS,
+    ArticleSnapshotIdentity,
+    OpinionPlan,
+    PlanningReport,
+    PlanningResult,
+    QuestionKind,
+    SearchPlan,
+    SearchQuery,
+)
 from .planner import (
+    OPINION_PLAN_CONTRACT,
     SEARCH_PLAN_CONTRACT,
     LLMQuestionPlanner,
     PlanningResponseError,
     QuestionPlanner,
+    ResultQuestionPlanner,
     parse_evidence_id,
+    parse_opinion_plans,
+    parse_planning_result,
     parse_search_plans,
 )
 
 __all__ = [
     "LLMQuestionPlanner",
+    "OPINION_PLATFORM",
+    "OPINION_PLAN_CONTRACT",
+    "OPINION_WINDOW_HOURS",
+    "ArticleSnapshotIdentity",
+    "OpinionPlan",
     "PlanningReport",
     "PlanningResult",
     "PlanningResponseError",
     "QuestionKind",
     "QuestionPlanner",
+    "ResultQuestionPlanner",
     "SEARCH_PLAN_CONTRACT",
     "SearchPlan",
     "SearchQuery",
     "parse_evidence_id",
+    "parse_opinion_plans",
+    "parse_planning_result",
     "parse_search_plans",
 ]

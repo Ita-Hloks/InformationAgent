@@ -69,6 +69,7 @@ flowchart LR
     D0 --> D["collect：JSON"]
     D0 --> E["ingest：保存证据并返回 run_id"]
     E --> J["plan-run：读取证据并保存搜索计划"]
+    J --> K["opinion-run：主动获取哔哩哔哩舆情"]
     D0 --> F["analyze：可选的文章分析"]
     F --> G["引用覆盖与有效性评估"]
     D0 --> H["plan：搜索计划"]
@@ -82,6 +83,8 @@ flowchart LR
 | `analyze` | 基于已筛选证据生成带证据编号的分析，并评估引用 | `LLM_*` |
 | `plan` | 从最多 5 篇候选文章中生成可追溯的搜索计划 | `LLM_*` |
 | `plan-run` | 根据 `ingest` 的 `run_id` 读取已选证据，并将规划运行、原始响应、计划与查询写回 SQLite | `LLM_*` |
+| `opinion-run` | 对阅读器中的文章主动获取哔哩哔哩评论并分析争议点 | `LLM_*`，可选 `BILIBILI_COOKIE` |
+| `opinion-status` | 只读取文章最近一次舆情分析状态，不触发采集或 LLM | 无 |
 | `list-runs` | 离线只读地列出最近保存的研究运行及其聚合计数 | 无 |
 | `search` | 执行采集、规划和联网回答，保留搜索来源 | `LLM_*` 与 `SEARCH_LLM_*` |
 | `verify-search` | 用固定问题检查联网搜索配置、请求和来源返回 | `SEARCH_LLM_*` |
@@ -92,6 +95,8 @@ flowchart LR
 python -m information_agent.cli --help
 python -m information_agent.cli collect --help
 python -m information_agent.cli plan-run --help
+python -m information_agent.cli opinion-run --help
+python -m information_agent.cli opinion-status --help
 python -m information_agent.cli list-runs --help
 ```
 
@@ -120,6 +125,19 @@ python -m information_agent.cli plan-run RUN_ID --timeout 60
 
 命令会返回同一个 `run_id` 和本次规划的 `planning_run_id`。规划结果、查询、原始模型响应以及失败状态都会写回同一 SQLite 数据库。
 
+舆情分析是独立的主动操作。先从文章列表或数据库获取 `article_id`，再执行：
+
+```text
+python -m information_agent.cli opinion-run ARTICLE_ID --timeout 120 --limit 100
+python -m information_agent.cli opinion-status ARTICLE_ID
+```
+
+首版只接受文章本身是哔哩哔哩视频或专栏的 URL。`opinion-status` 是只读查询；重复的 `opinion-run` 默认复用最近一次已完成或部分完成的结果，使用 `--refresh` 才会重新采集。评论样本只保存到当前分析运行，登录 Cookie 不写入数据库。
+
+舆情结果只描述最近 72 小时内获取到的哔哩哔哩公开评论样本，不代表总体民意或全体观众意见，也不用于证明文章主张为真。`collected_count` 是当前运行保存的评论数，`analyzed_count` 是送入分类阶段的评论数，`classification_total`、`classified_count` 和 `unclassified_count` 来自逐条“争议点-评论”关系；`points.stance_counts` 由这些合法关系重新计算。
+
+状态原因用于区分流程边界：没有争议点为 `completed/no_controversy_points`，评论接口正常但样本为空为 `completed/sample_empty`，保留评论但分类有缺口为 `partial/partial_classification`，没有可用分析结果的关键失败为 `failed`。`not_requested` 只表示当前文章尚未创建运行。
+
 ## 配置 LLM 与联网搜索
 
 复制环境变量示例：
@@ -138,7 +156,7 @@ cp .env.example .env
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
-| `LLM_API_KEY` | `collect`、`ingest`、`analyze`、`plan`、`plan-run` 和 `search` 的模型凭据 | 必填 |
+| `LLM_API_KEY` | `collect`、`ingest`、`analyze`、`plan`、`plan-run`、`opinion-run` 和 `search` 的模型凭据 | 必填 |
 | `LLM_BASE_URL` | OpenAI 兼容 API 根地址 | `https://api.openai.com/v1` |
 | `LLM_MODEL` | 语义筛选、分析与规划模型 | `gpt-4o-mini` |
 | `SEARCH_LLM_API_KEY` | 联网搜索服务凭据 | 必填 |
@@ -164,7 +182,7 @@ python -m information_agent.cli search "人工智能" "https://www.geekpark.net/
 
 ## 本地文章订阅 API
 
-当前已提供一个面向本地阅读器的最小 HTTP API。它负责 RSS/Atom 订阅、刷新、文章读取和当前本地阅读器的已读/收藏状态，不调用 LLM。当前没有登录系统，多用户隔离和跨设备同步仍未实现。
+当前已提供一个面向本地阅读器的最小 HTTP API。RSS/Atom 订阅、刷新、文章读取和阅读状态不调用 LLM；舆情接口只有在显式 POST 时才调用模型和哔哩哔哩评论接口。当前没有登录系统，多用户隔离和跨设备同步仍未实现。
 
 安装依赖后，在项目根目录启动服务：
 
@@ -182,6 +200,8 @@ python -m uvicorn information_agent.api:app --host 127.0.0.1 --port 8001
 | `POST` | `/api/feeds/{feed_id}/refresh` | 刷新一个来源 |
 | `GET` | `/api/articles?feed_id=...&limit=100&offset=0` | 获取文章列表 |
 | `GET` | `/api/articles/{article_id}` | 获取文章详情 |
+| `GET` | `/api/articles/{article_id}/opinion` | 读取最近一次舆情分析状态，不触发分析 |
+| `POST` | `/api/articles/{article_id}/opinion` | 主动触发一次舆情分析；可选 JSON `{ "force_refresh": true }` |
 | `PUT` | `/api/articles/state` | 批量更新文章已读/收藏状态，JSON 为 `{ "article_ids": ["..."], "is_read": true, "is_saved": false }` |
 
 重要前置条件与约束：
@@ -190,6 +210,7 @@ python -m uvicorn information_agent.api:app --host 127.0.0.1 --port 8001
 - 服务默认仅监听 `127.0.0.1`，没有用户认证、权限隔离、跨设备同步和公网部署安全保障；若改变监听地址，必须先补认证、CORS、CSRF/访问控制和 SSRF 防护评审。
 - 单次 Feed 响应上限为 5 MiB，网页正文抓取仍是独立流程；RSS 摘要不足 20 个字符的条目不会进入文章列表。上游的 403、429、超时或解析失败会返回 `502` 并记录在订阅状态中。
 - 订阅、文章和本地阅读状态使用现有 SQLite 数据库；可通过 `INFORMATION_AGENT_DB_PATH` 指定位置。当前 API 不会改变研究工作流的 LLM 语义筛选边界。
+- 舆情首版只处理直接关联的哔哩哔哩视频或专栏 URL，默认分析最近 72 小时、最多 200 条评论；Cookie 只通过运行环境注入，代码不读取浏览器配置文件。
 
 LLM 与联网搜索调用会备份到 `log/`。可通过 `INFORMATION_AGENT_LOG_DIR` 修改目录；日志可能包含请求与响应内容，请按敏感数据管理。
 

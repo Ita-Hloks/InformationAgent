@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..storage import FeedSubscription, ReaderArticle, ReaderArticleState
 
@@ -53,6 +53,42 @@ class ArticleResponse(BaseModel):
     content: str
     is_read: bool
     is_saved: bool
+
+
+class OpinionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    force_refresh: bool = False
+
+
+class OpinionResponse(BaseModel):
+    product_name: str
+    article_id: str
+    article_snapshot_id: str | None
+    content_hash: str | None
+    source_url: str
+    status: str
+    platform: str
+    window_hours: int
+    requested_limit: int | None
+    collected_count: int
+    analyzed_count: int
+    classification_total: int
+    classified_count: int
+    unclassified_count: int
+    status_reason: str
+    run_id: str | None
+    requested_at: str | None
+    finished_at: str | None
+    last_heartbeat_at: str | None
+    controversy_points: list[dict[str, object]]
+    comments: list[dict[str, object]]
+    classifications: list[dict[str, object]]
+    summary: str
+    points: list[dict[str, object]]
+    uncertainties: list[str]
+    errors: list[dict[str, object]]
+    attempts: list[dict[str, object]]
 
 
 def feed_response(subscription: FeedSubscription) -> FeedResponse:

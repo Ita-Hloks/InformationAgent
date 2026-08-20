@@ -13,6 +13,10 @@ if TYPE_CHECKING:
     from ..normalization import NormalizedArticle
 
 
+class ArticleSnapshotMismatchError(ValueError):
+    """历史结果或规划不属于当前文章正文快照。"""
+
+
 @dataclass(frozen=True, slots=True)
 class PersistedCollection:
     """已提交到数据库的一次粗处理结果。"""
@@ -173,6 +177,34 @@ class ReaderArticle:
     article: NormalizedArticle
     is_read: bool = False
     is_saved: bool = False
+    snapshot_id: str | None = None
+    content_hash: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OpinionRunRecord:
+    id: str
+    article_id: str
+    platform: str
+    window_hours: int
+    status: str
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+    errors: tuple[dict[str, Any], ...]
+    result_payload: dict[str, Any] | None
+    last_heartbeat_at: str | None = None
+    timeout_seconds: float = 300.0
+    article_snapshot_id: str | None = None
+    content_hash: str | None = None
+    requested_limit: int | None = None
+    collected_count: int = 0
+    analyzed_count: int = 0
+    classification_total: int = 0
+    classified_count: int = 0
+    unclassified_count: int = 0
+    status_reason: str = "failed"
+    attempts: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

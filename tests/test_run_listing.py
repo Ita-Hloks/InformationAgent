@@ -13,7 +13,7 @@ from information_agent.cli import build_parser
 from information_agent.serialization import research_run_summaries_to_payload
 from information_agent.storage import SQLiteCollectionStore
 from information_agent.storage.models import ResearchRunSummary
-from information_agent.storage.store import _read_only_snapshot_connection
+from information_agent.storage.run_listing import _read_only_snapshot_connection
 
 
 def test_list_runs_returns_empty_list_for_initialized_database(tmp_path: Path) -> None:
@@ -75,7 +75,7 @@ def test_list_runs_uses_read_only_uri_without_writer_initialization(
     def unexpected_writer_connection() -> sqlite3.Connection:
         raise AssertionError("list-runs must not initialize or migrate the database")
 
-    monkeypatch.setattr("information_agent.storage.store.sqlite3.connect", read_only_connect)
+    monkeypatch.setattr("information_agent.storage.run_listing.sqlite3.connect", read_only_connect)
     monkeypatch.setattr(store, "_connect", unexpected_writer_connection)
 
     assert store.list_runs(limit=20)[0].topic == "wal"

@@ -2,29 +2,19 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Protocol, runtime_checkable
 
 from ..common import DEFAULT_LLM_TIMEOUT_SECONDS
 from ..contracts import RunStatus
 from ..investigation import (
     LLMQuestionPlanner,
+    OpinionPlan,
     PlanningReport,
-    PlanningResult,
     QuestionPlanner,
+    ResultQuestionPlanner,
     SearchPlan,
 )
 from ..selection import SelectedEvidence
 from ..storage import PersistedPlanning, SQLiteCollectionStore, default_database_path
-
-
-@runtime_checkable
-class ResultQuestionPlanner(Protocol):
-    def plan_with_result(
-        self,
-        topic: str,
-        evidence: list[SelectedEvidence],
-        timeout: float,
-    ) -> PlanningResult: ...
 
 
 def plan_run(
@@ -49,8 +39,16 @@ def plan_run(
 
     try:
         active_planner = planner or LLMQuestionPlanner()
-        plans, raw_response = _create_plans(active_planner, topic, evidence, timeout_seconds)
-        store.complete_planning(planning_run_id, run_id, plans, raw_response)
+        plans, opinion_plans, raw_response = _create_plans(
+            active_planner, topic, evidence, timeout_seconds
+        )
+        store.complete_planning(
+            planning_run_id,
+            run_id,
+            plans,
+            raw_response,
+            opinion_plans=opinion_plans,
+        )
     except Exception as exc:
         raw_response = getattr(exc, "raw_response", None)
         store.fail_planning(planning_run_id, run_id, exc, raw_response)
@@ -63,7 +61,7 @@ def plan_run(
         )
         return PersistedPlanning(run_id, planning_run_id, report)
 
-    report = PlanningReport(topic, RunStatus.COMPLETED, evidence, plans)
+    report = PlanningReport(topic, RunStatus.COMPLETED, evidence, plans, [], opinion_plans)
     return PersistedPlanning(run_id, planning_run_id, report)
 
 
@@ -72,8 +70,8 @@ def _create_plans(
     topic: str,
     evidence: list[SelectedEvidence],
     timeout_seconds: float,
-) -> tuple[list[SearchPlan], str | None]:
+) -> tuple[list[SearchPlan], list[OpinionPlan], str | None]:
     if isinstance(planner, ResultQuestionPlanner):
         result = planner.plan_with_result(topic, evidence, timeout_seconds)
-        return result.plans, result.raw_response
-    return planner.plan(topic, evidence, timeout_seconds), None
+        return result.plans, result.opinion_plans, result.raw_response
+    return planner.plan(topic, evidence, timeout_seconds), [], None
