@@ -32,7 +32,12 @@ from information_agent.orchestration.agent_workflow import agent_run
 from information_agent.orchestration.ingestion import ingest
 from information_agent.search import SearchAnswer, SearchAnswerStatus, SearchSource
 from information_agent.selection import SelectedEvidence
-from information_agent.storage import AnalysisRunStatus, AnalysisStepStatus, SQLiteCollectionStore
+from information_agent.storage import (
+    AnalysisAttemptStatus,
+    AnalysisRunStatus,
+    AnalysisStepStatus,
+    SQLiteCollectionStore,
+)
 
 
 def _collector(_: str, __: float) -> list[RawFeedEntry]:
@@ -595,6 +600,32 @@ def test_agent_retries_same_decision_and_tool_calls(tmp_path: Path) -> None:
     assert report.steps == 2
     assert len(decider.calls) == 4
     assert answerer.calls == [plan, plan, plan]
+    state = SQLiteCollectionStore(database_path).load_analysis_state(report.analysis_run_id)
+    attempts_by_step = {
+        step.step_key: [
+            attempt for attempt in state.attempts if attempt.analysis_step_id == step.id
+        ]
+        for step in state.steps
+    }
+    assert [attempt.status for attempt in attempts_by_step["decision-1"]] == [
+        AnalysisAttemptStatus.FAILED,
+        AnalysisAttemptStatus.FAILED,
+        AnalysisAttemptStatus.SUCCEEDED,
+    ]
+    assert [attempt.status for attempt in attempts_by_step["search-1"]] == [
+        AnalysisAttemptStatus.FAILED,
+        AnalysisAttemptStatus.FAILED,
+        AnalysisAttemptStatus.SUCCEEDED,
+    ]
+    artifact_keys = {artifact.artifact_key for artifact in state.artifacts}
+    assert {
+        "decision-1:attempt-1:error",
+        "decision-1:attempt-2:error",
+        "decision-1:attempt-3:result",
+        "search-1:attempt-1:error",
+        "search-1:attempt-2:error",
+        "search-1:attempt-3:result",
+    } <= artifact_keys
 
 
 def test_agent_does_not_retry_non_retryable_service_error(tmp_path: Path) -> None:

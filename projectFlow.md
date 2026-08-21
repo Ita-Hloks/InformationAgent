@@ -71,7 +71,7 @@ RSS/Atom -> 采集 -> 规范化 -> 相关性筛选 -> 证据编号
 | `plan` | 主题、一个或多个 RSS/Atom 地址 | 筛选文章和搜索计划 | 否 |
 | `plan-run` | `ingest` 返回的 `run_id` | `planning_run_id`、搜索计划和错误 | 是 |
 | `search` | 主题、一个或多个 RSS/Atom 地址 | 文章、计划、联网回答和来源 | 否 |
-| `agent-run` | `ingest` 返回的 `run_id` | 搜索观察、最终结论、引用和停止原因 | 当前不写研究数据库 |
+| `agent-run` | `ingest` 返回的 `run_id` | 搜索观察、最终结论、引用、停止原因和 `analysis_run_id` | 是，写入分析生命周期表 |
 | `opinion-run` | 阅读器中的 `article_id` | 哔哩哔哩评论样本、争议点分析和状态 | 是，只有显式调用才运行 |
 | `opinion-status` | 阅读器中的 `article_id` | 最近一次舆情运行状态和结果 | 否，只读 |
 | `verify-search` | 搜索超时参数 | 固定的联网搜索连通性结果 | 否 |
@@ -272,6 +272,8 @@ LLM 只能返回两种决策：
 
 所有搜索均返回 `insufficient_evidence` 时，运行状态必须是 `partial`。如果模型错误地用其他结束原因报告，运行时会清空不受支持的答案和引用；只有显式使用 `insufficient_after_search` 时，才保留带证据边界的谨慎说明。
 
+每次 `agent-run` 会创建一个 `analysis_run`，并把决策、搜索和最终收口作为逻辑步骤保存到 `analysis_steps`、`analysis_attempts` 与 `analysis_artifacts`。CLI 和 HTTP 响应都通过 `analysis_run_id` 标识这次持久化分析。
+
 ## 8. `analyze` 和引用评估
 
 `analyze` 使用 `WorkflowRunner.run()`，流程是：
@@ -365,14 +367,16 @@ analysis_runs -> analysis_steps -> analysis_attempts -> analysis_artifacts
 
 它支持运行状态、步骤状态、尝试编号、请求哈希、幂等键、artifact 内容哈希，以及中断和取消状态。`tests/test_analysis_storage.py` 覆盖了这些存储契约。
 
-但截至当前仓库状态：
+截至当前仓库状态：
 
 - `SQLiteCollectionStore` 已继承这套持久化能力
-- `cli.py` 没有创建或运行 `analysis_run` 的命令
-- `orchestration/` 的现有 `analyze` 没有调用这套分析生命周期接口
-- 这套分析生命周期没有 HTTP 服务、后台任务管理或前端 API 层把它暴露出去
+- `agent-run` 会创建 `analysis_run`，逐次记录决策和搜索的真实重试、错误与最终报告，并返回 `analysis_run_id`
+- `GET /api/research/runs/{run_id}/agent` 读取最近一次持久化的 Agent 报告，无历史结果时返回 `null`
+- `POST /api/research/runs/{run_id}/agent` 同步运行 Agent，前端研究工作区展示并在重新选择运行时恢复结果
+- `orchestration/` 的一次性 `analyze` 尚未调用这套分析生命周期接口
+- 当前没有通用分析状态查询、后台队列、取消、SSE 或 WebSocket 接口
 
-因此，这部分是可复用的存储基础设施，不应在当前文档中描述成已经接通的端到端分析服务。
+因此，分析生命周期已接入受限 Agent 工作流，但尚未形成通用的异步分析任务服务。
 
 ## 12. 前端当前边界
 
@@ -382,18 +386,25 @@ analysis_runs -> analysis_steps -> analysis_attempts -> analysis_artifacts
 frontend/src/main.tsx -> App.tsx -> AppRoutes -> ReaderWorkspacePage
     -> frontend/src/api/client.ts -> Vite proxy -> information_agent/api
     -> ReaderService -> SQLite
+
+ResearchWorkspace -> /api/research/runs | /api/research/ingest
+                  -> GET|POST /api/research/runs/{run_id}/agent
+                  -> orchestration -> SQLite / LLM / hosted search
 ```
 
-当前已实现订阅阅读闭环，但：
+当前已实现订阅阅读闭环和同步研究运行入口：
 
 - `GET/POST /api/feeds` 和 `GET /api/articles` 只覆盖本地 RSS 订阅与文章读取
 - `PUT /api/articles/state` 保存当前本地阅读器的已读/收藏状态
-- 没有分析任务创建、状态轮询、SSE 或 WebSocket
+- `GET /api/research/runs` 列出历史研究运行，`POST /api/research/ingest` 创建采集运行
+- `GET /api/research/runs/{run_id}/agent` 从分析生命周期表读取最近一次最终报告
+- `POST /api/research/runs/{run_id}/agent` 同步执行 Agent，并返回本次结果和 `analysis_run_id`
+- 没有后台分析任务、状态轮询、取消、SSE 或 WebSocket
 - 没有把 HTTP 请求路由到 Python CLI 的长任务生命周期
 - 前端不能直接读取 LLM 密钥、调用 SQLite 或替代后端编排
 - 后端已提供舆情 `GET/POST` 接口，但前端暂未接入；`GET` 只读，只有显式 `POST` 才触发评论采集和 LLM 分析
 
-后续接入 LLM 分析时，至少需要增加分析运行创建/状态查询、证据和结果查询、取消操作，以及将长任务状态映射为 `queued`、`running`、`completed`、`partial`、`failed`、`cancelled` 和 `insufficient_evidence`。这些接口当前尚未实现。
+若要把同步研究入口扩展为通用长任务服务，仍需增加分析状态和结果查询、取消操作，以及将后台任务状态映射为 `queued`、`running`、`completed`、`partial`、`failed`、`cancelled` 和 `insufficient_evidence`。
 
 ## 13. 代码地图
 

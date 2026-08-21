@@ -18,6 +18,8 @@ from .models import (
     PersistedPlanning,
     ReaderArticle,
     ReaderArticleState,
+    ResearchRunNotFoundError,
+    ResearchRunNotReadyError,
     ResearchRunSummary,
 )
 from .run_listing import RESEARCH_RUN_STATUSES
@@ -42,6 +44,8 @@ __all__ = [
     "RESEARCH_RUN_STATUSES",
     "ReaderArticle",
     "ReaderArticleState",
+    "ResearchRunNotFoundError",
+    "ResearchRunNotReadyError",
     "ResearchRunSummary",
     "SQLiteCollectionStore",
     "default_database_path",

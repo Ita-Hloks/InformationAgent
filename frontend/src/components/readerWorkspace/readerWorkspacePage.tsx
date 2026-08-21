@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation, useMatch, useNavigate, useSearchParams } from "react-router-dom";
 
 import { feedPath, viewFromPath, viewPaths, viewTitles } from "../../app/navigation";
@@ -7,6 +7,7 @@ import {
   createResearchRun,
   getArticles,
   getFeeds,
+  getResearchAgentReport,
   getResearchRuns,
   runResearchAgent,
   type ArticleStateUpdate,
@@ -56,6 +57,7 @@ export function ReaderWorkspacePage() {
     "idle",
   );
   const [researchError, setResearchError] = useState<string | null>(null);
+  const agentReportRequestId = useRef(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [savedIds, setSavedIds] = useState(
     () => new Set(initialArticles.filter(article => article.starred).map(article => article.id)),
@@ -115,6 +117,24 @@ export function ReaderWorkspacePage() {
         setApiStatus("unavailable");
       });
   }, []);
+
+  useEffect(() => {
+    if (!selectedResearchRunId) return;
+    const requestId = ++agentReportRequestId.current;
+    const controller = new AbortController();
+    setAgentReport(null);
+    void getResearchAgentReport(selectedResearchRunId, controller.signal)
+      .then(report => {
+        if (agentReportRequestId.current === requestId) setAgentReport(report);
+      })
+      .catch(error => {
+        if (controller.signal.aborted || agentReportRequestId.current !== requestId) return;
+        setResearchError(error instanceof Error ? error.message : "Agent 结果读取失败");
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [selectedResearchRunId]);
 
   const selectedFeedId = feedMatch?.params.feedId ?? null;
   const activeView = selectedFeedId ? "all" : viewFromPath(location.pathname);
@@ -287,6 +307,7 @@ export function ReaderWorkspacePage() {
   };
 
   const runAgent = async (runId: string) => {
+    const requestId = ++agentReportRequestId.current;
     setResearchPhase("running-agent");
     setResearchError(null);
     setAgentReport(null);
@@ -296,10 +317,12 @@ export function ReaderWorkspacePage() {
         maxSteps: 3,
         maxAttempts: 3,
       });
-      setAgentReport(report);
+      if (agentReportRequestId.current === requestId) setAgentReport(report);
       await refreshResearchRuns();
     } catch (error) {
-      setResearchError(error instanceof Error ? error.message : "Agent 运行失败");
+      if (agentReportRequestId.current === requestId) {
+        setResearchError(error instanceof Error ? error.message : "Agent 运行失败");
+      }
     } finally {
       setResearchPhase("idle");
     }

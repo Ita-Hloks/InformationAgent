@@ -52,8 +52,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let detail = `请求失败（${response.status}）`;
     try {
-      const payload = (await response.json()) as { detail?: string };
-      if (payload.detail) detail = payload.detail;
+      const payload = (await response.json()) as { detail?: unknown };
+      if (typeof payload.detail === "string") {
+        detail = payload.detail;
+      } else if (
+        payload.detail !== null &&
+        typeof payload.detail === "object" &&
+        "message" in payload.detail &&
+        typeof payload.detail.message === "string"
+      ) {
+        detail = payload.detail.message;
+      }
     } catch {
       // Preserve the status when the server did not return JSON.
     }
@@ -138,6 +147,15 @@ function toResearchRun(run: ResearchRunPayload): ResearchRun {
 export async function getResearchRuns(): Promise<ResearchRun[]> {
   const payload = await request<{ runs: ResearchRunPayload[] }>("/api/research/runs");
   return payload.runs.map(toResearchRun);
+}
+
+export async function getResearchAgentReport(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<AgentReport | null> {
+  return request<AgentReport | null>(`/api/research/runs/${encodeURIComponent(runId)}/agent`, {
+    signal,
+  });
 }
 
 export async function createResearchRun(input: {

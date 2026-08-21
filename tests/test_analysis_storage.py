@@ -11,6 +11,7 @@ from information_agent.storage import (
     AnalysisAttemptStatus,
     AnalysisRunStatus,
     AnalysisStepStatus,
+    ResearchRunNotFoundError,
     SQLiteCollectionStore,
 )
 
@@ -283,6 +284,27 @@ def test_analysis_state_persists_steps_attempts_and_immutable_artifacts(tmp_path
     assert [item.step_key for item in state.steps] == ["value_assessment"]
     assert [item.status for item in state.attempts] == [AnalysisAttemptStatus.SUCCEEDED]
     assert {item.kind for item in state.artifacts} == {"request", "parsed_result"}
+
+
+def test_latest_agent_report_is_scoped_to_research_run(tmp_path: Path) -> None:
+    store, research_run_id = _store_with_research_run(tmp_path)
+    analysis_run = store.create_analysis_run(research_run_id, "agent_research", {})
+    store.record_analysis_artifact(
+        analysis_run.id,
+        "agent_report",
+        {"run_id": research_run_id, "final_answer": "持久化结论"},
+        artifact_key="finalize:attempt-1:result",
+    )
+
+    report = store.load_latest_agent_report(research_run_id)
+
+    assert report == {
+        "run_id": research_run_id,
+        "analysis_run_id": analysis_run.id,
+        "final_answer": "持久化结论",
+    }
+    with pytest.raises(ResearchRunNotFoundError, match="不存在的研究运行"):
+        store.load_latest_agent_report("missing")
 
 
 def test_interruption_marks_active_work_and_allows_a_new_attempt(tmp_path: Path) -> None:

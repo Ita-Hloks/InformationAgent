@@ -13,7 +13,11 @@ from information_agent.api import create_app
 from information_agent.collection import FeedFetchResult, RawFeedEntry
 from information_agent.contracts import PROJECT_TIMEZONE, CollectionReport, ContentType, RunStatus
 from information_agent.reader import ArticleNotFoundError, ReaderService
-from information_agent.storage import PersistedCollection, SQLiteCollectionStore
+from information_agent.storage import (
+    AnalysisRunStatus,
+    PersistedCollection,
+    SQLiteCollectionStore,
+)
 
 
 def _fetcher(feed_url: str, timeout: float, **_: object) -> FeedFetchResult:
@@ -273,3 +277,75 @@ def test_research_agent_api_returns_agent_report(
             "max_attempts": 1,
         }
     ]
+
+
+def test_research_agent_api_restores_latest_persisted_report(tmp_path: Path) -> None:
+    database_path = tmp_path / "api.db"
+    store = SQLiteCollectionStore(database_path)
+    run_id = store.start_run("AI", ["https://example.com/rss.xml"])
+    store.complete_run(run_id, CollectionReport("AI", RunStatus.COMPLETED, []), [])
+    analysis_run = store.create_analysis_run(run_id, "agent_research", {})
+    store.record_analysis_artifact(
+        analysis_run.id,
+        "agent_report",
+        {
+            "run_id": run_id,
+            "topic": "AI",
+            "status": "completed",
+            "articles": [],
+            "plans": [],
+            "answers": [],
+            "final_answer": "已保存的结论",
+            "evidence_ids": [],
+            "citations": [],
+            "uncertainties": [],
+            "steps": 1,
+            "stop_reason": "finished",
+            "errors": [],
+        },
+        artifact_key="finalize:attempt-1:result",
+    )
+    store.set_analysis_run_status(analysis_run.id, AnalysisRunStatus.COMPLETED)
+
+    response = _client(tmp_path).get(f"/api/research/runs/{run_id}/agent")
+
+    assert response.status_code == 200
+    assert response.json()["analysis_run_id"] == analysis_run.id
+    assert response.json()["final_answer"] == "已保存的结论"
+
+
+def test_research_agent_api_returns_null_without_persisted_report(tmp_path: Path) -> None:
+    store = SQLiteCollectionStore(tmp_path / "api.db")
+    run_id = store.start_run("AI", ["https://example.com/rss.xml"])
+
+    response = _client(tmp_path).get(f"/api/research/runs/{run_id}/agent")
+
+    assert response.status_code == 200
+    assert response.json() is None
+
+
+def test_research_agent_api_distinguishes_missing_and_unready_runs(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    missing = client.post("/api/research/runs/missing/agent", json={})
+    run_id = SQLiteCollectionStore(tmp_path / "api.db").start_run(
+        "AI", ["https://example.com/rss.xml"]
+    )
+    unready = client.post(f"/api/research/runs/{run_id}/agent", json={})
+
+    assert missing.status_code == 404
+    assert unready.status_code == 409
+
+
+def test_research_agent_api_rejects_domain_value_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def invalid_agent_run(*_: object, **__: object) -> AgentReport:
+        raise ValueError("Agent 参数组合无效")
+
+    api_app_module = importlib.import_module("information_agent.api.app")
+    monkeypatch.setattr(api_app_module, "agent_run", invalid_agent_run)
+
+    response = _client(tmp_path).post("/api/research/runs/run-api/agent", json={})
+
+    assert response.status_code == 422

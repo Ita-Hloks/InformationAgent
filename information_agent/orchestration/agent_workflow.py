@@ -74,73 +74,85 @@ class _AgentRunRecorder:
         self,
         step_key: str,
         operation: str,
-        request_payload: dict[str, Any],
+        request_payload: Callable[[], dict[str, Any]],
         action: Callable[[], T],
         *,
+        max_attempts: int = 1,
+        should_retry: Callable[[Exception], bool] | None = None,
         result_kind: str,
         result_payload: Callable[[T], dict[str, Any]],
     ) -> T:
         self._position += 1
         step = self._store.create_analysis_step(self._run.id, self._position, step_key)
         self._store.set_analysis_step_status(step.id, AnalysisStepStatus.RUNNING)
-        attempt = self._store.create_analysis_attempt(
-            step.id,
-            operation,
-            _payload_hash(request_payload),
-            f"{step_key}:attempt-1",
-        )
-        self._store.record_analysis_artifact(
-            self._run.id,
-            "request",
-            request_payload,
-            artifact_key=f"{step_key}:attempt-1:request",
-            metadata={"operation": operation},
-            step_id=step.id,
-            attempt_id=attempt.id,
-        )
-        try:
-            result = action()
-        except Exception as exc:
+        last_error: Exception | None = None
+        for attempt_no in range(1, max_attempts + 1):
+            payload = request_payload()
+            attempt_key = f"{step_key}:attempt-{attempt_no}"
+            attempt = self._store.create_analysis_attempt(
+                step.id,
+                operation,
+                _payload_hash(payload),
+                attempt_key,
+            )
             self._store.record_analysis_artifact(
                 self._run.id,
-                "error",
-                {"type": type(exc).__name__, "message": str(exc)},
-                artifact_key=f"{step_key}:attempt-1:error",
+                "request",
+                payload,
+                artifact_key=f"{attempt_key}:request",
                 metadata={"operation": operation},
                 step_id=step.id,
                 attempt_id=attempt.id,
             )
-            self._store.set_analysis_attempt_status(
-                attempt.id,
-                AnalysisAttemptStatus.FAILED,
-                error=exc,
-            )
-            self._store.set_analysis_step_status(
-                step.id,
-                AnalysisStepStatus.FAILED,
-                error=exc,
-            )
-            raise
+            try:
+                result = action()
+            except Exception as exc:
+                last_error = exc
+                self._store.record_analysis_artifact(
+                    self._run.id,
+                    "error",
+                    {"type": type(exc).__name__, "message": str(exc)},
+                    artifact_key=f"{attempt_key}:error",
+                    metadata={"operation": operation},
+                    step_id=step.id,
+                    attempt_id=attempt.id,
+                )
+                self._store.set_analysis_attempt_status(
+                    attempt.id,
+                    AnalysisAttemptStatus.FAILED,
+                    error=exc,
+                )
+                if attempt_no < max_attempts and should_retry is not None and should_retry(exc):
+                    continue
+                self._store.set_analysis_step_status(
+                    step.id,
+                    AnalysisStepStatus.FAILED,
+                    error=exc,
+                )
+                raise
 
-        self._store.record_analysis_artifact(
-            self._run.id,
-            result_kind,
-            result_payload(result),
-            artifact_key=f"{step_key}:attempt-1:result",
-            metadata={"operation": operation},
-            step_id=step.id,
-            attempt_id=attempt.id,
-        )
-        self._store.set_analysis_attempt_status(attempt.id, AnalysisAttemptStatus.SUCCEEDED)
-        self._store.set_analysis_step_status(step.id, AnalysisStepStatus.SUCCEEDED)
-        return result
+            self._store.record_analysis_artifact(
+                self._run.id,
+                result_kind,
+                result_payload(result),
+                artifact_key=f"{attempt_key}:result",
+                metadata={"operation": operation},
+                step_id=step.id,
+                attempt_id=attempt.id,
+            )
+            self._store.set_analysis_attempt_status(attempt.id, AnalysisAttemptStatus.SUCCEEDED)
+            self._store.set_analysis_step_status(step.id, AnalysisStepStatus.SUCCEEDED)
+            return result
+        if last_error is None:
+            raise AssertionError("重试循环必须执行至少一次")
+        raise last_error
 
     def finalize(self, report: AgentReport) -> AgentReport:
         persisted_report = replace(report, analysis_run_id=self._run.id)
         self.execute(
             "finalize",
             "agent_finalize",
-            {"run_id": report.run_id, "stop_reason": report.stop_reason.value},
+            lambda: {"run_id": report.run_id, "stop_reason": report.stop_reason.value},
             lambda: persisted_report,
             result_kind="agent_report",
             result_payload=_agent_report_payload,
@@ -241,24 +253,47 @@ def agent_run(
             )
         decision_count += 1
         search_limit_reached = search_count >= max_steps
+        validation_feedback = [
+            (
+                f"已达到最大搜索动作数 {max_steps}；本轮只能输出 finish，不能继续 search。"
+                if search_limit_reached
+                else None
+            )
+        ]
+
+        def decide(feedback_state=validation_feedback) -> AgentDecision:
+            remaining = budget.remaining()
+            if remaining <= 0:
+                raise TimeoutError("Agent 总时限已耗尽")
+            return active_decider.decide(
+                topic,
+                evidence,
+                observations,
+                remaining,
+                validation_feedback=feedback_state[0],
+            )
+
+        def retry_decision(error: Exception, feedback_state=validation_feedback) -> bool:
+            if isinstance(error, AgentDecisionResponseError):
+                feedback_state[0] = str(error)
+                return True
+            feedback_state[0] = None
+            return is_retryable_llm_error(error)
+
         try:
             decision = recorder.execute(
                 f"decision-{decision_count}",
                 "agent_decision",
-                _decision_request_payload(topic, evidence, observations, budget),
-                lambda search_limit_reached=search_limit_reached: _call_decider_with_retries(
-                    active_decider,
+                lambda feedback_state=validation_feedback: _decision_request_payload(
                     topic,
                     evidence,
                     observations,
                     budget,
-                    max_attempts,
-                    initial_validation_feedback=(
-                        f"已达到最大搜索动作数 {max_steps}；本轮只能输出 finish，不能继续 search。"
-                        if search_limit_reached
-                        else None
-                    ),
+                    validation_feedback=feedback_state[0],
                 ),
+                decide,
+                max_attempts=max_attempts,
+                should_retry=retry_decision,
                 result_kind="agent_decision",
                 result_payload=_agent_decision_payload,
             )
@@ -330,24 +365,26 @@ def agent_run(
         seen_queries.update(normalized_queries)
         plans.append(decision.plan)
         search_count += 1
+        search_plan = decision.plan
 
         try:
 
-            def answer_search(plan=decision.plan) -> SearchAnswer:
+            def answer_search(plan=search_plan) -> SearchAnswer:
                 nonlocal active_answerer
                 if active_answerer is None:
                     active_answerer = HostedSearchAnswerer()
-                return _call_with_retries(
-                    lambda timeout: active_answerer.answer(plan, timeout),
-                    budget,
-                    max_attempts,
-                )
+                remaining = budget.remaining()
+                if remaining <= 0:
+                    raise TimeoutError("Agent 总时限已耗尽")
+                return active_answerer.answer(plan, remaining)
 
             answer = recorder.execute(
                 f"search-{search_count}",
                 "hosted_search",
-                _search_request_payload(decision.plan, budget),
+                lambda plan=search_plan: _search_request_payload(plan, budget),
                 answer_search,
+                max_attempts=max_attempts,
+                should_retry=is_retryable_llm_error,
                 result_kind="search_answer",
                 result_payload=_search_answer_payload,
             )
@@ -367,63 +404,6 @@ def agent_run(
             )
         answers.append(answer)
         observations.append(AgentObservation(decision.plan, answer))
-
-
-def _call_with_retries(
-    operation: Callable[[float], T],
-    budget: ExecutionBudget,
-    max_attempts: int,
-) -> T:
-    last_error: Exception | None = None
-    for _ in range(max_attempts):
-        remaining = budget.remaining()
-        if remaining <= 0:
-            raise TimeoutError("Agent 总时限已耗尽")
-        try:
-            return operation(remaining)
-        except Exception as exc:
-            last_error = exc
-            if not is_retryable_llm_error(exc):
-                break
-    if last_error is None:
-        raise AssertionError("重试循环必须执行至少一次")
-    raise last_error
-
-
-def _call_decider_with_retries(
-    decider: ResearchDecider,
-    topic: str,
-    evidence,
-    observations,
-    budget: ExecutionBudget,
-    max_attempts: int,
-    initial_validation_feedback: str | None = None,
-) -> AgentDecision:
-    last_error: Exception | None = None
-    validation_feedback = initial_validation_feedback
-    for _ in range(max_attempts):
-        remaining = budget.remaining()
-        if remaining <= 0:
-            raise TimeoutError("Agent 总时限已耗尽")
-        try:
-            return decider.decide(
-                topic,
-                evidence,
-                observations,
-                remaining,
-                validation_feedback=validation_feedback,
-            )
-        except AgentDecisionResponseError as exc:
-            last_error = exc
-            validation_feedback = str(exc)
-        except Exception as exc:
-            last_error = exc
-            if not is_retryable_llm_error(exc):
-                break
-            validation_feedback = None
-    if last_error is None:
-        raise AssertionError("重试循环必须执行至少一次")
-    raise last_error
 
 
 def _failed_report(
@@ -513,6 +493,8 @@ def _decision_request_payload(
     evidence,
     observations: list[AgentObservation],
     budget: ExecutionBudget,
+    *,
+    validation_feedback: str | None,
 ) -> dict[str, Any]:
     return {
         "topic": topic,
@@ -525,6 +507,7 @@ def _decision_request_payload(
             for observation in observations
         ],
         "remaining_seconds": round(budget.remaining(), 6),
+        "validation_feedback": validation_feedback,
     }
 
 

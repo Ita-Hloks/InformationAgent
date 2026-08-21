@@ -25,6 +25,8 @@ from .models import (
     AnalysisState,
     AnalysisStep,
     AnalysisStepStatus,
+    ResearchRunNotFoundError,
+    ResearchRunNotReadyError,
 )
 
 
@@ -52,9 +54,9 @@ class AnalysisPersistenceMixin:
                 (research_run_id,),
             ).fetchone()
             if research_run is None:
-                raise ValueError(f"不存在的研究运行：{research_run_id}")
+                raise ResearchRunNotFoundError(f"不存在的研究运行：{research_run_id}")
             if research_run["status"] not in {"completed", "partial"}:
-                raise ValueError(f"研究运行尚未产生可分析结果：{research_run_id}")
+                raise ResearchRunNotReadyError(f"研究运行尚未产生可分析结果：{research_run_id}")
 
             if normalized_key is not None:
                 existing = connection.execute(
@@ -94,6 +96,34 @@ class AnalysisPersistenceMixin:
             ).fetchone()
         assert row is not None
         return _analysis_run_from_row(row)
+
+    def load_latest_agent_report(self, research_run_id: str) -> dict[str, Any] | None:
+        """Return the latest persisted Agent report for a research run."""
+
+        with self._connect() as connection:
+            research_run = connection.execute(
+                "SELECT 1 FROM research_runs WHERE id = ?",
+                (research_run_id,),
+            ).fetchone()
+            if research_run is None:
+                raise ResearchRunNotFoundError(f"不存在的研究运行：{research_run_id}")
+            row = connection.execute(
+                """
+                SELECT artifacts.analysis_run_id, artifacts.payload_json
+                FROM analysis_artifacts AS artifacts
+                JOIN analysis_runs AS runs ON runs.id = artifacts.analysis_run_id
+                WHERE runs.research_run_id = ?
+                  AND runs.analysis_type = 'agent_research'
+                  AND artifacts.kind = 'agent_report'
+                ORDER BY artifacts.created_at DESC, artifacts.rowid DESC
+                LIMIT 1
+                """,
+                (research_run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        payload = _load_json_object(row["payload_json"], "payload_json")
+        return {**payload, "analysis_run_id": str(row["analysis_run_id"])}
 
     def load_analysis_run(self, analysis_run_id: str) -> AnalysisRun:
         with self._connect() as connection:

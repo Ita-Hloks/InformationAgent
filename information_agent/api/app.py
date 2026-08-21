@@ -23,6 +23,7 @@ from ..serialization import (
     persisted_collection_to_payload,
     research_run_summaries_to_payload,
 )
+from ..storage import ResearchRunNotFoundError, ResearchRunNotReadyError
 from .models import (
     AgentRunRequest,
     ArticleResponse,
@@ -202,6 +203,13 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return persisted_collection_to_payload(result)
 
+    @app.get("/api/research/runs/{run_id}/agent")
+    def get_research_agent_report(run_id: str) -> dict[str, Any] | None:
+        try:
+            return reader.store.load_latest_agent_report(run_id)
+        except ResearchRunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.post("/api/research/runs/{run_id}/agent")
     def run_research_agent(run_id: str, request: AgentRunRequest) -> dict[str, Any]:
         try:
@@ -212,8 +220,12 @@ def create_app(
                 max_steps=request.max_steps,
                 max_attempts=request.max_attempts,
             )
-        except ValueError as exc:
+        except ResearchRunNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ResearchRunNotReadyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return agent_report_to_payload(report)

@@ -182,7 +182,7 @@ python -m information_agent.cli search "人工智能" "https://www.geekpark.net/
 
 ## 本地文章订阅 API
 
-当前已提供一个面向本地阅读器的最小 HTTP API。RSS/Atom 订阅、刷新、文章读取和阅读状态不调用 LLM；舆情接口只有在显式 POST 时才调用模型和哔哩哔哩评论接口。当前没有登录系统，多用户隔离和跨设备同步仍未实现。
+当前已提供一个面向本地阅读器和研究工作区的 HTTP API。RSS/Atom 订阅、刷新、文章读取和阅读状态不调用 LLM；研究采集、Agent 和舆情接口只在用户显式请求时调用相应模型或外部服务。当前没有登录系统，多用户隔离和跨设备同步仍未实现。
 
 安装依赖后，在项目根目录启动服务：
 
@@ -203,6 +203,10 @@ python -m uvicorn information_agent.api:app --host 127.0.0.1 --port 8001
 | `GET` | `/api/articles/{article_id}/opinion` | 读取最近一次舆情分析状态，不触发分析 |
 | `POST` | `/api/articles/{article_id}/opinion` | 主动触发一次舆情分析；可选 JSON `{ "force_refresh": true }` |
 | `PUT` | `/api/articles/state` | 批量更新文章已读/收藏状态，JSON 为 `{ "article_ids": ["..."], "is_read": true, "is_saved": false }` |
+| `GET` | `/api/research/runs` | 获取最近保存的研究运行及聚合计数 |
+| `POST` | `/api/research/ingest` | 按主题和 RSS/Atom 地址采集、筛选并写入研究数据库 |
+| `GET` | `/api/research/runs/{run_id}/agent` | 获取最近一次持久化的 Agent 报告；尚无报告时返回 `null` |
+| `POST` | `/api/research/runs/{run_id}/agent` | 基于已入库证据运行受限 Agent 并保存分析过程 |
 
 重要前置条件与约束：
 
@@ -210,6 +214,7 @@ python -m uvicorn information_agent.api:app --host 127.0.0.1 --port 8001
 - 服务默认仅监听 `127.0.0.1`，没有用户认证、权限隔离、跨设备同步和公网部署安全保障；若改变监听地址，必须先补认证、CORS、CSRF/访问控制和 SSRF 防护评审。
 - 单次 Feed 响应上限为 5 MiB，网页正文抓取仍是独立流程；RSS 摘要不足 20 个字符的条目不会进入文章列表。上游的 403、429、超时或解析失败会返回 `502` 并记录在订阅状态中。
 - 订阅、文章和本地阅读状态使用现有 SQLite 数据库；可通过 `INFORMATION_AGENT_DB_PATH` 指定位置。当前 API 不会改变研究工作流的 LLM 语义筛选边界。
+- 研究接口与阅读器复用同一 SQLite 路径；采集返回 `run_id`，Agent 返回 `analysis_run_id`、结论、引用、不确定性和停止原因。
 - 舆情首版只处理直接关联的哔哩哔哩视频或专栏 URL，默认分析最近 72 小时、最多 200 条评论；Cookie 只通过运行环境注入，代码不读取浏览器配置文件。
 
 LLM 与联网搜索调用会备份到 `log/`。可通过 `INFORMATION_AGENT_LOG_DIR` 修改目录；日志可能包含请求与响应内容，请按敏感数据管理。
@@ -225,6 +230,7 @@ LLM 与联网搜索调用会备份到 `log/`。可通过 `INFORMATION_AGENT_LOG_
 - **受控执行**：所有阶段共享同一个总时间预算；RSS 来源默认最多 6 路并发，并对临时网络错误重试。
 - **增量入库**：`ingest` 使用 SQLite 保存文章快照，通过 ETag、Last-Modified、条目标识与更新时间标记跳过未变化内容，并在条目更新后重新处理；只有语义筛选入选的摘要条目才会继续请求网页正文。
 - **规划持久化**：`plan-run` 从已保存的证据继续规划，并保存原始模型响应、搜索计划、查询及失败信息。
+- **Agent 持久化**：`agent-run` 保存决策、搜索观察、最终报告和错误 artifact，并返回对应的 `analysis_run_id`。
 - **部分失败可用**：某个 Feed、模型调用或搜索回答失败时，已获得的证据与错误上下文仍会保留。
 
 ## 项目结构
