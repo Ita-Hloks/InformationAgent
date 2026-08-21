@@ -17,6 +17,14 @@ class ArticleSnapshotMismatchError(ValueError):
     """历史结果或规划不属于当前文章正文快照。"""
 
 
+class ResearchRunNotFoundError(ValueError):
+    """研究运行不存在。"""
+
+
+class ResearchRunNotReadyError(ValueError):
+    """研究运行尚未产生可供下游分析的结果。"""
+
+
 @dataclass(frozen=True, slots=True)
 class PersistedCollection:
     """已提交到数据库的一次粗处理结果。"""

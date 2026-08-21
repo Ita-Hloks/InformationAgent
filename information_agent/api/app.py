@@ -1,21 +1,31 @@
 from __future__ import annotations
 
 import sqlite3
+from typing import Any
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from ..opinion import BilibiliTargetError, OpinionAnalysisService, OpinionStatus
 from ..opinion.service import OpinionArticleNotFoundError, OpinionSnapshotMismatchError
+from ..orchestration import agent_run, ingest
 from ..reader import (
     ArticleNotFoundError,
     FeedNotFoundError,
     FeedUnavailableError,
     ReaderService,
 )
-from ..serialization import opinion_report_to_payload
+from ..serialization import (
+    agent_report_to_payload,
+    opinion_report_to_payload,
+    persisted_collection_to_payload,
+    research_run_summaries_to_payload,
+)
+from ..storage import ResearchRunNotFoundError, ResearchRunNotReadyError
 from .models import (
+    AgentRunRequest,
     ArticleResponse,
     ArticleStateResponse,
     ArticleStateUpdate,
@@ -23,6 +33,8 @@ from .models import (
     FeedResponse,
     OpinionRequest,
     OpinionResponse,
+    ResearchIngestRequest,
+    ResearchRunsResponse,
     article_response,
     article_state_response,
     feed_response,
@@ -33,6 +45,7 @@ def create_app(
     service: ReaderService | None = None,
     opinion_service: OpinionAnalysisService | None = None,
 ) -> FastAPI:
+    load_dotenv()
     reader = service or ReaderService()
     opinion = opinion_service or OpinionAnalysisService(store=reader.store)
     app = FastAPI(title="Information Agent API", version="0.1.0")
@@ -163,5 +176,58 @@ def create_app(
                 status_code=500,
                 detail={"code": "storage_failed", "message": "舆情运行收尾失败"},
             ) from exc
+
+    @app.get("/api/research/runs", response_model=ResearchRunsResponse)
+    def list_research_runs(
+        limit: int = Query(default=20, ge=1, le=100),
+        status: str | None = Query(
+            default=None,
+            pattern="^(collecting|completed|partial|failed)$",
+        ),
+    ) -> dict[str, list[dict[str, Any]]]:
+        return research_run_summaries_to_payload(reader.store.list_runs(limit=limit, status=status))
+
+    @app.post("/api/research/ingest")
+    def ingest_research(request: ResearchIngestRequest) -> dict[str, Any]:
+        try:
+            result = ingest(
+                request.topic,
+                request.feeds,
+                database_path=reader.store.database_path,
+                timeout_seconds=request.timeout_seconds,
+                limit=request.limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return persisted_collection_to_payload(result)
+
+    @app.get("/api/research/runs/{run_id}/agent")
+    def get_research_agent_report(run_id: str) -> dict[str, Any] | None:
+        try:
+            return reader.store.load_latest_agent_report(run_id)
+        except ResearchRunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/research/runs/{run_id}/agent")
+    def run_research_agent(run_id: str, request: AgentRunRequest) -> dict[str, Any]:
+        try:
+            report = agent_run(
+                run_id,
+                database_path=reader.store.database_path,
+                timeout_seconds=request.timeout_seconds,
+                max_steps=request.max_steps,
+                max_attempts=request.max_attempts,
+            )
+        except ResearchRunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ResearchRunNotReadyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return agent_report_to_payload(report)
 
     return app

@@ -1,21 +1,32 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation, useMatch, useNavigate, useSearchParams } from "react-router-dom";
 
 import { feedPath, viewFromPath, viewPaths, viewTitles } from "../../app/navigation";
 import {
   addFeed as createFeed,
+  createResearchRun,
   getArticles,
   getFeeds,
+  getResearchAgentReport,
+  getResearchRuns,
+  runResearchAgent,
   type ArticleStateUpdate,
   updateArticleStates,
 } from "../../api/client";
-import { initialArticles, initialFeeds, researchRuns } from "../../data/localState";
-import type { Feed, LibraryView } from "../../types";
+import { initialArticles, initialFeeds } from "../../data/localState";
+import type {
+  AgentReport,
+  Feed,
+  LibraryView,
+  ResearchIngestResult,
+  ResearchRun,
+} from "../../types";
 import { AppSidebar } from "../appShell";
 import { AddFeedDialog } from "./addFeedDialog";
 import { ArticleList } from "./articleList";
 import { AskPanel } from "./askPanel";
 import { ReaderPane } from "./readerPane";
+import { ResearchWorkspace } from "./researchWorkspace";
 
 type OverlayName = "add-feed" | "ask";
 type RouteState = {
@@ -38,6 +49,15 @@ export function ReaderWorkspacePage() {
   const [searchParams] = useSearchParams();
   const [feeds, setFeeds] = useState<Feed[]>(initialFeeds);
   const [articles, setArticles] = useState(initialArticles);
+  const [researchRuns, setResearchRuns] = useState<ResearchRun[]>([]);
+  const [selectedResearchRunId, setSelectedResearchRunId] = useState<string | null>(null);
+  const [ingestResult, setIngestResult] = useState<ResearchIngestResult | null>(null);
+  const [agentReport, setAgentReport] = useState<AgentReport | null>(null);
+  const [researchPhase, setResearchPhase] = useState<"idle" | "ingesting" | "running-agent">(
+    "idle",
+  );
+  const [researchError, setResearchError] = useState<string | null>(null);
+  const agentReportRequestId = useRef(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [savedIds, setSavedIds] = useState(
     () => new Set(initialArticles.filter(article => article.starred).map(article => article.id)),
@@ -79,11 +99,12 @@ export function ReaderWorkspacePage() {
   };
 
   useEffect(() => {
-    void Promise.all([getFeeds(), getArticles()])
-      .then(([loadedFeeds, loadedArticles]) => {
+    void Promise.all([getFeeds(), getArticles(), getResearchRuns()])
+      .then(([loadedFeeds, loadedArticles, loadedResearchRuns]) => {
         setFeeds(loadedFeeds);
         const nextArticles = bindArticleSources(loadedArticles, loadedFeeds);
         setArticles(nextArticles);
+        setResearchRuns(loadedResearchRuns);
         setReadIds(
           new Set(nextArticles.filter(article => !article.unread).map(article => article.id)),
         );
@@ -96,6 +117,24 @@ export function ReaderWorkspacePage() {
         setApiStatus("unavailable");
       });
   }, []);
+
+  useEffect(() => {
+    if (!selectedResearchRunId) return;
+    const requestId = ++agentReportRequestId.current;
+    const controller = new AbortController();
+    setAgentReport(null);
+    void getResearchAgentReport(selectedResearchRunId, controller.signal)
+      .then(report => {
+        if (agentReportRequestId.current === requestId) setAgentReport(report);
+      })
+      .catch(error => {
+        if (controller.signal.aborted || agentReportRequestId.current !== requestId) return;
+        setResearchError(error instanceof Error ? error.message : "Agent 结果读取失败");
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [selectedResearchRunId]);
 
   const selectedFeedId = feedMatch?.params.feedId ?? null;
   const activeView = selectedFeedId ? "all" : viewFromPath(location.pathname);
@@ -174,6 +213,14 @@ export function ReaderWorkspacePage() {
     navigate(feedPath(feedId));
   };
 
+  const selectResearchRun = (runId: string) => {
+    setSelectedResearchRunId(runId);
+    setIngestResult(null);
+    setAgentReport(null);
+    setResearchError(null);
+    navigate(viewPaths.research);
+  };
+
   const selectArticle = (articleId: string) => {
     setReadIds(current => new Set(current).add(articleId));
     void persistArticleStates([articleId], { isRead: true });
@@ -226,6 +273,59 @@ export function ReaderWorkspacePage() {
       new Set(nextArticles.filter(article => article.starred).map(article => article.id)),
     );
     setApiStatus("connected");
+  };
+
+  const refreshResearchRuns = useCallback(async () => {
+    try {
+      const loadedResearchRuns = await getResearchRuns();
+      setResearchRuns(loadedResearchRuns);
+      setApiStatus("connected");
+    } catch {
+      setApiStatus("unavailable");
+    }
+  }, []);
+
+  const createRun = async (input: {
+    topic: string;
+    feeds: string[];
+    timeoutSeconds: number;
+    limit: number;
+  }) => {
+    setResearchPhase("ingesting");
+    setResearchError(null);
+    setAgentReport(null);
+    try {
+      const result = await createResearchRun(input);
+      setIngestResult(result);
+      setSelectedResearchRunId(result.run_id);
+      await refreshResearchRuns();
+    } catch (error) {
+      setResearchError(error instanceof Error ? error.message : "研究运行创建失败");
+    } finally {
+      setResearchPhase("idle");
+    }
+  };
+
+  const runAgent = async (runId: string) => {
+    const requestId = ++agentReportRequestId.current;
+    setResearchPhase("running-agent");
+    setResearchError(null);
+    setAgentReport(null);
+    try {
+      const report = await runResearchAgent(runId, {
+        timeoutSeconds: 180,
+        maxSteps: 3,
+        maxAttempts: 3,
+      });
+      if (agentReportRequestId.current === requestId) setAgentReport(report);
+      await refreshResearchRuns();
+    } catch (error) {
+      if (agentReportRequestId.current === requestId) {
+        setResearchError(error instanceof Error ? error.message : "Agent 运行失败");
+      }
+    } finally {
+      setResearchPhase("idle");
+    }
   };
 
   const openOverlay = useCallback(
@@ -292,42 +392,62 @@ export function ReaderWorkspacePage() {
           onClose={() => setSidebarOpen(false)}
           onSelectView={selectView}
           onSelectFeed={selectFeed}
+          onSelectResearchRun={selectResearchRun}
           onAddFeed={() => openOverlay("add-feed")}
         />
 
-        <div className={`min-h-0 min-w-0 ${articleOpen ? "hidden" : "block"} md:block`}>
-          <ArticleList
-            title={listTitle}
-            articles={visibleArticles}
-            selectedArticleId={selectedArticleId}
-            savedIds={savedIds}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            onSelectArticle={selectArticle}
-            onToggleSaved={toggleSaved}
-            onMarkAllRead={markAllRead}
-            onOpenSidebar={() => setSidebarOpen(true)}
-          />
-        </div>
+        {activeView === "research" ? (
+          <div className="h-full min-h-0 min-w-0 overflow-hidden md:col-span-1 xl:col-span-2">
+            <ResearchWorkspace
+              runs={researchRuns}
+              selectedRunId={selectedResearchRunId}
+              ingestResult={ingestResult}
+              agentReport={agentReport}
+              phase={researchPhase}
+              error={researchError}
+              onCreateRun={createRun}
+              onRunAgent={runAgent}
+              onSelectRun={selectResearchRun}
+              onRefreshRuns={refreshResearchRuns}
+            />
+          </div>
+        ) : (
+          <>
+            <div className={`min-h-0 min-w-0 ${articleOpen ? "hidden" : "block"} md:block`}>
+              <ArticleList
+                title={listTitle}
+                articles={visibleArticles}
+                selectedArticleId={selectedArticleId}
+                savedIds={savedIds}
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
+                onSelectArticle={selectArticle}
+                onToggleSaved={toggleSaved}
+                onMarkAllRead={markAllRead}
+                onOpenSidebar={() => setSidebarOpen(true)}
+              />
+            </div>
 
-        <div className={`min-h-0 min-w-0 ${articleOpen ? "block" : "hidden"} md:block`}>
-          <ReaderPane
-            article={selectedArticle}
-            saved={selectedArticle ? savedIds.has(selectedArticle.id) : false}
-            read={selectedArticle ? readIds.has(selectedArticle.id) : false}
-            onBack={closeArticle}
-            onToggleSaved={() => {
-              if (selectedArticle) toggleSaved(selectedArticle.id);
-            }}
-            onMarkRead={() => {
-              if (selectedArticle) {
-                setReadIds(current => new Set(current).add(selectedArticle.id));
-                void persistArticleStates([selectedArticle.id], { isRead: true });
-              }
-            }}
-            onAsk={() => openOverlay("ask")}
-          />
-        </div>
+            <div className={`min-h-0 min-w-0 ${articleOpen ? "block" : "hidden"} md:block`}>
+              <ReaderPane
+                article={selectedArticle}
+                saved={selectedArticle ? savedIds.has(selectedArticle.id) : false}
+                read={selectedArticle ? readIds.has(selectedArticle.id) : false}
+                onBack={closeArticle}
+                onToggleSaved={() => {
+                  if (selectedArticle) toggleSaved(selectedArticle.id);
+                }}
+                onMarkRead={() => {
+                  if (selectedArticle) {
+                    setReadIds(current => new Set(current).add(selectedArticle.id));
+                    void persistArticleStates([selectedArticle.id], { isRead: true });
+                  }
+                }}
+                onAsk={() => openOverlay("ask")}
+              />
+            </div>
+          </>
+        )}
       </div>
 
       {selectedArticle && (

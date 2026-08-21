@@ -86,3 +86,4 @@ class AgentReport:
     stop_reason: AgentStopReason
     errors: list[str] = field(default_factory=list)
     citations: tuple[ConclusionCitation, ...] = field(default_factory=tuple)
+    analysis_run_id: str | None = None

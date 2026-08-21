@@ -1,4 +1,4 @@
-import type { Article, Feed } from "../types";
+import type { AgentReport, Article, Feed, ResearchIngestResult, ResearchRun } from "../types";
 
 type FeedPayload = {
   id: string;
@@ -27,6 +27,17 @@ type ArticleStatePayload = {
   saved_at: string | null;
   updated_at: string;
 };
+type ResearchRunPayload = {
+  run_id: string;
+  topic: string;
+  status: ResearchRun["status"];
+  started_at: string;
+  finished_at?: string;
+  feed_count: number;
+  snapshot_count: number;
+  selected_evidence_count: number;
+  collection_error_count: number;
+};
 
 export type ArticleStateUpdate = {
   isRead?: boolean;
@@ -41,8 +52,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let detail = `请求失败（${response.status}）`;
     try {
-      const payload = (await response.json()) as { detail?: string };
-      if (payload.detail) detail = payload.detail;
+      const payload = (await response.json()) as { detail?: unknown };
+      if (typeof payload.detail === "string") {
+        detail = payload.detail;
+      } else if (
+        payload.detail !== null &&
+        typeof payload.detail === "object" &&
+        "message" in payload.detail &&
+        typeof payload.detail.message === "string"
+      ) {
+        detail = payload.detail.message;
+      }
     } catch {
       // Preserve the status when the server did not return JSON.
     }
@@ -107,6 +127,64 @@ export async function updateArticleStates(
       article_ids: articleIds,
       is_read: update.isRead,
       is_saved: update.isSaved,
+    }),
+  });
+}
+
+function toResearchRun(run: ResearchRunPayload): ResearchRun {
+  return {
+    id: run.run_id,
+    title: run.topic,
+    status: run.status,
+    articleCount: run.selected_evidence_count,
+    feedCount: run.feed_count,
+    errorCount: run.collection_error_count,
+    startedAt: run.started_at,
+    finishedAt: run.finished_at,
+  };
+}
+
+export async function getResearchRuns(): Promise<ResearchRun[]> {
+  const payload = await request<{ runs: ResearchRunPayload[] }>("/api/research/runs");
+  return payload.runs.map(toResearchRun);
+}
+
+export async function getResearchAgentReport(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<AgentReport | null> {
+  return request<AgentReport | null>(`/api/research/runs/${encodeURIComponent(runId)}/agent`, {
+    signal,
+  });
+}
+
+export async function createResearchRun(input: {
+  topic: string;
+  feeds: string[];
+  timeoutSeconds: number;
+  limit: number;
+}): Promise<ResearchIngestResult> {
+  return request<ResearchIngestResult>("/api/research/ingest", {
+    method: "POST",
+    body: JSON.stringify({
+      topic: input.topic,
+      feeds: input.feeds,
+      timeout_seconds: input.timeoutSeconds,
+      limit: input.limit,
+    }),
+  });
+}
+
+export async function runResearchAgent(
+  runId: string,
+  input: { timeoutSeconds: number; maxSteps: number; maxAttempts: number },
+): Promise<AgentReport> {
+  return request<AgentReport>(`/api/research/runs/${encodeURIComponent(runId)}/agent`, {
+    method: "POST",
+    body: JSON.stringify({
+      timeout_seconds: input.timeoutSeconds,
+      max_steps: input.maxSteps,
+      max_attempts: input.maxAttempts,
     }),
   });
 }

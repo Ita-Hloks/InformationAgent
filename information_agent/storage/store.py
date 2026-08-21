@@ -39,6 +39,8 @@ from .models import (
     OpinionRunRecord,
     ReaderArticle,
     ReaderArticleState,
+    ResearchRunNotFoundError,
+    ResearchRunNotReadyError,
 )
 from .run_listing import ResearchRunListingMixin
 
@@ -1083,9 +1085,9 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin, ResearchRunListingMixin):
                 "SELECT topic, status FROM research_runs WHERE id = ?", (run_id,)
             ).fetchone()
         if run is None:
-            raise ValueError(f"不存在的研究运行：{run_id}")
+            raise ResearchRunNotFoundError(f"不存在的研究运行：{run_id}")
         if run["status"] not in {"completed", "partial"}:
-            raise ValueError(f"研究运行尚未产生可规划结果：{run_id}")
+            raise ResearchRunNotReadyError(f"研究运行尚未产生可规划结果：{run_id}")
         return str(run["topic"]), self.load_selected_evidence(run_id)
 
     def start_planning(self, run_id: str) -> str:

@@ -69,6 +69,7 @@ def research_run_summaries_to_payload(
 def agent_report_to_payload(report: AgentReport) -> dict[str, Any]:
     return {
         "run_id": report.run_id,
+        "analysis_run_id": report.analysis_run_id,
         "topic": report.topic,
         "status": report.status.value,
         "articles": [_selected_evidence_to_payload(item) for item in report.articles],
