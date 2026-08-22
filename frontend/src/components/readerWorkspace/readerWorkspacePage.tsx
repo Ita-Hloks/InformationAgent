@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Outlet, useLocation, useMatch, useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useMatch, useNavigate, useOutlet, useSearchParams } from "react-router-dom";
 
 import { feedPath, viewFromPath, viewPaths, viewTitles } from "../../app/navigation";
 import {
@@ -45,6 +45,7 @@ function bindArticleSources(articles: typeof initialArticles, feeds: Feed[]) {
 export function ReaderWorkspacePage() {
   const location = useLocation();
   const navigate = useNavigate();
+  const outlet = useOutlet();
   const feedMatch = useMatch("/feeds/:feedId");
   const [searchParams] = useSearchParams();
   const [feeds, setFeeds] = useState<Feed[]>(initialFeeds);
@@ -370,7 +371,6 @@ export function ReaderWorkspacePage() {
 
   return (
     <div className="h-dvh min-h-[600px] overflow-hidden bg-[var(--reader-workspace-bg)] text-[#242528]">
-      <Outlet />
       {sidebarOpen && (
         <button
           type="button"
@@ -394,9 +394,16 @@ export function ReaderWorkspacePage() {
           onSelectFeed={selectFeed}
           onSelectResearchRun={selectResearchRun}
           onAddFeed={() => openOverlay("add-feed")}
+          settingsActive={location.pathname === "/settings"}
+          onOpenSettings={() => {
+            navigate("/settings");
+            setSidebarOpen(false);
+          }}
         />
 
-        {activeView === "research" ? (
+        {outlet ? (
+          <div className="h-full min-h-0 min-w-0 md:col-span-1 xl:col-span-2">{outlet}</div>
+        ) : activeView === "research" ? (
           <div className="h-full min-h-0 min-w-0 overflow-hidden md:col-span-1 xl:col-span-2">
             <ResearchWorkspace
               runs={researchRuns}

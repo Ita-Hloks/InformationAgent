@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
+import { SettingsPage } from "../components/appShell";
 import { ReaderWorkspacePage } from "../components/readerWorkspace";
 
 export function AppRoutes() {
@@ -13,6 +14,7 @@ export function AppRoutes() {
         <Route element={<WorkspaceRoute />} path="saved" />
         <Route element={<WorkspaceRoute />} path="research" />
         <Route element={<WorkspaceRoute />} path="feeds/:feedId" />
+        <Route element={<SettingsPage />} path="settings" />
         <Route element={<Navigate replace to="/inbox" />} path="*" />
       </Route>
     </Routes>

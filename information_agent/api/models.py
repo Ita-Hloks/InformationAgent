@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..storage import FeedSubscription, ReaderArticle, ReaderArticleState
 
@@ -55,6 +55,54 @@ class ArticleResponse(BaseModel):
     content: str
     is_read: bool
     is_saved: bool
+
+
+class ArticleQuestionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    question: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("question")
+    @classmethod
+    def normalize_question(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("question 不能为空")
+        return normalized
+
+
+class ArticleAnswerResponse(BaseModel):
+    article_id: str
+    answer: str
+
+
+class LLMSettingsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    api_key_configured: bool
+    model: str
+    base_url: str
+    available: bool
+
+
+class EnvFileOpenResponse(BaseModel):
+    status: Literal["opened"]
+
+
+class ArticleContextRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class ArticleContextResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    context_id: str
+    source_url: str
+    title: str
+    is_local: bool
+    confirmed: bool
 
 
 class OpinionRequest(BaseModel):

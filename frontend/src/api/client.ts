@@ -1,4 +1,13 @@
-import type { AgentReport, Article, Feed, ResearchIngestResult, ResearchRun } from "../types";
+import type {
+  AgentReport,
+  Article,
+  ArticleAnswer,
+  ArticleContext,
+  Feed,
+  LLMSettings,
+  ResearchIngestResult,
+  ResearchRun,
+} from "../types";
 
 type FeedPayload = {
   id: string;
@@ -26,6 +35,23 @@ type ArticleStatePayload = {
   read_at: string | null;
   saved_at: string | null;
   updated_at: string;
+};
+type ArticleAnswerPayload = {
+  article_id: string;
+  answer: string;
+};
+type ArticleContextPayload = {
+  context_id: string;
+  source_url: string;
+  title: string;
+  is_local: boolean;
+  confirmed: boolean;
+};
+type LLMSettingsPayload = {
+  api_key_configured: boolean;
+  model: string;
+  base_url: string;
+  available: boolean;
 };
 type ResearchRunPayload = {
   run_id: string;
@@ -129,6 +155,87 @@ export async function updateArticleStates(
       is_saved: update.isSaved,
     }),
   });
+}
+
+export async function getLLMSettings(): Promise<LLMSettings> {
+  const payload = await request<LLMSettingsPayload>("/api/settings");
+  return {
+    apiKeyConfigured: payload.api_key_configured,
+    model: payload.model,
+    baseUrl: payload.base_url,
+    available: payload.available,
+  };
+}
+
+export async function openProjectEnvFile(): Promise<void> {
+  await request<{ status: "opened" }>("/api/settings/env/open", { method: "POST" });
+}
+
+export async function askArticle(
+  articleId: string,
+  question: string,
+  signal?: AbortSignal,
+): Promise<ArticleAnswer> {
+  const payload = await request<ArticleAnswerPayload>(
+    `/api/articles/${encodeURIComponent(articleId)}/ask`,
+    {
+      method: "POST",
+      body: JSON.stringify({ question }),
+      signal,
+    },
+  );
+  return { articleId: payload.article_id, answer: payload.answer };
+}
+
+function toArticleContext(payload: ArticleContextPayload): ArticleContext {
+  return {
+    contextId: payload.context_id,
+    sourceUrl: payload.source_url,
+    title: payload.title,
+    isLocal: payload.is_local,
+    confirmed: payload.confirmed,
+  };
+}
+
+export async function resolveArticleContext(
+  url: string,
+  signal?: AbortSignal,
+): Promise<ArticleContext> {
+  return toArticleContext(
+    await request<ArticleContextPayload>("/api/article-context", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+      signal,
+    }),
+  );
+}
+
+export async function confirmArticleContext(
+  contextId: string,
+  signal?: AbortSignal,
+): Promise<ArticleContext> {
+  return toArticleContext(
+    await request<ArticleContextPayload>(
+      `/api/article-context/${encodeURIComponent(contextId)}/confirm`,
+      { method: "POST", signal },
+    ),
+  );
+}
+
+export async function askArticleContext(
+  contextId: string,
+  question: string,
+  signal?: AbortSignal,
+): Promise<ArticleAnswer> {
+  const payload = await request<ArticleAnswerPayload>(
+    `/api/article-context/${encodeURIComponent(contextId)}/ask`,
+    {
+      method: "POST",
+      body: JSON.stringify({ question }),
+      signal,
+    },
+  );
+  return { articleId: payload.article_id, answer: payload.answer };
 }
 
 function toResearchRun(run: ResearchRunPayload): ResearchRun {
