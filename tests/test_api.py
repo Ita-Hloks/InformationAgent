@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from information_agent import settings as settings_module
 from information_agent.agent import AgentReport, AgentStopReason
 from information_agent.api import create_app
 from information_agent.collection import FeedFetchResult, RawFeedEntry
@@ -53,6 +54,102 @@ def _fetcher(feed_url: str, timeout: float, **_: object) -> FeedFetchResult:
 def _client(tmp_path: Path) -> TestClient:
     service = ReaderService(tmp_path / "api.db", fetcher=_fetcher)
     return TestClient(create_app(service))
+
+
+def test_settings_api_returns_only_redacted_main_llm_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "main-secret")
+    monkeypatch.setenv("LLM_MODEL", "local-model")
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("SEARCH_LLM_API_KEY", "search-secret")
+
+    response = _client(tmp_path).get("/api/settings")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "api_key_configured": True,
+        "model": "local-model",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "available": True,
+    }
+    assert "main-secret" not in response.text
+    assert "search-secret" not in response.text
+
+
+def test_settings_api_reports_unavailable_without_exposing_key_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("LLM_MODEL", "local-model")
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+
+    response = _client(tmp_path).get("/api/settings")
+
+    assert response.status_code == 200
+    assert response.json()["api_key_configured"] is False
+    assert response.json()["available"] is False
+
+
+def test_settings_api_redacts_key_if_it_appears_in_other_main_config_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "embedded-secret")
+    monkeypatch.setenv("LLM_MODEL", "embedded-secret-model")
+    monkeypatch.setenv("LLM_BASE_URL", "https://provider.example/v1?token=embedded-secret")
+
+    response = _client(tmp_path).get("/api/settings")
+
+    assert response.status_code == 200
+    assert response.json()["model"] == "[已隐藏]-model"
+    assert response.json()["base_url"] == "https://provider.example/v1"
+    assert response.json()["available"] is False
+    assert "embedded-secret" not in response.text
+
+
+def test_open_env_api_uses_fixed_project_path_without_accepting_client_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text("LLM_API_KEY=main-secret\n", encoding="utf-8")
+    client_path = tmp_path / "outside.env"
+    opened_paths: list[str] = []
+    monkeypatch.setattr(settings_module, "PROJECT_ENV_PATH", env_path)
+    monkeypatch.setattr(
+        settings_module.os,
+        "startfile",
+        lambda path: opened_paths.append(path),
+        raising=False,
+    )
+
+    response = _client(tmp_path).post(
+        "/api/settings/env/open",
+        json={"path": str(client_path)},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "opened"}
+    assert opened_paths == [str(env_path)]
+    assert "main-secret" not in response.text
+    assert str(client_path) not in response.text
+
+
+def test_open_env_api_returns_safe_error_for_missing_project_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_path = tmp_path / "missing.env"
+    monkeypatch.setattr(settings_module, "PROJECT_ENV_PATH", env_path)
+
+    response = _client(tmp_path).post("/api/settings/env/open")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "code": "env_open_failed",
+            "message": "无法打开项目 .env 文件，请确认文件存在并已安装默认编辑器",
+        }
+    }
+    assert str(tmp_path) not in response.text
 
 
 class _FakeCompletionClient:

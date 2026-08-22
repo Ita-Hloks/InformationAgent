@@ -39,6 +39,13 @@ export type ArticleContext = {
   confirmed: boolean;
 };
 
+export type LLMSettings = {
+  apiKeyConfigured: boolean;
+  model: string;
+  baseUrl: string;
+  available: boolean;
+};
+
 export type ResearchRun = {
   id: string;
   title: string;

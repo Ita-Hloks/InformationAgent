@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -74,6 +74,19 @@ class ArticleQuestionRequest(BaseModel):
 class ArticleAnswerResponse(BaseModel):
     article_id: str
     answer: str
+
+
+class LLMSettingsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    api_key_configured: bool
+    model: str
+    base_url: str
+    available: bool
+
+
+class EnvFileOpenResponse(BaseModel):
+    status: Literal["opened"]
 
 
 class ArticleContextRequest(BaseModel):

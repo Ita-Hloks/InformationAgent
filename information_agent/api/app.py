@@ -29,6 +29,7 @@ from ..serialization import (
     persisted_collection_to_payload,
     research_run_summaries_to_payload,
 )
+from ..settings import EnvFileOpenError, MainLLMConfig, open_project_env_file
 from ..storage import ResearchRunNotFoundError, ResearchRunNotReadyError
 from .models import (
     AgentRunRequest,
@@ -39,8 +40,10 @@ from .models import (
     ArticleResponse,
     ArticleStateResponse,
     ArticleStateUpdate,
+    EnvFileOpenResponse,
     FeedCreate,
     FeedResponse,
+    LLMSettingsResponse,
     OpinionRequest,
     OpinionResponse,
     ResearchIngestRequest,
@@ -81,6 +84,24 @@ def create_app(
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/settings", response_model=LLMSettingsResponse)
+    def get_settings() -> LLMSettingsResponse:
+        return LLMSettingsResponse(**MainLLMConfig.from_env().to_public_status())
+
+    @app.post("/api/settings/env/open", response_model=EnvFileOpenResponse)
+    def open_env_file() -> EnvFileOpenResponse:
+        try:
+            open_project_env_file()
+        except (EnvFileOpenError, OSError) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "env_open_failed",
+                    "message": "无法打开项目 .env 文件，请确认文件存在并已安装默认编辑器",
+                },
+            ) from exc
+        return EnvFileOpenResponse(status="opened")
 
     @app.get("/api/feeds", response_model=list[FeedResponse])
     def list_feeds() -> list[FeedResponse]:

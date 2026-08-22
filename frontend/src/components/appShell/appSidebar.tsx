@@ -28,6 +28,8 @@ type AppSidebarProps = {
   onSelectFeed: (feedId: string) => void;
   onSelectResearchRun: (runId: string) => void;
   onAddFeed: () => void;
+  settingsActive: boolean;
+  onOpenSettings: () => void;
 };
 
 const mainNavigation = [
@@ -50,6 +52,8 @@ export function AppSidebar({
   onSelectFeed,
   onSelectResearchRun,
   onAddFeed,
+  settingsActive,
+  onOpenSettings,
 }: AppSidebarProps) {
   const selectView = (view: LibraryView) => {
     onSelectView(view);
@@ -102,7 +106,7 @@ export function AppSidebar({
         <nav className="space-y-0.5" aria-label="阅读视图">
           {mainNavigation.map(item => {
             const Icon = item.icon;
-            const active = activeView === item.id && selectedFeedId === null;
+            const active = !settingsActive && activeView === item.id && selectedFeedId === null;
             return (
               <button
                 key={item.id}
@@ -140,7 +144,7 @@ export function AppSidebar({
           <button
             type="button"
             className={`flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm ${
-              activeView === "research"
+              !settingsActive && activeView === "research"
                 ? "bg-white/9 text-white"
                 : "text-[#aeb1b7] hover:bg-white/6 hover:text-white"
             }`}
@@ -238,7 +242,11 @@ export function AppSidebar({
       <div className="shrink-0 border-t border-white/8 p-2.5">
         <button
           type="button"
-          className="flex h-11 w-full items-center gap-2.5 rounded-md px-2 text-left hover:bg-white/6"
+          className={`flex h-11 w-full items-center gap-2.5 rounded-md px-2 text-left hover:bg-white/6 ${
+            settingsActive ? "bg-white/9" : ""
+          }`}
+          aria-current={settingsActive ? "page" : undefined}
+          onClick={onOpenSettings}
         >
           <CircleUserRound size={22} className="text-[#a3a7ad]" strokeWidth={1.6} />
           <span className="min-w-0 flex-1">

@@ -4,6 +4,7 @@ import type {
   ArticleAnswer,
   ArticleContext,
   Feed,
+  LLMSettings,
   ResearchIngestResult,
   ResearchRun,
 } from "../types";
@@ -45,6 +46,12 @@ type ArticleContextPayload = {
   title: string;
   is_local: boolean;
   confirmed: boolean;
+};
+type LLMSettingsPayload = {
+  api_key_configured: boolean;
+  model: string;
+  base_url: string;
+  available: boolean;
 };
 type ResearchRunPayload = {
   run_id: string;
@@ -148,6 +155,20 @@ export async function updateArticleStates(
       is_saved: update.isSaved,
     }),
   });
+}
+
+export async function getLLMSettings(): Promise<LLMSettings> {
+  const payload = await request<LLMSettingsPayload>("/api/settings");
+  return {
+    apiKeyConfigured: payload.api_key_configured,
+    model: payload.model,
+    baseUrl: payload.base_url,
+    available: payload.available,
+  };
+}
+
+export async function openProjectEnvFile(): Promise<void> {
+  await request<{ status: "opened" }>("/api/settings/env/open", { method: "POST" });
 }
 
 export async function askArticle(
