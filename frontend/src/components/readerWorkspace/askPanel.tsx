@@ -119,6 +119,7 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
     if (!normalizedQuestion || phase === "loading") return;
     if (url.trim() && !confirmedContext) return;
 
+    questionInputRef.current?.focus();
     requestControllerRef.current?.abort();
     const controller = new AbortController();
     requestControllerRef.current = controller;
@@ -144,6 +145,17 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
     void requestAnswer();
   };
 
+  const selectSuggestion = (suggestion: string) => {
+    setQuestion(suggestion);
+    questionInputRef.current?.focus();
+    window.requestAnimationFrame(() => {
+      const input = questionInputRef.current;
+      if (input && document.activeElement === input) {
+        input.setSelectionRange(suggestion.length, suggestion.length);
+      }
+    });
+  };
+
   const usingUrlContext = Boolean(url.trim() || context);
   const questionEnabled = !usingUrlContext || context?.confirmed === true;
 
@@ -154,6 +166,7 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
           type="button"
           className="fixed inset-0 z-40 cursor-default bg-black/20"
           aria-label="关闭提问面板"
+          tabIndex={-1}
           onClick={onClose}
         />
       )}
@@ -161,8 +174,11 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
         className={`fixed inset-y-0 right-0 z-50 flex w-full max-w-[410px] flex-col border-l border-[#303238] bg-[#1c1e23] text-[#ecece8] shadow-[-18px_0_50px_rgba(0,0,0,0.18)] transition-transform duration-200 ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
+        role="dialog"
+        aria-modal={open}
         aria-label="向文章助手提问"
         aria-hidden={!open}
+        inert={!open}
       >
         <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/10 px-4">
           <div className="flex items-center gap-2.5">
@@ -284,7 +300,7 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
                     key={suggestion}
                     type="button"
                     className="rounded-md border border-white/10 bg-white/[0.03] px-3 py-2.5 text-left text-xs text-[#b8bbc1] hover:border-white/20 hover:bg-white/[0.06] hover:text-white"
-                    onClick={() => setQuestion(suggestion)}
+                    onClick={() => selectSuggestion(suggestion)}
                   >
                     {suggestion}
                   </button>
@@ -328,18 +344,19 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
           <label className="sr-only" htmlFor="agent-question">
             向文章助手提问
           </label>
-          <div className="rounded-lg border border-white/15 bg-[#24272d] p-2 focus-within:border-[#ef8354]/70">
+          <div className="ask-panel-question-field rounded-lg border border-white/15 bg-[#24272d] p-2 focus-within:border-[#ef8354]/70">
             <textarea
               ref={questionInputRef}
               id="agent-question"
-              className="min-h-20 w-full resize-none bg-transparent px-1 py-1 text-sm leading-5 text-white outline-none placeholder:text-[#737780]"
+              className="ask-panel-question-input min-h-20 w-full resize-none bg-transparent px-1 py-1 text-sm leading-5 text-white outline-none placeholder:text-[#737780]"
               placeholder="询问当前文章..."
               value={question}
               onChange={event => {
                 setQuestion(event.target.value);
                 if (phase === "success" || phase === "error") setPhase("idle");
               }}
-              disabled={phase === "loading" || !questionEnabled}
+              disabled={!questionEnabled}
+              readOnly={phase === "loading"}
             />
             <div className="mt-1 flex items-center justify-between">
               <span className="px-1 text-[10px] text-[#70747c]">文章上下文</span>
@@ -348,6 +365,7 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
                 className="grid size-8 place-items-center rounded-md bg-[#ef8354] text-[#21130d] hover:bg-[#f09670] disabled:cursor-not-allowed disabled:opacity-50"
                 aria-label="提交问题"
                 title="提交问题"
+                onMouseDown={event => event.preventDefault()}
                 disabled={!question.trim() || phase === "loading" || !questionEnabled}
               >
                 {phase === "loading" ? (

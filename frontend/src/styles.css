@@ -39,6 +39,10 @@ textarea {
   font: inherit;
 }
 
+.ask-panel-question-input:focus-visible {
+  outline: none;
+}
+
 button {
   cursor: pointer;
 }
