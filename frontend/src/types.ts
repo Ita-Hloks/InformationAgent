@@ -26,6 +26,19 @@ export type Article = {
   sourceUrl: string;
 };
 
+export type ArticleAnswer = {
+  articleId: string;
+  answer: string;
+};
+
+export type ArticleContext = {
+  contextId: string;
+  sourceUrl: string;
+  title: string;
+  isLocal: boolean;
+  confirmed: boolean;
+};
+
 export type ResearchRun = {
   id: string;
   title: string;

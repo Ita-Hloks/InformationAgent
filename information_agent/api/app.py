@@ -12,6 +12,12 @@ from ..opinion import BilibiliTargetError, OpinionAnalysisService, OpinionStatus
 from ..opinion.service import OpinionArticleNotFoundError, OpinionSnapshotMismatchError
 from ..orchestration import agent_run, ingest
 from ..reader import (
+    ArticleAssistant,
+    ArticleContextNotConfirmedError,
+    ArticleContextNotFoundError,
+    ArticleContextService,
+    ArticleContextUnavailableError,
+    ArticleContextUrlError,
     ArticleNotFoundError,
     FeedNotFoundError,
     FeedUnavailableError,
@@ -26,6 +32,10 @@ from ..serialization import (
 from ..storage import ResearchRunNotFoundError, ResearchRunNotReadyError
 from .models import (
     AgentRunRequest,
+    ArticleAnswerResponse,
+    ArticleContextRequest,
+    ArticleContextResponse,
+    ArticleQuestionRequest,
     ArticleResponse,
     ArticleStateResponse,
     ArticleStateUpdate,
@@ -44,10 +54,14 @@ from .models import (
 def create_app(
     service: ReaderService | None = None,
     opinion_service: OpinionAnalysisService | None = None,
+    article_assistant: ArticleAssistant | None = None,
+    article_context: ArticleContextService | None = None,
 ) -> FastAPI:
     load_dotenv()
     reader = service or ReaderService()
     opinion = opinion_service or OpinionAnalysisService(store=reader.store)
+    assistant = article_assistant or ArticleAssistant()
+    context_service = article_context or ArticleContextService(reader)
     app = FastAPI(title="Information Agent API", version="0.1.0")
 
     @app.exception_handler(RequestValidationError)
@@ -122,6 +136,106 @@ def create_app(
             return article_response(reader.get_article(article_id))
         except ArticleNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/articles/{article_id}/ask", response_model=ArticleAnswerResponse)
+    def ask_article(
+        article_id: str,
+        request: ArticleQuestionRequest,
+    ) -> ArticleAnswerResponse:
+        try:
+            article = reader.get_article(article_id)
+            return ArticleAnswerResponse(
+                article_id=article_id,
+                answer=assistant.answer(article, request.question),
+            )
+        except ArticleNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "article_not_found", "message": str(exc)},
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "llm_unavailable", "message": str(exc)},
+            ) from exc
+        except (ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={"code": "assistant_failed", "message": "文章问答失败，请重试"},
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={"code": "assistant_failed", "message": "文章问答失败，请重试"},
+            ) from exc
+
+    @app.post("/api/article-context", response_model=ArticleContextResponse)
+    def resolve_article_context(request: ArticleContextRequest) -> ArticleContextResponse:
+        try:
+            return ArticleContextResponse.model_validate(context_service.resolve(request.url))
+        except ArticleContextUrlError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "unsafe_url", "message": str(exc)},
+            ) from exc
+        except ArticleContextUnavailableError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={"code": "context_unavailable", "message": str(exc)},
+            ) from exc
+
+    @app.post(
+        "/api/article-context/{context_id}/confirm",
+        response_model=ArticleContextResponse,
+    )
+    def confirm_article_context(context_id: str) -> ArticleContextResponse:
+        try:
+            return ArticleContextResponse.model_validate(context_service.confirm(context_id))
+        except ArticleContextNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "context_not_found", "message": str(exc)},
+            ) from exc
+
+    @app.post(
+        "/api/article-context/{context_id}/ask",
+        response_model=ArticleAnswerResponse,
+    )
+    def ask_article_context(
+        context_id: str,
+        request: ArticleQuestionRequest,
+    ) -> ArticleAnswerResponse:
+        try:
+            article = context_service.confirmed_article(context_id)
+            return ArticleAnswerResponse(
+                article_id=article.article.article_id,
+                answer=assistant.answer(article, request.question),
+            )
+        except ArticleContextNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "context_not_found", "message": str(exc)},
+            ) from exc
+        except ArticleContextNotConfirmedError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "context_not_confirmed", "message": str(exc)},
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "llm_unavailable", "message": str(exc)},
+            ) from exc
+        except (ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={"code": "assistant_failed", "message": "文章问答失败，请重试"},
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={"code": "assistant_failed", "message": "文章问答失败，请重试"},
+            ) from exc
 
     @app.get("/api/articles/{article_id}/opinion", response_model=OpinionResponse)
     def get_opinion_status(article_id: str) -> OpinionResponse:

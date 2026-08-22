@@ -112,6 +112,9 @@ class ReaderService:
             raise ArticleNotFoundError(f"不存在的文章：{article_id}")
         return article
 
+    def get_article_by_source_url(self, source_url: str) -> ReaderArticle | None:
+        return self.store.get_reader_article_by_source_url(source_url)
+
     def update_article_states(
         self,
         article_ids: list[str],
