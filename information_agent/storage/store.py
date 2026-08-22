@@ -42,6 +42,8 @@ from .models import (
     ResearchRunNotFoundError,
     ResearchRunNotReadyError,
 )
+from .reader_answer_schema import migrate_reader_answer_schema
+from .reader_answers import ReaderAnswerPersistenceMixin
 from .run_listing import ResearchRunListingMixin
 
 _OPINION_STATUS_REASONS = {
@@ -68,7 +70,11 @@ def default_database_path() -> Path:
     return Path("data") / "information_agent.db"
 
 
-class SQLiteCollectionStore(AnalysisPersistenceMixin, ResearchRunListingMixin):
+class SQLiteCollectionStore(
+    AnalysisPersistenceMixin,
+    ReaderAnswerPersistenceMixin,
+    ResearchRunListingMixin,
+):
     """保存粗处理文章快照与运行内证据关系。"""
 
     def __init__(self, database_path: str | Path) -> None:
@@ -1506,6 +1512,7 @@ class SQLiteCollectionStore(AnalysisPersistenceMixin, ResearchRunListingMixin):
                 (3, _format_datetime(project_now())),
             )
         migrate_analysis_schema(connection)
+        migrate_reader_answer_schema(connection)
         applied_versions = {
             row[0] for row in connection.execute("SELECT version FROM schema_migrations")
         }

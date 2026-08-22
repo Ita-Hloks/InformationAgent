@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import inspect
 import sqlite3
 from typing import Any
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -13,11 +15,6 @@ from ..opinion.service import OpinionArticleNotFoundError, OpinionSnapshotMismat
 from ..orchestration import agent_run, ingest
 from ..reader import (
     ArticleAssistant,
-    ArticleContextNotConfirmedError,
-    ArticleContextNotFoundError,
-    ArticleContextService,
-    ArticleContextUnavailableError,
-    ArticleContextUrlError,
     ArticleNotFoundError,
     FeedNotFoundError,
     FeedUnavailableError,
@@ -33,9 +30,9 @@ from ..settings import EnvFileOpenError, MainLLMConfig, open_project_env_file
 from ..storage import ResearchRunNotFoundError, ResearchRunNotReadyError
 from .models import (
     AgentRunRequest,
+    ArticleAnswerClearResponse,
+    ArticleAnswerHistoryResponse,
     ArticleAnswerResponse,
-    ArticleContextRequest,
-    ArticleContextResponse,
     ArticleQuestionRequest,
     ArticleResponse,
     ArticleStateResponse,
@@ -48,6 +45,7 @@ from .models import (
     OpinionResponse,
     ResearchIngestRequest,
     ResearchRunsResponse,
+    article_answer_response,
     article_response,
     article_state_response,
     feed_response,
@@ -58,13 +56,11 @@ def create_app(
     service: ReaderService | None = None,
     opinion_service: OpinionAnalysisService | None = None,
     article_assistant: ArticleAssistant | None = None,
-    article_context: ArticleContextService | None = None,
 ) -> FastAPI:
     load_dotenv()
     reader = service or ReaderService()
     opinion = opinion_service or OpinionAnalysisService(store=reader.store)
     assistant = article_assistant or ArticleAssistant()
-    context_service = article_context or ArticleContextService(reader)
     app = FastAPI(title="Information Agent API", version="0.1.0")
 
     @app.exception_handler(RequestValidationError)
@@ -163,99 +159,134 @@ def create_app(
         article_id: str,
         request: ArticleQuestionRequest,
     ) -> ArticleAnswerResponse:
+        request_id = request.request_id or uuid4().hex
         try:
             article = reader.get_article(article_id)
-            return ArticleAnswerResponse(
-                article_id=article_id,
-                answer=assistant.answer(article, request.question),
+            claim = reader.store.claim_article_answer(
+                article,
+                request_id=request_id,
+                question=request.question,
             )
         except ArticleNotFoundError as exc:
             raise HTTPException(
                 status_code=404,
                 detail={"code": "article_not_found", "message": str(exc)},
             ) from exc
-        except RuntimeError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail={"code": "llm_unavailable", "message": str(exc)},
-            ) from exc
-        except (ValueError, TypeError, KeyError) as exc:
-            raise HTTPException(
-                status_code=502,
-                detail={"code": "assistant_failed", "message": "文章问答失败，请重试"},
-            ) from exc
-        except Exception as exc:
-            raise HTTPException(
-                status_code=502,
-                detail={"code": "assistant_failed", "message": "文章问答失败，请重试"},
-            ) from exc
-
-    @app.post("/api/article-context", response_model=ArticleContextResponse)
-    def resolve_article_context(request: ArticleContextRequest) -> ArticleContextResponse:
-        try:
-            return ArticleContextResponse.model_validate(context_service.resolve(request.url))
-        except ArticleContextUrlError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail={"code": "unsafe_url", "message": str(exc)},
-            ) from exc
-        except ArticleContextUnavailableError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail={"code": "context_unavailable", "message": str(exc)},
-            ) from exc
-
-    @app.post(
-        "/api/article-context/{context_id}/confirm",
-        response_model=ArticleContextResponse,
-    )
-    def confirm_article_context(context_id: str) -> ArticleContextResponse:
-        try:
-            return ArticleContextResponse.model_validate(context_service.confirm(context_id))
-        except ArticleContextNotFoundError as exc:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "context_not_found", "message": str(exc)},
-            ) from exc
-
-    @app.post(
-        "/api/article-context/{context_id}/ask",
-        response_model=ArticleAnswerResponse,
-    )
-    def ask_article_context(
-        context_id: str,
-        request: ArticleQuestionRequest,
-    ) -> ArticleAnswerResponse:
-        try:
-            article = context_service.confirmed_article(context_id)
-            return ArticleAnswerResponse(
-                article_id=article.article.article_id,
-                answer=assistant.answer(article, request.question),
-            )
-        except ArticleContextNotFoundError as exc:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "context_not_found", "message": str(exc)},
-            ) from exc
-        except ArticleContextNotConfirmedError as exc:
+        except ValueError as exc:
             raise HTTPException(
                 status_code=409,
-                detail={"code": "context_not_confirmed", "message": str(exc)},
+                detail={"code": "request_id_conflict", "message": str(exc)},
             ) from exc
+        if not claim.owner:
+            return article_answer_response(claim.record)
+        try:
+            answer = _answer_article(assistant, article, request.question, request_id)
+            return article_answer_response(reader.store.complete_article_answer(request_id, answer))
         except RuntimeError as exc:
+            reader.store.fail_article_answer(request_id)
             raise HTTPException(
                 status_code=503,
                 detail={"code": "llm_unavailable", "message": str(exc)},
             ) from exc
         except (ValueError, TypeError, KeyError) as exc:
+            reader.store.fail_article_answer(request_id)
             raise HTTPException(
                 status_code=502,
                 detail={"code": "assistant_failed", "message": "文章问答失败，请重试"},
             ) from exc
         except Exception as exc:
+            reader.store.fail_article_answer(request_id)
             raise HTTPException(
                 status_code=502,
                 detail={"code": "assistant_failed", "message": "文章问答失败，请重试"},
+            ) from exc
+
+    @app.get(
+        "/api/articles/{article_id}/ask/{request_id}",
+        response_model=ArticleAnswerResponse,
+    )
+    def get_article_answer(article_id: str, request_id: str) -> ArticleAnswerResponse:
+        try:
+            reader.get_article(article_id)
+            record = reader.store.get_article_answer(request_id)
+            if record is None or record.article_id != article_id:
+                raise ArticleNotFoundError(f"不存在的文章问答请求：{request_id}")
+            return article_answer_response(record)
+        except ArticleNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "answer_not_found", "message": str(exc)},
+            ) from exc
+
+    @app.get(
+        "/api/articles/{article_id}/answers",
+        response_model=ArticleAnswerHistoryResponse,
+    )
+    def list_article_answers(
+        article_id: str,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> ArticleAnswerHistoryResponse:
+        try:
+            article = reader.get_article(article_id)
+            if article.snapshot_id is None:
+                raise ValueError("文章缺少正文快照标识")
+            answers, has_more = reader.store.list_article_answers(
+                article_id,
+                article.snapshot_id,
+                limit=limit,
+                offset=offset,
+            )
+            return ArticleAnswerHistoryResponse(
+                article_id=article_id,
+                snapshot_id=article.snapshot_id,
+                answers=[article_answer_response(item) for item in answers],
+                has_more=has_more,
+            )
+        except ArticleNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "article_not_found", "message": str(exc)},
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "invalid_pagination", "message": str(exc)},
+            ) from exc
+
+    @app.delete(
+        "/api/articles/{article_id}/answers/current",
+        response_model=ArticleAnswerClearResponse,
+    )
+    def clear_current_article_answers(article_id: str) -> ArticleAnswerClearResponse:
+        try:
+            article = reader.get_article(article_id)
+            if article.snapshot_id is None:
+                raise ValueError("文章缺少正文快照标识")
+            deleted_count = reader.store.clear_article_answers(
+                article_id,
+                snapshot_id=article.snapshot_id,
+            )
+            return ArticleAnswerClearResponse(article_id=article_id, deleted_count=deleted_count)
+        except ArticleNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "article_not_found", "message": str(exc)},
+            ) from exc
+
+    @app.delete(
+        "/api/articles/{article_id}/answers",
+        response_model=ArticleAnswerClearResponse,
+    )
+    def clear_all_article_answers(article_id: str) -> ArticleAnswerClearResponse:
+        try:
+            reader.get_article(article_id)
+            deleted_count = reader.store.clear_article_answers(article_id)
+            return ArticleAnswerClearResponse(article_id=article_id, deleted_count=deleted_count)
+        except ArticleNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "article_not_found", "message": str(exc)},
             ) from exc
 
     @app.get("/api/articles/{article_id}/opinion", response_model=OpinionResponse)
@@ -366,3 +397,19 @@ def create_app(
         return agent_report_to_payload(report)
 
     return app
+
+
+def _answer_article(assistant: Any, article: Any, question: str, request_id: str) -> str:
+    """Pass request identity to the built-in assistant without breaking injected adapters."""
+
+    try:
+        parameters = inspect.signature(assistant.answer).parameters.values()
+    except (TypeError, ValueError):
+        parameters = ()
+    accepts_request_id = any(
+        parameter.name == "request_id" or parameter.kind is parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+    if accepts_request_id:
+        return assistant.answer(article, question, request_id=request_id)
+    return assistant.answer(article, question)

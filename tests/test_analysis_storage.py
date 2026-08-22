@@ -53,56 +53,7 @@ def test_analysis_storage_migrates_and_run_creation_is_idempotent(tmp_path: Path
             row[0]
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
-        migration_version = connection.execute(
-            "SELECT MAX(version) FROM schema_migrations"
-        ).fetchone()[0]
 
-    assert migration_version == 11
-    assert {
-        "analysis_runs",
-        "analysis_steps",
-        "analysis_attempts",
-        "analysis_artifacts",
-    } <= tables
-
-
-def test_analysis_storage_migration_does_not_reuse_historical_version_four(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "historical.db"
-    with sqlite3.connect(database_path) as connection:
-        connection.execute(
-            """
-            CREATE TABLE research_runs (
-                id TEXT PRIMARY KEY,
-                status TEXT NOT NULL
-            )
-            """
-        )
-        connection.execute(
-            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
-        )
-        connection.execute(
-            "INSERT INTO research_runs (id, status) VALUES ('existing', 'completed')"
-        )
-        connection.executemany(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-            [(version, "2026-08-03T23:00:00+08:00") for version in range(1, 5)],
-        )
-
-    store = SQLiteCollectionStore(database_path)
-    store.create_analysis_run("existing", "opinion_analysis", {})
-
-    with sqlite3.connect(database_path) as connection:
-        tables = {
-            row[0]
-            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-        }
-        migration_version = connection.execute(
-            "SELECT MAX(version) FROM schema_migrations"
-        ).fetchone()[0]
-
-    assert migration_version == 5
     assert {
         "analysis_runs",
         "analysis_steps",

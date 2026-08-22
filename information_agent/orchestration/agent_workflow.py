@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -19,7 +20,11 @@ from ..agent import (
     ResearchDecider,
     SearchDecision,
 )
-from ..common import DEFAULT_LLM_TIMEOUT_SECONDS, is_retryable_llm_error
+from ..common import (
+    DEFAULT_LLM_TIMEOUT_SECONDS,
+    LLM_RETRY_DELAYS_SECONDS,
+    is_retryable_llm_error,
+)
 from ..contracts import RunStatus
 from ..search import (
     HostedSearchAnswerer,
@@ -42,6 +47,10 @@ DEFAULT_MAX_ATTEMPTS = 3
 T = TypeVar("T")
 
 
+class AgentCancellationRequested(Exception):
+    """Raised at a safe boundary after a persisted Agent stop request."""
+
+
 class _AgentRunRecorder:
     """Store agent decisions, search observations, and the final report as analysis artifacts."""
 
@@ -53,6 +62,10 @@ class _AgentRunRecorder:
         timeout_seconds: float,
         max_steps: int,
         max_attempts: int,
+        idempotency_key: str | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        should_stop: Callable[[], bool] = lambda: False,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._store = store
         self._run = store.create_analysis_run(
@@ -63,8 +76,12 @@ class _AgentRunRecorder:
                 "max_steps": max_steps,
                 "max_attempts": max_attempts,
             },
+            idempotency_key=idempotency_key,
         )
         self._position = 0
+        self._sleep = sleep
+        self._should_stop = should_stop
+        self._on_progress = on_progress
 
     @property
     def analysis_run_id(self) -> str:
@@ -81,12 +98,17 @@ class _AgentRunRecorder:
         should_retry: Callable[[Exception], bool] | None = None,
         result_kind: str,
         result_payload: Callable[[T], dict[str, Any]],
+        allow_when_stopped: bool = False,
     ) -> T:
         self._position += 1
         step = self._store.create_analysis_step(self._run.id, self._position, step_key)
         self._store.set_analysis_step_status(step.id, AnalysisStepStatus.RUNNING)
+        self._notify(step_key=step_key, phase=operation, status="running")
         last_error: Exception | None = None
         for attempt_no in range(1, max_attempts + 1):
+            if self._should_stop() and not allow_when_stopped:
+                self._cancel_step(step.id, step_key, "用户请求停止 Agent")
+                raise AgentCancellationRequested("用户请求停止 Agent")
             payload = request_payload()
             attempt_key = f"{step_key}:attempt-{attempt_no}"
             attempt = self._store.create_analysis_attempt(
@@ -104,9 +126,27 @@ class _AgentRunRecorder:
                 step_id=step.id,
                 attempt_id=attempt.id,
             )
+            self._notify(
+                step_key=step_key,
+                phase=operation,
+                status="running",
+                attempt=attempt_no,
+                max_attempts=max_attempts,
+            )
             try:
                 result = action()
             except Exception as exc:
+                if self._should_stop() and not allow_when_stopped:
+                    self._store.set_analysis_attempt_status(
+                        attempt.id,
+                        AnalysisAttemptStatus.CANCELLED,
+                        error={
+                            "type": "AgentCancellationRequested",
+                            "message": "用户请求停止 Agent",
+                        },
+                    )
+                    self._cancel_step(step.id, step_key, "用户请求停止 Agent")
+                    raise AgentCancellationRequested("用户请求停止 Agent") from exc
                 last_error = exc
                 self._store.record_analysis_artifact(
                     self._run.id,
@@ -123,6 +163,23 @@ class _AgentRunRecorder:
                     error=exc,
                 )
                 if attempt_no < max_attempts and should_retry is not None and should_retry(exc):
+                    delay = LLM_RETRY_DELAYS_SECONDS[
+                        min(attempt_no - 1, len(LLM_RETRY_DELAYS_SECONDS) - 1)
+                    ]
+                    self._notify(
+                        step_key=step_key,
+                        phase=operation,
+                        status="retrying",
+                        attempt=attempt_no,
+                        max_attempts=max_attempts,
+                        retryable=True,
+                        retry_in_seconds=delay,
+                        error={"type": type(exc).__name__, "message": str(exc)},
+                    )
+                    if self._should_stop() and not allow_when_stopped:
+                        self._cancel_step(step.id, step_key, "用户请求停止 Agent")
+                        raise AgentCancellationRequested("用户请求停止 Agent") from exc
+                    self._sleep(delay)
                     continue
                 self._store.set_analysis_step_status(
                     step.id,
@@ -142,6 +199,13 @@ class _AgentRunRecorder:
             )
             self._store.set_analysis_attempt_status(attempt.id, AnalysisAttemptStatus.SUCCEEDED)
             self._store.set_analysis_step_status(step.id, AnalysisStepStatus.SUCCEEDED)
+            self._notify(
+                step_key=step_key,
+                phase=operation,
+                status="succeeded",
+                attempt=attempt_no,
+                max_attempts=max_attempts,
+            )
             return result
         if last_error is None:
             raise AssertionError("重试循环必须执行至少一次")
@@ -156,10 +220,13 @@ class _AgentRunRecorder:
             lambda: persisted_report,
             result_kind="agent_report",
             result_payload=_agent_report_payload,
+            allow_when_stopped=True,
         )
         status = (
             AnalysisRunStatus.COMPLETED
             if persisted_report.status is RunStatus.COMPLETED
+            else AnalysisRunStatus.CANCELLED
+            if persisted_report.stop_reason is AgentStopReason.CANCELLED
             else AnalysisRunStatus.PARTIAL
         )
         error = (
@@ -168,7 +235,28 @@ class _AgentRunRecorder:
             else None
         )
         self._store.set_analysis_run_status(self._run.id, status, error=error)
+        self._notify(
+            step_key="finalize",
+            phase="agent_finalize",
+            status=status.value,
+            attempt=1,
+            max_attempts=1,
+            error=error,
+        )
         return persisted_report
+
+    def _cancel_step(self, step_id: str, step_key: str, message: str) -> None:
+        error = {"type": "AgentCancellationRequested", "message": message}
+        self._store.set_analysis_step_status(step_id, AnalysisStepStatus.CANCELLED, error=error)
+        self._notify(step_key=step_key, phase="cancelled", status="cancelled", error=error)
+
+    def _notify(self, **payload: Any) -> None:
+        if self._on_progress is None:
+            return
+        try:
+            self._on_progress(payload)
+        except Exception:
+            return
 
 
 def agent_run(
@@ -180,6 +268,10 @@ def agent_run(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     decider: ResearchDecider | None = None,
     answerer: SearchAnswerer | None = None,
+    idempotency_key: str | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    should_stop: Callable[[], bool] = lambda: False,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> AgentReport:
     """基于已入库证据运行一个只允许搜索或结束的有界 Agent。"""
 
@@ -192,6 +284,10 @@ def agent_run(
         timeout_seconds=timeout_seconds,
         max_steps=max_steps,
         max_attempts=max_attempts,
+        idempotency_key=idempotency_key,
+        sleep=sleep,
+        should_stop=should_stop,
+        on_progress=on_progress,
     )
     if not evidence:
         return recorder.finalize(
@@ -237,6 +333,19 @@ def agent_run(
     search_count = 0
     decision_count = 0
     while True:
+        if should_stop():
+            return recorder.finalize(
+                _cancelled_report(
+                    run_id,
+                    topic,
+                    evidence,
+                    plans,
+                    answers,
+                    AgentStopReason.CANCELLED,
+                    "用户请求停止 Agent",
+                    steps=decision_count,
+                )
+            )
         if budget.remaining() <= 0:
             return recorder.finalize(
                 _failed_report(
@@ -297,6 +406,19 @@ def agent_run(
                 result_kind="agent_decision",
                 result_payload=_agent_decision_payload,
             )
+        except AgentCancellationRequested as exc:
+            return recorder.finalize(
+                _cancelled_report(
+                    run_id,
+                    topic,
+                    evidence,
+                    plans,
+                    answers,
+                    AgentStopReason.CANCELLED,
+                    str(exc),
+                    steps=decision_count,
+                )
+            )
         except Exception as exc:
             return recorder.finalize(
                 _failed_report(
@@ -308,6 +430,20 @@ def agent_run(
                     observations,
                     _failure_reason(budget),
                     f"Agent 决策失败：{exc}",
+                    steps=decision_count,
+                )
+            )
+
+        if should_stop():
+            return recorder.finalize(
+                _cancelled_report(
+                    run_id,
+                    topic,
+                    evidence,
+                    plans,
+                    answers,
+                    AgentStopReason.CANCELLED,
+                    "用户请求停止 Agent",
                     steps=decision_count,
                 )
             )
@@ -388,6 +524,19 @@ def agent_run(
                 result_kind="search_answer",
                 result_payload=_search_answer_payload,
             )
+        except AgentCancellationRequested as exc:
+            return recorder.finalize(
+                _cancelled_report(
+                    run_id,
+                    topic,
+                    evidence,
+                    plans,
+                    answers,
+                    AgentStopReason.CANCELLED,
+                    str(exc),
+                    steps=decision_count,
+                )
+            )
         except Exception as exc:
             return recorder.finalize(
                 _failed_report(
@@ -404,6 +553,19 @@ def agent_run(
             )
         answers.append(answer)
         observations.append(AgentObservation(decision.plan, answer))
+        if should_stop():
+            return recorder.finalize(
+                _cancelled_report(
+                    run_id,
+                    topic,
+                    evidence,
+                    plans,
+                    answers,
+                    AgentStopReason.CANCELLED,
+                    "用户请求停止 Agent",
+                    steps=decision_count,
+                )
+            )
 
 
 def _failed_report(
@@ -429,6 +591,33 @@ def _failed_report(
         (),
         ("Agent 未生成最终结论",),
         len(observations) if steps is None else steps,
+        stop_reason,
+        [error],
+    )
+
+
+def _cancelled_report(
+    run_id,
+    topic,
+    evidence,
+    plans,
+    answers,
+    stop_reason,
+    error,
+    *,
+    steps: int = 0,
+) -> AgentReport:
+    return AgentReport(
+        run_id,
+        topic,
+        RunStatus.PARTIAL,
+        evidence,
+        plans,
+        answers,
+        None,
+        (),
+        ("Agent 已停止，未生成最终结论",),
+        steps,
         stop_reason,
         [error],
     )

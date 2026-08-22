@@ -28,15 +28,18 @@ export type Article = {
 
 export type ArticleAnswer = {
   articleId: string;
+  requestId: string;
+  snapshotId: string;
+  question: string;
   answer: string;
+  createdAt: string;
 };
 
-export type ArticleContext = {
-  contextId: string;
-  sourceUrl: string;
-  title: string;
-  isLocal: boolean;
-  confirmed: boolean;
+export type ArticleAnswerHistory = {
+  articleId: string;
+  snapshotId: string;
+  answers: ArticleAnswer[];
+  hasMore: boolean;
 };
 
 export type LLMSettings = {

@@ -2,7 +2,7 @@ import type {
   AgentReport,
   Article,
   ArticleAnswer,
-  ArticleContext,
+  ArticleAnswerHistory,
   Feed,
   LLMSettings,
   ResearchIngestResult,
@@ -37,15 +37,20 @@ type ArticleStatePayload = {
   updated_at: string;
 };
 type ArticleAnswerPayload = {
+  status: "running" | "completed";
   article_id: string;
+  request_id: string;
+  snapshot_id: string;
+  question: string;
   answer: string;
+  created_at: string;
+  finished_at: string | null;
 };
-type ArticleContextPayload = {
-  context_id: string;
-  source_url: string;
-  title: string;
-  is_local: boolean;
-  confirmed: boolean;
+type ArticleAnswerHistoryPayload = {
+  article_id: string;
+  snapshot_id: string;
+  answers: ArticleAnswerPayload[];
+  has_more: boolean;
 };
 type LLMSettingsPayload = {
   api_key_configured: boolean;
@@ -175,67 +180,97 @@ export async function askArticle(
   articleId: string,
   question: string,
   signal?: AbortSignal,
+  requestId = createArticleQuestionRequestId(),
 ): Promise<ArticleAnswer> {
-  const payload = await request<ArticleAnswerPayload>(
+  let payload = await request<ArticleAnswerPayload>(
     `/api/articles/${encodeURIComponent(articleId)}/ask`,
     {
       method: "POST",
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, request_id: requestId }),
       signal,
     },
   );
-  return { articleId: payload.article_id, answer: payload.answer };
+  let attempts = 0;
+  while (payload.status === "running" && attempts < 600) {
+    await waitForArticleAnswerPoll(signal);
+    payload = await request<ArticleAnswerPayload>(
+      `/api/articles/${encodeURIComponent(articleId)}/ask/${encodeURIComponent(requestId)}`,
+      { signal },
+    );
+    attempts += 1;
+  }
+  if (payload.status !== "completed" || !payload.answer) {
+    throw new Error("文章问答仍在运行，请稍后重试");
+  }
+  return toArticleAnswer(payload);
 }
 
-function toArticleContext(payload: ArticleContextPayload): ArticleContext {
+export function createArticleQuestionRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `article-question-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+export async function getArticleAnswerHistory(
+  articleId: string,
+  signal?: AbortSignal,
+  offset = 0,
+): Promise<ArticleAnswerHistory> {
+  const payload = await request<ArticleAnswerHistoryPayload>(
+    `/api/articles/${encodeURIComponent(articleId)}/answers?limit=50&offset=${offset}`,
+    { signal },
+  );
   return {
-    contextId: payload.context_id,
-    sourceUrl: payload.source_url,
-    title: payload.title,
-    isLocal: payload.is_local,
-    confirmed: payload.confirmed,
+    articleId: payload.article_id,
+    snapshotId: payload.snapshot_id,
+    answers: payload.answers
+      .filter(item => item.status === "completed" && Boolean(item.answer))
+      .map(toArticleAnswer),
+    hasMore: payload.has_more,
   };
 }
 
-export async function resolveArticleContext(
-  url: string,
-  signal?: AbortSignal,
-): Promise<ArticleContext> {
-  return toArticleContext(
-    await request<ArticleContextPayload>("/api/article-context", {
-      method: "POST",
-      body: JSON.stringify({ url }),
-      signal,
-    }),
+export async function clearArticleAnswerHistory(
+  articleId: string,
+  scope: "current" | "all",
+): Promise<number> {
+  const suffix = scope === "current" ? "/current" : "";
+  const payload = await request<{ deleted_count: number }>(
+    `/api/articles/${encodeURIComponent(articleId)}/answers${suffix}`,
+    { method: "DELETE" },
   );
+  return payload.deleted_count;
 }
 
-export async function confirmArticleContext(
-  contextId: string,
-  signal?: AbortSignal,
-): Promise<ArticleContext> {
-  return toArticleContext(
-    await request<ArticleContextPayload>(
-      `/api/article-context/${encodeURIComponent(contextId)}/confirm`,
-      { method: "POST", signal },
-    ),
-  );
+function toArticleAnswer(payload: ArticleAnswerPayload): ArticleAnswer {
+  return {
+    articleId: payload.article_id,
+    requestId: payload.request_id,
+    snapshotId: payload.snapshot_id,
+    question: payload.question,
+    answer: payload.answer,
+    createdAt: payload.created_at,
+  };
 }
 
-export async function askArticleContext(
-  contextId: string,
-  question: string,
-  signal?: AbortSignal,
-): Promise<ArticleAnswer> {
-  const payload = await request<ArticleAnswerPayload>(
-    `/api/article-context/${encodeURIComponent(contextId)}/ask`,
-    {
-      method: "POST",
-      body: JSON.stringify({ question }),
-      signal,
-    },
-  );
-  return { articleId: payload.article_id, answer: payload.answer };
+function waitForArticleAnswerPoll(signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("请求已取消", "AbortError"));
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, 500);
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(new DOMException("请求已取消", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function toResearchRun(run: ResearchRunPayload): ResearchRun {

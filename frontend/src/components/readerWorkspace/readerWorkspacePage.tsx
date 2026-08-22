@@ -67,6 +67,7 @@ export function ReaderWorkspacePage() {
     () => new Set(initialArticles.filter(article => !article.unread).map(article => article.id)),
   );
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [apiStatus, setApiStatus] = useState<ApiStatus>("connecting");
 
   const applyArticleStates = (states: Awaited<ReturnType<typeof updateArticleStates>>) => {
@@ -368,6 +369,10 @@ export function ReaderWorkspacePage() {
 
   const closeAddFeed = useCallback(() => closeOverlay("add-feed"), [closeOverlay]);
   const closeAsk = useCallback(() => closeOverlay("ask"), [closeOverlay]);
+  const openSidebar = () => {
+    setSidebarCollapsed(false);
+    setSidebarOpen(true);
+  };
 
   return (
     <div className="h-dvh min-h-[600px] overflow-hidden bg-[var(--reader-workspace-bg)] text-[#242528]">
@@ -380,7 +385,11 @@ export function ReaderWorkspacePage() {
         />
       )}
 
-      <div className="grid h-full min-w-0 grid-cols-1 md:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[252px_370px_minmax(0,1fr)]">
+      <div
+        className={`sidebar-layout grid h-full min-w-0 grid-cols-1 md:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[252px_370px_minmax(0,1fr)] ${
+          sidebarCollapsed ? "is-collapsed" : ""
+        }`}
+      >
         <AppSidebar
           activeView={activeView}
           feeds={feeds}
@@ -389,7 +398,10 @@ export function ReaderWorkspacePage() {
           unreadTotal={unreadTotal}
           apiStatus={apiStatus}
           open={sidebarOpen}
+          collapsed={sidebarCollapsed}
           onClose={() => setSidebarOpen(false)}
+          onCollapse={() => setSidebarCollapsed(true)}
+          onExpand={openSidebar}
           onSelectView={selectView}
           onSelectFeed={selectFeed}
           onSelectResearchRun={selectResearchRun}
@@ -431,7 +443,7 @@ export function ReaderWorkspacePage() {
                 onSelectArticle={selectArticle}
                 onToggleSaved={toggleSaved}
                 onMarkAllRead={markAllRead}
-                onOpenSidebar={() => setSidebarOpen(true)}
+                onOpenSidebar={openSidebar}
               />
             </div>
 

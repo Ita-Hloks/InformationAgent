@@ -65,6 +65,183 @@ textarea:focus-visible {
   margin: 0 0 1.4em;
 }
 
+@media (min-width: 1280px) {
+  .sidebar-layout {
+    transition: grid-template-columns 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .sidebar-layout.is-collapsed {
+    grid-template-columns: 64px 370px minmax(0, 1fr);
+  }
+
+  .sidebar-brand {
+    max-width: 240px;
+    overflow: hidden;
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    transition:
+      max-width 240ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 120ms ease,
+      transform 180ms ease;
+  }
+
+  .sidebar-layout.is-collapsed .sidebar-brand {
+    max-width: 0;
+    opacity: 0;
+    transform: translate3d(-8px, 0, 0);
+    transition-delay: 100ms, 0ms, 0ms;
+  }
+
+  .sidebar-layout:not(.is-collapsed) .sidebar-brand {
+    transition-delay: 0ms, 100ms, 100ms;
+  }
+
+  .sidebar-scroll {
+    transition: padding 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .sidebar-layout.is-collapsed .sidebar-scroll {
+    padding-right: 0;
+    padding-left: 10px;
+  }
+
+  .sidebar-label {
+    max-width: 240px;
+    overflow: hidden;
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    transition:
+      max-width 240ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 120ms ease,
+      transform 180ms ease;
+  }
+
+  .sidebar-layout.is-collapsed .sidebar-label {
+    max-width: 0;
+    opacity: 0;
+    transform: translate3d(-6px, 0, 0);
+    transition-delay: 100ms, 0ms, 0ms;
+  }
+
+  .sidebar-layout:not(.is-collapsed) .sidebar-label {
+    transition-delay: 0ms, 100ms, 100ms;
+  }
+
+  .sidebar-compact-item {
+    transition:
+      gap 320ms cubic-bezier(0.22, 1, 0.36, 1),
+      padding 320ms cubic-bezier(0.22, 1, 0.36, 1),
+      color 120ms ease,
+      background-color 120ms ease;
+  }
+
+  .sidebar-layout.is-collapsed .sidebar-compact-item {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+    margin-inline: auto;
+    gap: 0;
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .sidebar-layout.is-collapsed .sidebar-compact-item > svg {
+    flex-shrink: 0;
+  }
+
+  .sidebar-layout:not(.is-collapsed) .sidebar-compact-item {
+    transition-delay: 0ms;
+  }
+
+  .sidebar-footer {
+    transition: padding 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .sidebar-layout.is-collapsed .sidebar-footer {
+    padding-inline: 4px;
+  }
+
+  .sidebar-layout.is-collapsed .sidebar-footer .sidebar-compact-item {
+    padding-inline: 0;
+  }
+
+  .sidebar-section-tools {
+    position: relative;
+    transition: padding 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .sidebar-layout.is-collapsed .sidebar-section-tools {
+    padding-inline: 0;
+  }
+
+  .sidebar-section-action {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    transform: translateY(-50%);
+    transition: right 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .sidebar-layout.is-collapsed .sidebar-section-action {
+    right: calc(50% - 12px);
+  }
+
+  .sidebar-layout.is-collapsed .sidebar-research-action {
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
+  }
+
+  .sidebar-meta {
+    display: block;
+    max-width: 40px;
+    overflow: hidden;
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    transition:
+      max-width 240ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 120ms ease,
+      transform 180ms ease;
+  }
+
+  .sidebar-layout.is-collapsed .sidebar-meta {
+    max-width: 0;
+    opacity: 0;
+    transform: translate3d(-6px, 0, 0);
+    transition-delay: 100ms, 0ms, 0ms;
+  }
+
+  .sidebar-layout:not(.is-collapsed) .sidebar-meta {
+    transition-delay: 0ms, 100ms, 100ms;
+  }
+
+  .sidebar-secondary-item {
+    height: 32px;
+    overflow: hidden;
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    transition:
+      height 240ms cubic-bezier(0.22, 1, 0.36, 1),
+      padding 240ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 120ms ease,
+      transform 180ms ease;
+  }
+
+  .sidebar-layout.is-collapsed .sidebar-secondary-item {
+    height: 0;
+    padding-block: 0;
+    opacity: 0;
+    transform: translate3d(-6px, 0, 0);
+    pointer-events: none;
+    transition-delay: 100ms, 100ms, 0ms, 0ms;
+  }
+
+  .sidebar-layout:not(.is-collapsed) .sidebar-secondary-item {
+    transition-delay: 0ms, 0ms, 100ms, 100ms;
+  }
+}
+
 .workspace-scroll {
   scrollbar-color: var(--reader-workspace-scroll-thumb) var(--reader-workspace-surface);
   scrollbar-width: thin;
