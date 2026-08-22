@@ -401,7 +401,7 @@ export function ReaderWorkspacePage() {
           }}
         />
 
-        {outlet ? (
+        {location.pathname === "/settings" && outlet ? (
           <div className="h-full min-h-0 min-w-0 md:col-span-1 xl:col-span-2">{outlet}</div>
         ) : activeView === "research" ? (
           <div className="h-full min-h-0 min-w-0 overflow-hidden md:col-span-1 xl:col-span-2">
