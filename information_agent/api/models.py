@@ -42,6 +42,7 @@ class ArticleStateResponse(BaseModel):
 class ArticleResponse(BaseModel):
     id: str
     feed_id: str
+    snapshot_id: str
     source_url: str
     feed_url: str | None
     site_url: str | None
@@ -98,6 +99,7 @@ class ArticleAnswerHistoryResponse(BaseModel):
     snapshot_id: str
     answers: list[ArticleAnswerResponse]
     has_more: bool
+    pending_request: ArticleAnswerResponse | None = None
 
 
 class ArticleAnswerClearResponse(BaseModel):
@@ -252,6 +254,7 @@ def article_response(reader_article: ReaderArticle) -> ArticleResponse:
     return ArticleResponse(
         id=article.article_id,
         feed_id=reader_article.feed_id,
+        snapshot_id=reader_article.snapshot_id,
         source_url=article.source_url,
         feed_url=article.feed_url,
         site_url=article.site_url,

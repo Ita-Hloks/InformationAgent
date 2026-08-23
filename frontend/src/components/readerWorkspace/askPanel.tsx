@@ -6,6 +6,7 @@ import {
   clearArticleAnswerHistory,
   createArticleQuestionRequestId,
   getArticleAnswerHistory,
+  resumeArticleAnswer,
 } from "../../api/client";
 import { useOverlayDialog } from "../../hooks/useOverlayDialog";
 import type { Article, ArticleAnswer } from "../../types";
@@ -36,6 +37,8 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
   const historyControllerRef = useRef<AbortController | null>(null);
   const requestIdRef = useRef<string | null>(null);
   const requestQuestionRef = useRef("");
+  const snapshotIdRef = useRef<string | null>(null);
+  const requestGenerationRef = useRef(0);
 
   useOverlayDialog(open, onClose, questionInputRef);
 
@@ -43,18 +46,47 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
     async (offset: number, append: boolean, signal: AbortSignal) => {
       const result = await getArticleAnswerHistory(article.id, signal, offset);
       if (signal.aborted) return;
-      setHistory(current => (append ? [...current, ...result.answers] : result.answers));
+      setHistory(current =>
+        appendArticleAnswerHistory(current, result.answers, article.id, result.snapshotId),
+      );
       setHistoryOffset(offset + result.answers.length);
       setHistoryHasMore(result.hasMore);
+      return result;
+    },
+    [article.id],
+  );
+
+  const applyAnswerResult = useCallback(
+    (result: ArticleAnswer, generation: number, signal: AbortSignal) => {
+      if (
+        signal.aborted ||
+        generation !== requestGenerationRef.current ||
+        result.articleId !== article.id
+      ) {
+        return;
+      }
+      if (snapshotIdRef.current !== null && result.snapshotId !== snapshotIdRef.current) {
+        setError("文章正文已更新，请重新提问");
+        setPhase("error");
+        return;
+      }
+      snapshotIdRef.current = result.snapshotId;
+      setAnswer(result.answer);
+      setHistory(current =>
+        appendArticleAnswerHistory(current, [result], article.id, result.snapshotId),
+      );
+      setPhase("success");
     },
     [article.id],
   );
 
   useEffect(() => {
+    const generation = ++requestGenerationRef.current;
     requestControllerRef.current?.abort();
     historyControllerRef.current?.abort();
     requestIdRef.current = null;
     requestQuestionRef.current = "";
+    snapshotIdRef.current = null;
     setQuestion("");
     setPhase("idle");
     setAnswer("");
@@ -68,6 +100,34 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
       historyControllerRef.current = controller;
       setHistoryLoading(true);
       void loadHistoryPage(0, false, controller.signal)
+        .then(result => {
+          if (!result || controller.signal.aborted || generation !== requestGenerationRef.current) {
+            return;
+          }
+          snapshotIdRef.current = result.snapshotId;
+          const pendingRequest = result.pendingRequest;
+          if (!pendingRequest) return;
+
+          requestIdRef.current = pendingRequest.requestId;
+          requestQuestionRef.current = pendingRequest.question;
+          setQuestion(pendingRequest.question);
+          setPhase("loading");
+          setAnswer("");
+          setError("");
+          const resumeController = new AbortController();
+          requestControllerRef.current = resumeController;
+          void resumeArticleAnswer(article.id, pendingRequest.requestId, resumeController.signal)
+            .then(result => applyAnswerResult(result, generation, resumeController.signal))
+            .catch(requestError => {
+              if (resumeController.signal.aborted || generation !== requestGenerationRef.current) {
+                return;
+              }
+              setError(
+                requestError instanceof Error ? requestError.message : "文章问答失败，请重试",
+              );
+              setPhase("error");
+            });
+        })
         .catch(historyRequestError => {
           if (controller.signal.aborted) return;
           setHistoryError(
@@ -82,7 +142,7 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
       requestControllerRef.current?.abort();
       historyControllerRef.current?.abort();
     };
-  }, [article.id, loadHistoryPage, open]);
+  }, [article.id, applyAnswerResult, loadHistoryPage, open]);
 
   const requestAnswer = async () => {
     const normalizedQuestion = question.trim();
@@ -94,6 +154,7 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
     }
     const requestId = requestIdRef.current ?? createArticleQuestionRequestId();
     requestIdRef.current = requestId;
+    const generation = requestGenerationRef.current;
 
     questionInputRef.current?.focus();
     requestControllerRef.current?.abort();
@@ -104,15 +165,9 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
     setError("");
     try {
       const result = await askArticle(article.id, normalizedQuestion, controller.signal, requestId);
-      if (controller.signal.aborted) return;
-      setAnswer(result.answer);
-      setHistory(current => [
-        result,
-        ...current.filter(item => item.requestId !== result.requestId),
-      ]);
-      setPhase("success");
+      applyAnswerResult(result, generation, controller.signal);
     } catch (requestError) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || generation !== requestGenerationRef.current) return;
       setError(requestError instanceof Error ? requestError.message : "文章问答失败，请重试");
       setPhase("error");
     }
@@ -374,6 +429,23 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
         </form>
       </aside>
     </>
+  );
+}
+
+function appendArticleAnswerHistory(
+  current: ArticleAnswer[],
+  incoming: ArticleAnswer[],
+  articleId: string,
+  snapshotId: string,
+): ArticleAnswer[] {
+  const byRequestId = new Map<string, ArticleAnswer>();
+  [...incoming, ...current]
+    .filter(item => item.articleId === articleId && item.snapshotId === snapshotId)
+    .forEach(item => {
+      if (!byRequestId.has(item.requestId)) byRequestId.set(item.requestId, item);
+    });
+  return [...byRequestId.values()].sort((left, right) =>
+    right.createdAt.localeCompare(left.createdAt),
   );
 }
 

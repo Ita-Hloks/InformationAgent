@@ -19,6 +19,7 @@ type FeedPayload = {
 type ArticlePayload = {
   id: string;
   feed_id: string;
+  snapshot_id: string;
   source_url: string;
   title: string;
   author: string | null;
@@ -51,6 +52,7 @@ type ArticleAnswerHistoryPayload = {
   snapshot_id: string;
   answers: ArticleAnswerPayload[];
   has_more: boolean;
+  pending_request: ArticleAnswerPayload | null;
 };
 type LLMSettingsPayload = {
   api_key_configured: boolean;
@@ -133,6 +135,7 @@ export async function getArticles(feedId?: string): Promise<Article[]> {
   return articles.map(article => ({
     id: article.id,
     feedId: article.feed_id,
+    snapshotId: article.snapshot_id,
     source: "RSS",
     author: article.author ?? "未知作者",
     title: article.title,
@@ -182,7 +185,7 @@ export async function askArticle(
   signal?: AbortSignal,
   requestId = createArticleQuestionRequestId(),
 ): Promise<ArticleAnswer> {
-  let payload = await request<ArticleAnswerPayload>(
+  const payload = await request<ArticleAnswerPayload>(
     `/api/articles/${encodeURIComponent(articleId)}/ask`,
     {
       method: "POST",
@@ -190,6 +193,28 @@ export async function askArticle(
       signal,
     },
   );
+  return waitForArticleAnswer(articleId, requestId, payload, signal);
+}
+
+export async function resumeArticleAnswer(
+  articleId: string,
+  requestId: string,
+  signal?: AbortSignal,
+): Promise<ArticleAnswer> {
+  const payload = await request<ArticleAnswerPayload>(
+    `/api/articles/${encodeURIComponent(articleId)}/ask/${encodeURIComponent(requestId)}`,
+    { signal },
+  );
+  return waitForArticleAnswer(articleId, requestId, payload, signal);
+}
+
+async function waitForArticleAnswer(
+  articleId: string,
+  requestId: string,
+  initialPayload: ArticleAnswerPayload,
+  signal?: AbortSignal,
+): Promise<ArticleAnswer> {
+  let payload = initialPayload;
   let attempts = 0;
   while (payload.status === "running" && attempts < 600) {
     await waitForArticleAnswerPoll(signal);
@@ -228,6 +253,10 @@ export async function getArticleAnswerHistory(
       .filter(item => item.status === "completed" && Boolean(item.answer))
       .map(toArticleAnswer),
     hasMore: payload.has_more,
+    pendingRequest:
+      payload.pending_request?.status === "running"
+        ? toArticleAnswer(payload.pending_request)
+        : null,
   };
 }
 

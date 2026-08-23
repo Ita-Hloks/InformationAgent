@@ -120,6 +120,23 @@ class ReaderAnswerPersistenceMixin:
             ).fetchone()
         return _reader_article_answer_from_row(row) if row is not None else None
 
+    def get_latest_running_article_answer(
+        self,
+        article_id: str,
+        snapshot_id: str,
+    ) -> ReaderArticleAnswer | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM article_answer_requests
+                WHERE article_id = ? AND snapshot_id = ? AND status = 'running'
+                ORDER BY created_at DESC, request_id DESC
+                LIMIT 1
+                """,
+                (article_id, snapshot_id),
+            ).fetchone()
+        return _reader_article_answer_from_row(row) if row is not None else None
+
     def list_article_answers(
         self,
         article_id: str,

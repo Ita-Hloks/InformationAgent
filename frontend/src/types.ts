@@ -12,6 +12,7 @@ export type Feed = {
 export type Article = {
   id: string;
   feedId: string;
+  snapshotId: string;
   source: string;
   author: string;
   title: string;
@@ -40,6 +41,7 @@ export type ArticleAnswerHistory = {
   snapshotId: string;
   answers: ArticleAnswer[];
   hasMore: boolean;
+  pendingRequest: ArticleAnswer | null;
 };
 
 export type LLMSettings = {

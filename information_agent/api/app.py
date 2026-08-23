@@ -61,7 +61,7 @@ def create_app(
     reader = service or ReaderService()
     opinion = opinion_service or OpinionAnalysisService(store=reader.store)
     assistant = article_assistant or ArticleAssistant()
-    app = FastAPI(title="Information Agent API", version="0.1.0")
+    app = FastAPI(title="Information Agent API")
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error(
@@ -207,9 +207,13 @@ def create_app(
     )
     def get_article_answer(article_id: str, request_id: str) -> ArticleAnswerResponse:
         try:
-            reader.get_article(article_id)
+            article = reader.get_article(article_id)
             record = reader.store.get_article_answer(request_id)
-            if record is None or record.article_id != article_id:
+            if (
+                record is None
+                or record.article_id != article_id
+                or record.snapshot_id != article.snapshot_id
+            ):
                 raise ArticleNotFoundError(f"不存在的文章问答请求：{request_id}")
             return article_answer_response(record)
         except ArticleNotFoundError as exc:
@@ -237,11 +241,20 @@ def create_app(
                 limit=limit,
                 offset=offset,
             )
+            pending_request = reader.store.get_latest_running_article_answer(
+                article_id,
+                article.snapshot_id,
+            )
             return ArticleAnswerHistoryResponse(
                 article_id=article_id,
                 snapshot_id=article.snapshot_id,
                 answers=[article_answer_response(item) for item in answers],
                 has_more=has_more,
+                pending_request=(
+                    article_answer_response(pending_request)
+                    if pending_request is not None
+                    else None
+                ),
             )
         except ArticleNotFoundError as exc:
             raise HTTPException(
