@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from information_agent import settings as settings_module
 from information_agent.agent import AgentReport, AgentStopReason
 from information_agent.api import create_app
+from information_agent.api.models import AgentRunRequest
 from information_agent.collection import FeedFetchResult, RawFeedEntry
 from information_agent.common import CONTENT_BATCH_CHARS
 from information_agent.contracts import PROJECT_TIMEZONE, CollectionReport, ContentType, RunStatus
@@ -72,6 +73,12 @@ def test_settings_api_returns_only_redacted_main_llm_status(
     }
     assert "main-secret" not in response.text
     assert "search-secret" not in response.text
+
+
+def test_agent_run_request_limits_attempts_to_three() -> None:
+    assert AgentRunRequest(max_attempts=3).max_attempts == 3
+    with pytest.raises(ValueError):
+        AgentRunRequest(max_attempts=4)
 
 
 def test_settings_api_reports_unavailable_without_exposing_key_value(

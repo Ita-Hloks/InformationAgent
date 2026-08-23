@@ -201,7 +201,7 @@ class AgentRunRequest(BaseModel):
 
     timeout_seconds: float = Field(default=180, gt=0, le=600)
     max_steps: int = Field(default=3, ge=1, le=10)
-    max_attempts: int = Field(default=3, ge=1, le=10)
+    max_attempts: int = Field(default=3, ge=1, le=3)
     request_id: str | None = Field(default=None, max_length=200)
 
     @field_validator("request_id")

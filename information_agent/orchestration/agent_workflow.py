@@ -10,7 +10,6 @@ from typing import Any, TypeVar
 
 from ..agent import (
     AgentDecision,
-    AgentDecisionResponseError,
     AgentObservation,
     AgentReport,
     AgentStopReason,
@@ -253,6 +252,7 @@ class _AgentRunRecorder:
     def _notify(self, **payload: Any) -> None:
         if self._on_progress is None:
             return
+        payload["retryable"] = payload.get("status") == "retrying"
         try:
             self._on_progress(payload)
         except Exception:
@@ -382,13 +382,6 @@ def agent_run(
                 validation_feedback=feedback_state[0],
             )
 
-        def retry_decision(error: Exception, feedback_state=validation_feedback) -> bool:
-            if isinstance(error, AgentDecisionResponseError):
-                feedback_state[0] = str(error)
-                return True
-            feedback_state[0] = None
-            return is_retryable_llm_error(error)
-
         try:
             decision = recorder.execute(
                 f"decision-{decision_count}",
@@ -402,7 +395,7 @@ def agent_run(
                 ),
                 decide,
                 max_attempts=max_attempts,
-                should_retry=retry_decision,
+                should_retry=is_retryable_llm_error,
                 result_kind="agent_decision",
                 result_payload=_agent_decision_payload,
             )
@@ -786,5 +779,5 @@ def _validate_input(timeout_seconds: float, max_steps: int, max_attempts: int) -
         raise ValueError("Agent 时限必须大于 0 秒")
     if max_steps <= 0:
         raise ValueError("Agent 最大步骤数必须大于 0")
-    if max_attempts <= 0:
-        raise ValueError("单步最大尝试次数必须大于 0")
+    if not 1 <= max_attempts <= DEFAULT_MAX_ATTEMPTS:
+        raise ValueError(f"单步最大尝试次数必须在 1 到 {DEFAULT_MAX_ATTEMPTS} 次之间")
