@@ -205,7 +205,7 @@ python -m uvicorn information_agent.api:app --host 127.0.0.1 --port 8001
 | `PUT` | `/api/articles/state` | 批量更新文章已读/收藏状态，JSON 为 `{ "article_ids": ["..."], "is_read": true, "is_saved": false }` |
 | `GET` | `/api/research/runs` | 获取最近保存的研究运行及聚合计数 |
 | `POST` | `/api/research/ingest` | 按主题和 RSS/Atom 地址采集、筛选并写入研究数据库 |
-| `GET` | `/api/research/runs/{run_id}/agent` | 获取最近一次持久化的 Agent 报告；尚无报告时返回 `null` |
+| `GET` | `/api/research/runs/{run_id}/agent/status` | 获取最近一次持久化的 Agent 报告；尚无报告时返回 `null` |
 | `POST` | `/api/research/runs/{run_id}/agent` | 基于已入库证据运行受限 Agent 并保存分析过程 |
 
 重要前置条件与约束：

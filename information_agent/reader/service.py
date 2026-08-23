@@ -42,6 +42,7 @@ class ReaderService:
         if not math.isfinite(feed_timeout_seconds) or feed_timeout_seconds <= 0:
             raise ValueError("feed_timeout_seconds must be a finite positive number")
         self.store = SQLiteCollectionStore(database_path or default_database_path())
+        self.store.recover_running_article_answers()
         self.feed_timeout_seconds = feed_timeout_seconds
         self.fetcher = fetcher
 
@@ -111,9 +112,6 @@ class ReaderService:
         if article is None:
             raise ArticleNotFoundError(f"不存在的文章：{article_id}")
         return article
-
-    def get_article_by_source_url(self, source_url: str) -> ReaderArticle | None:
-        return self.store.get_reader_article_by_source_url(source_url)
 
     def update_article_states(
         self,

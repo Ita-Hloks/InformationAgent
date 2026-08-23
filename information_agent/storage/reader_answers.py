@@ -112,6 +112,16 @@ class ReaderAnswerPersistenceMixin:
                 (request_id.strip(),),
             )
 
+    def recover_running_article_answers(self) -> int:
+        with self._connect() as connection:
+            deleted = connection.execute(
+                """
+                DELETE FROM article_answer_requests
+                WHERE status = 'running'
+                """
+            )
+        return deleted.rowcount
+
     def get_article_answer(self, request_id: str) -> ReaderArticleAnswer | None:
         with self._connect() as connection:
             row = connection.execute(

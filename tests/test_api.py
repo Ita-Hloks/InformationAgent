@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from math import inf, nan
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 from information_agent import settings as settings_module
 from information_agent.agent import AgentReport, AgentStopReason
 from information_agent.api import create_app
+from information_agent.api.models import AgentRunRequest
 from information_agent.collection import FeedFetchResult, RawFeedEntry
 from information_agent.common import CONTENT_BATCH_CHARS
 from information_agent.contracts import PROJECT_TIMEZONE, CollectionReport, ContentType, RunStatus
@@ -22,6 +24,7 @@ from information_agent.reader import (
     ArticleNotFoundError,
     ReaderService,
 )
+from information_agent.serialization import agent_report_to_payload
 from information_agent.storage import (
     AnalysisRunStatus,
     PersistedCollection,
@@ -72,6 +75,12 @@ def test_settings_api_returns_only_redacted_main_llm_status(
     }
     assert "main-secret" not in response.text
     assert "search-secret" not in response.text
+
+
+def test_agent_run_request_limits_attempts_to_three() -> None:
+    assert AgentRunRequest(max_attempts=3).max_attempts == 3
+    with pytest.raises(ValueError):
+        AgentRunRequest(max_attempts=4)
 
 
 def test_settings_api_reports_unavailable_without_exposing_key_value(
@@ -192,10 +201,10 @@ def test_article_ask_api_reads_article_by_id_and_normalizes_question(tmp_path: P
 
     class RecordingAssistant:
         def __init__(self) -> None:
-            self.calls: list[tuple[str, str]] = []
+            self.calls: list[tuple[str, str, str]] = []
 
-        def answer(self, article, question: str) -> str:
-            self.calls.append((article.article.article_id, question))
+        def answer(self, article, question: str, *, request_id: str) -> str:
+            self.calls.append((article.article.article_id, question, request_id))
             return "基于文章的回答"
 
     assistant = RecordingAssistant()
@@ -219,7 +228,7 @@ def test_article_ask_api_reads_article_by_id_and_normalizes_question(tmp_path: P
         "created_at": response.json()["created_at"],
         "finished_at": response.json()["finished_at"],
     }
-    assert assistant.calls == [(article_id, "当前文章的核心是什么？")]
+    assert assistant.calls == [(article_id, "当前文章的核心是什么？", "api-answer-1")]
     assert (
         client.post(f"/api/articles/{article_id}/ask", json={"question": "  "}).status_code == 422
     )
@@ -255,6 +264,55 @@ def test_article_answers_survive_reader_restart_and_reuse_request_id(tmp_path: P
     assert [item["request_id"] for item in history.json()["answers"]] == ["restart-answer-1"]
 
 
+def test_reader_restart_recovers_running_article_answers_and_allows_retry(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "api.db"
+    service = ReaderService(database_path, fetcher=_fetcher)
+    service.subscribe("https://example.com/rss.xml")
+    article = service.list_articles()[0]
+    request_ids = ("recovery-answer-1", "recovery-answer-2")
+
+    for request_id in request_ids:
+        claim = service.store.claim_article_answer(
+            article,
+            request_id=request_id,
+            question="文章的核心是什么？",
+        )
+        assert claim.owner is True
+        assert claim.record.status == "running"
+
+    restarted = ReaderService(database_path, fetcher=_fetcher)
+    client = TestClient(
+        create_app(
+            restarted,
+            article_assistant=_RecordingAssistantForAnswers("重启后回答"),
+        )
+    )
+
+    for request_id in request_ids:
+        assert (
+            client.get(f"/api/articles/{article.article.article_id}/ask/{request_id}").status_code
+            == 404
+        )
+        assert restarted.store.get_article_answer(request_id) is None
+
+    retried = client.post(
+        f"/api/articles/{article.article.article_id}/ask",
+        json={"question": "文章的核心是什么？", "request_id": request_ids[0]},
+    )
+    assert retried.status_code == 200
+    assert retried.json()["status"] == "completed"
+    assert retried.json()["answer"] == "重启后回答"
+
+    repeated = client.post(
+        f"/api/articles/{article.article.article_id}/ask",
+        json={"question": "文章的核心是什么？", "request_id": request_ids[0]},
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["answer"] == "重启后回答"
+
+
 def test_failed_article_answer_is_not_saved_and_can_retry_same_request_id(tmp_path: Path) -> None:
     service = ReaderService(tmp_path / "api.db", fetcher=_fetcher)
     service.subscribe("https://example.com/rss.xml")
@@ -281,10 +339,10 @@ def test_failed_article_answer_is_not_saved_and_can_retry_same_request_id(tmp_pa
 class _RecordingAssistantForAnswers:
     def __init__(self, answer: str) -> None:
         self.answer_text = answer
-        self.calls: list[str] = []
+        self.calls: list[tuple[str, str]] = []
 
-    def answer(self, _article, question: str) -> str:
-        self.calls.append(question)
+    def answer(self, _article, question: str, *, request_id: str) -> str:
+        self.calls.append((question, request_id))
         return self.answer_text
 
 
@@ -293,11 +351,11 @@ class _FailOnceAssistant(_RecordingAssistantForAnswers):
         super().__init__("重试成功")
         self.failed = False
 
-    def answer(self, article, question: str) -> str:
+    def answer(self, article, question: str, *, request_id: str) -> str:
         if not self.failed:
             self.failed = True
             raise ValueError("模拟模型输出错误")
-        return super().answer(article, question)
+        return super().answer(article, question, request_id=request_id)
 
 
 def test_feed_subscription_and_article_fetch(tmp_path: Path) -> None:
@@ -497,9 +555,30 @@ def test_research_agent_api_returns_agent_report(
 ) -> None:
     calls: list[dict[str, object]] = []
 
-    def fake_agent_run(run_id: str, **kwargs: object) -> AgentReport:
-        calls.append({"run_id": run_id, **kwargs})
-        return AgentReport(
+    def fake_agent_run(
+        run_id: str,
+        *,
+        database_path: Path,
+        timeout_seconds: float,
+        max_steps: int,
+        max_attempts: int,
+        idempotency_key: str,
+        should_stop: Callable[[], bool],
+        on_progress: Callable[[dict[str, object]], None],
+    ) -> AgentReport:
+        calls.append(
+            {
+                "run_id": run_id,
+                "database_path": database_path,
+                "timeout_seconds": timeout_seconds,
+                "max_steps": max_steps,
+                "max_attempts": max_attempts,
+                "idempotency_key": idempotency_key,
+                "should_stop": should_stop,
+                "on_progress": on_progress,
+            }
+        )
+        report = AgentReport(
             run_id=run_id,
             topic="AI",
             status=RunStatus.COMPLETED,
@@ -513,6 +592,18 @@ def test_research_agent_api_returns_agent_report(
             stop_reason=AgentStopReason.FINISHED,
             analysis_run_id="analysis-api",
         )
+        store = SQLiteCollectionStore(database_path)
+        analysis_run = store.load_latest_analysis_run(run_id)
+        assert analysis_run is not None
+        payload = agent_report_to_payload(report)
+        store.record_analysis_artifact(
+            analysis_run.id,
+            "agent_report",
+            payload,
+            artifact_key="finalize:attempt-1:result",
+        )
+        store.set_analysis_run_status(analysis_run.id, AnalysisRunStatus.COMPLETED)
+        return replace(report, analysis_run_id=analysis_run.id)
 
     api_app_module = importlib.import_module("information_agent.api.app")
     monkeypatch.setattr(api_app_module, "agent_run", fake_agent_run)
@@ -545,6 +636,9 @@ def test_research_agent_api_returns_agent_report(
     assert calls[0]["timeout_seconds"] == 30.0
     assert calls[0]["max_steps"] == 2
     assert calls[0]["max_attempts"] == 1
+    assert calls[0]["idempotency_key"] == "api-agent"
+    assert callable(calls[0]["should_stop"])
+    assert callable(calls[0]["on_progress"])
 
 
 def test_research_agent_api_restores_latest_persisted_report(tmp_path: Path) -> None:
@@ -607,7 +701,17 @@ def test_research_agent_api_rejects_domain_value_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def invalid_agent_run(*_: object, **__: object) -> AgentReport:
+    def invalid_agent_run(
+        _: str,
+        *,
+        database_path: Path,
+        timeout_seconds: float,
+        max_steps: int,
+        max_attempts: int,
+        idempotency_key: str,
+        should_stop: Callable[[], bool],
+        on_progress: Callable[[dict[str, object]], None],
+    ) -> AgentReport:
         raise ValueError("Agent 参数组合无效")
 
     api_app_module = importlib.import_module("information_agent.api.app")

@@ -1,5 +1,14 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
-import { Bot, FlaskConical, Loader2, Play, RotateCw, Square } from "lucide-react";
+import {
+  Bot,
+  ChevronRight,
+  ExternalLink,
+  FlaskConical,
+  Loader2,
+  Play,
+  RotateCw,
+  Square,
+} from "lucide-react";
 
 import type {
   AgentReport,
@@ -56,9 +65,7 @@ export function ResearchWorkspace({
   const activeRunId = ingestResult?.run_id ?? selectedRunId;
   const activeEvidenceCount = ingestResult?.articles.length ?? selectedRun?.articleCount ?? 0;
   const busy = phase !== "idle";
-  const agentActive = Boolean(
-    agentTask && ["queued", "running", "stopping"].includes(agentTask.status),
-  );
+  const agentActive = Boolean(agentTask && ["created", "running"].includes(agentTask.status));
   const canRunAgent = Boolean(activeRunId) && activeEvidenceCount > 0 && !agentActive;
   const selectedRunTitle = selectedRun?.title;
 
@@ -204,14 +211,9 @@ export function ResearchWorkspace({
                   <button
                     type="button"
                     className="flex h-10 items-center gap-2 rounded-md border border-[#d59c87] bg-white px-4 text-sm font-medium text-[#8a3e24] hover:bg-[#fff2ec] disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={agentTask?.status === "stopping"}
                     onClick={() => void onStopAgent(activeRunId)}
                   >
-                    {agentTask?.status === "stopping" ? (
-                      <Loader2 size={16} className="animate-spin" />
-                    ) : (
-                      <Square size={15} />
-                    )}
+                    <Square size={15} />
                     停止 Agent
                   </button>
                 )}
@@ -252,18 +254,7 @@ export function ResearchWorkspace({
             </div>
           )}
 
-          {agentTask && agentTask.status !== "completed" && !agentReport && (
-            <section className="mt-6 rounded-md border border-[#d9dad4] bg-white p-4">
-              <div className="flex items-center gap-3">
-                <Loader2 size={18} className="text-[#3978a8]" />
-                <h3 className="text-sm font-semibold">Agent 状态</h3>
-                <span className="text-xs text-[#73767b]">{agentTask.message}</span>
-              </div>
-              <p className="mt-3 text-xs text-[#777a80]">
-                阶段：{agentTask.phase}，尝试：{agentTask.attempt}/{agentTask.max_attempts}
-              </p>
-            </section>
-          )}
+          {agentTask && <AgentDiagnostics task={agentTask} />}
 
           {agentReport ? (
             <div className="mt-6 space-y-4">
@@ -293,16 +284,60 @@ export function ResearchWorkspace({
 
               {agentReport.citations.length > 0 && (
                 <section className="rounded-md border border-[#d9dad4] bg-white p-4">
-                  <h3 className="text-sm font-semibold">引用</h3>
+                  <h3 className="text-sm font-semibold">结论引用</h3>
                   <div className="mt-3 space-y-3">
-                    {agentReport.citations.map(citation => (
-                      <div key={citation.claim} className="text-sm leading-6 text-[#555960]">
-                        <p>{citation.claim}</p>
-                        <p className="mt-1 text-xs text-[#85888e]">
-                          证据：{citation.evidence_ids.join(", ") || "无"}
-                        </p>
-                      </div>
-                    ))}
+                    {agentReport.citations.map((citation, index) => {
+                      const anchors = agentReport.plans.filter(plan =>
+                        citation.evidence_ids.includes(plan.evidence_id),
+                      );
+                      return (
+                        <div
+                          key={`${citation.claim}-${index}`}
+                          className="min-w-0 border-b border-[#ecece7] pb-3 text-sm leading-6 text-[#555960] last:border-b-0 last:pb-0"
+                        >
+                          <p>{citation.claim}</p>
+                          <p className="mt-2 break-words text-xs text-[#85888e]">
+                            证据：{citation.evidence_ids.join(", ") || "无"}
+                          </p>
+                          <div className="mt-2 min-w-0">
+                            <p className="text-xs font-medium text-[#73767b]">原文锚点</p>
+                            {anchors.length > 0 ? (
+                              <ul className="mt-1 space-y-1 text-xs text-[#777a80]">
+                                {anchors.map(plan => (
+                                  <li key={plan.evidence_id} className="break-words">
+                                    {plan.trigger_quote}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="mt-1 text-xs text-[#85888e]">无</p>
+                            )}
+                          </div>
+                          <div className="mt-2 min-w-0">
+                            <p className="text-xs font-medium text-[#73767b]">搜索来源</p>
+                            {citation.source_urls.length > 0 ? (
+                              <ul className="mt-1 space-y-1 text-xs">
+                                {citation.source_urls.map(sourceUrl => (
+                                  <li key={sourceUrl} className="min-w-0">
+                                    <a
+                                      className="inline-flex max-w-full min-w-0 items-start gap-1 break-all text-[#3978a8] hover:underline"
+                                      href={sourceUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      <ExternalLink size={13} className="mt-0.5 shrink-0" />
+                                      <span className="min-w-0 break-all">{sourceUrl}</span>
+                                    </a>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="mt-1 text-xs text-[#85888e]">无</p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </section>
               )}
@@ -317,6 +352,9 @@ export function ResearchWorkspace({
                         className="text-sm leading-6"
                       >
                         <p className="text-[#3f4248]">{plan.question}</p>
+                        <p className="mt-1 break-words text-xs text-[#777a80]">
+                          原文锚点：{plan.trigger_quote}
+                        </p>
                         <ul className="mt-1 space-y-1 text-xs text-[#777a80]">
                           {plan.queries.map(query => (
                             <li key={query.query}>{query.query}</li>
@@ -394,6 +432,121 @@ function Metric({
       </p>
     </div>
   );
+}
+
+function AgentDiagnostics({ task }: { task: AgentTaskSnapshot }) {
+  return (
+    <section className="mt-6 rounded-md border border-[#d9dad4] bg-white p-4">
+      <div className="flex min-w-0 items-center gap-3">
+        {task.status === "created" || task.status === "running" ? (
+          <Loader2 size={18} className="shrink-0 text-[#3978a8]" />
+        ) : (
+          <FlaskConical size={18} className="shrink-0 text-[#3978a8]" />
+        )}
+        <h3 className="shrink-0 text-sm font-semibold">Agent 状态</h3>
+        <span className="min-w-0 break-words text-xs text-[#73767b]">{task.message}</span>
+      </div>
+
+      <dl className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2">
+        <DiagnosticField label="request_id" value={task.request_id ?? "无"} />
+        <DiagnosticField label="analysis_run_id" value={task.analysis_run_id ?? "无"} />
+        <DiagnosticField label="status" value={task.status} />
+        <DiagnosticField label="phase" value={task.phase} />
+        <DiagnosticField
+          label="attempt / max_attempts"
+          value={`${task.attempt} / ${task.max_attempts}`}
+        />
+        <DiagnosticField label="retryable" value={retryableLabel(task.retryable)} />
+      </dl>
+
+      {task.error && <DiagnosticError error={task.error} className="mt-4" />}
+
+      <div className="mt-5 border-t border-[#ecece7] pt-4">
+        <h4 className="text-sm font-semibold">阶段详情</h4>
+        {task.stage_details.length > 0 ? (
+          <div className="mt-3 divide-y divide-[#ecece7]">
+            {task.stage_details.map(stage => (
+              <details key={stage.step_key} className="group py-3 first:pt-0 last:pb-0">
+                <summary className="flex min-w-0 cursor-pointer list-none items-center gap-2 text-sm [&::-webkit-details-marker]:hidden">
+                  <ChevronRight
+                    size={15}
+                    className="shrink-0 text-[#73767b] transition-transform group-open:rotate-90"
+                  />
+                  <span className="min-w-0 flex-1 break-words font-medium text-[#3f4248]">
+                    {stage.step_key}
+                  </span>
+                  <span className="shrink-0 text-xs text-[#73767b]">{stage.status}</span>
+                  <span className="shrink-0 text-xs text-[#73767b]">
+                    {stage.attempt} / {stage.max_attempts}
+                  </span>
+                  <span className="shrink-0 text-xs text-[#73767b]">
+                    {retryableLabel(stage.retryable)}
+                  </span>
+                </summary>
+
+                <div className="mt-3 pl-6">
+                  {stage.error && <DiagnosticError error={stage.error} />}
+                  {stage.attempts.length > 0 && (
+                    <div className="space-y-3">
+                      {stage.attempts.map(attempt => (
+                        <div key={`${stage.step_key}-${attempt.attempt_no}`} className="min-w-0">
+                          <dl className="grid min-w-0 gap-2 sm:grid-cols-4">
+                            <DiagnosticField label="尝试" value={String(attempt.attempt_no)} />
+                            <DiagnosticField label="操作" value={attempt.operation} />
+                            <DiagnosticField label="状态" value={attempt.status} />
+                            <DiagnosticField
+                              label="retryable"
+                              value={retryableLabel(attempt.retryable)}
+                            />
+                          </dl>
+                          {attempt.error && (
+                            <DiagnosticError error={attempt.error} className="mt-2" />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </details>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-3 text-xs text-[#85888e]">无</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function DiagnosticField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[11px] font-medium text-[#777a80]">{label}</dt>
+      <dd className="mt-1 min-w-0 break-all text-sm font-semibold text-[#303238]">{value}</dd>
+    </div>
+  );
+}
+
+function DiagnosticError({
+  error,
+  className = "",
+}: {
+  error: { type: string; message: string };
+  className?: string;
+}) {
+  return (
+    <div
+      className={`min-w-0 rounded-md bg-[#fff7f3] px-3 py-2 text-xs leading-5 text-[#8a3e24] ${className}`}
+    >
+      <p className="break-words">错误类型：{error.type}</p>
+      <p className="mt-1 whitespace-pre-wrap break-words">错误信息：{error.message}</p>
+    </div>
+  );
+}
+
+function retryableLabel(value: boolean | null) {
+  if (value === null) return "未知";
+  return value ? "是" : "否";
 }
 
 function statusColor(status: ResearchRun["status"]) {

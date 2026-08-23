@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import sqlite3
 from typing import Any
 from uuid import uuid4
@@ -232,7 +231,7 @@ def create_app(
         if not claim.owner:
             return article_answer_response(claim.record)
         try:
-            answer = _answer_article(assistant, article, request.question, request_id)
+            answer = assistant.answer(article, request.question, request_id=request_id)
             return article_answer_response(reader.store.complete_article_answer(request_id, answer))
         except RuntimeError as exc:
             reader.store.fail_article_answer(request_id)
@@ -525,19 +524,3 @@ def create_app(
         return AgentTaskSnapshotResponse(**snapshot)
 
     return app
-
-
-def _answer_article(assistant: Any, article: Any, question: str, request_id: str) -> str:
-    """Pass request identity to the built-in assistant without breaking injected adapters."""
-
-    try:
-        parameters = inspect.signature(assistant.answer).parameters.values()
-    except (TypeError, ValueError):
-        parameters = ()
-    accepts_request_id = any(
-        parameter.name == "request_id" or parameter.kind is parameter.VAR_KEYWORD
-        for parameter in parameters
-    )
-    if accepts_request_id:
-        return assistant.answer(article, question, request_id=request_id)
-    return assistant.answer(article, question)

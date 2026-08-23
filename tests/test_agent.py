@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,7 @@ from information_agent.investigation import (
     SearchQuery,
 )
 from information_agent.investigation import planner as investigation_planner
+from information_agent.orchestration.agent_tasks import AgentTaskManager
 from information_agent.orchestration.agent_workflow import agent_run
 from information_agent.orchestration.ingestion import ingest
 from information_agent.search import SearchAnswer, SearchAnswerStatus, SearchSource
@@ -105,8 +107,9 @@ class SequenceDecider:
         return self.decisions.pop(0)
 
 
-class FormattingFeedbackDecider:
+class InvalidDecisionDecider:
     def __init__(self) -> None:
+        self.calls = 0
         self.validation_feedback: list[str | None] = []
 
     def decide(
@@ -121,13 +124,12 @@ class FormattingFeedbackDecider:
         assert evidence[0].id == 1
         assert observations == []
         assert timeout > 0
+        self.calls += 1
         self.validation_feedback.append(validation_feedback)
-        if validation_feedback is None:
-            raise AgentDecisionResponseError(
-                "kind 不是支持的可核查主张类型",
-                '{"decision":"search"}',
-            )
-        return _finish()
+        raise AgentDecisionResponseError(
+            "kind 不是支持的可核查主张类型",
+            '{"decision":"search"}',
+        )
 
 
 class RecordingAnswerer:
@@ -542,9 +544,9 @@ def test_agent_cannot_complete_when_all_searches_find_no_evidence(tmp_path: Path
     assert report.uncertainties == ("所有搜索均未获得可验证证据",)
 
 
-def test_agent_retries_format_failure_with_feedback(tmp_path: Path) -> None:
+def test_agent_does_not_retry_invalid_decision_response(tmp_path: Path) -> None:
     database_path, run_id = _ingested_run(tmp_path)
-    decider = FormattingFeedbackDecider()
+    decider = InvalidDecisionDecider()
     answerer = RecordingAnswerer()
 
     report = agent_run(
@@ -552,14 +554,24 @@ def test_agent_retries_format_failure_with_feedback(tmp_path: Path) -> None:
         database_path=database_path,
         decider=decider,
         answerer=answerer,
-        max_attempts=2,
+        max_attempts=3,
     )
 
-    assert report.status is RunStatus.COMPLETED
-    assert report.stop_reason is AgentStopReason.FINISHED
+    assert report.status is RunStatus.PARTIAL
+    assert report.stop_reason is AgentStopReason.ERROR
     assert report.steps == 1
-    assert decider.validation_feedback == [None, "kind 不是支持的可核查主张类型"]
+    assert decider.calls == 1
+    assert decider.validation_feedback == [None]
     assert answerer.calls == []
+
+
+def test_agent_rejects_more_than_three_attempts(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="1 到 3"):
+        agent_run(
+            "missing-run",
+            database_path=tmp_path / "information-agent.db",
+            max_attempts=4,
+        )
 
 
 def test_agent_returns_search_observation_to_next_decision(tmp_path: Path) -> None:
@@ -587,6 +599,7 @@ def test_agent_retries_same_decision_and_tool_calls(tmp_path: Path) -> None:
     plan = _plan()
     decider = SequenceDecider([SearchDecision(plan), _finish()], failures=2)
     answerer = RecordingAnswerer(failures=2)
+    progress: list[dict[str, object]] = []
 
     report = agent_run(
         run_id,
@@ -594,12 +607,15 @@ def test_agent_retries_same_decision_and_tool_calls(tmp_path: Path) -> None:
         decider=decider,
         answerer=answerer,
         max_attempts=3,
+        sleep=lambda _: None,
+        on_progress=progress.append,
     )
 
     assert report.status is RunStatus.COMPLETED
     assert report.steps == 2
     assert len(decider.calls) == 4
     assert answerer.calls == [plan, plan, plan]
+    assert all(event["retryable"] is (event["status"] == "retrying") for event in progress)
     state = SQLiteCollectionStore(database_path).load_analysis_state(report.analysis_run_id)
     attempts_by_step = {
         step.step_key: [
@@ -768,6 +784,81 @@ def test_agent_persists_partial_report_after_decision_failure(tmp_path: Path) ->
     assert final_artifact.payload["errors"] == report.errors
 
 
+def test_stop_and_wait_preserves_timeout_fallback_but_propagates_other_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = AgentTaskManager(tmp_path / "agent-tasks.db")
+    expected = {"status": "running", "request_id": "stop-agent"}
+    monkeypatch.setattr(manager, "stop", lambda *_args, **_kwargs: expected)
+
+    def raise_timeout(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise TimeoutError("等待超时")
+
+    monkeypatch.setattr(manager, "wait", raise_timeout)
+    monkeypatch.setattr(manager, "get", lambda *_args, **_kwargs: expected)
+    assert manager.stop_and_wait("research", request_id="stop-agent") == expected
+
+    def raise_error(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("等待失败")
+
+    monkeypatch.setattr(manager, "wait", raise_error)
+    with pytest.raises(RuntimeError, match="等待失败"):
+        manager.stop_and_wait("research", request_id="stop-agent")
+    manager.shutdown()
+
+
+def test_agent_task_exposes_persistence_failure_without_masking_agent_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+
+    def failing_runner(
+        _: str,
+        *,
+        database_path: Path,
+        timeout_seconds: float,
+        max_steps: int,
+        max_attempts: int,
+        idempotency_key: str,
+        should_stop: Callable[[], bool],
+        on_progress: Callable[[dict[str, object]], None],
+    ) -> AgentReport:
+        raise RuntimeError("Agent 执行失败")
+
+    manager = AgentTaskManager(database_path, runner=failing_runner)
+    persistence_error = OSError("数据库不可写")
+
+    def fail_persistence(*_args: object, **_kwargs: object) -> None:
+        raise persistence_error
+
+    monkeypatch.setattr(manager._store, "set_analysis_run_status", fail_persistence)
+    try:
+        manager.submit(run_id, request_id="persistence-agent")
+        with pytest.raises(RuntimeError, match="Agent 执行失败") as raised:
+            manager.wait("persistence-agent")
+
+        assert raised.value.__cause__ is persistence_error
+        snapshot = manager.get(run_id, request_id="persistence-agent")
+    finally:
+        manager.shutdown()
+
+    assert snapshot is not None
+    assert snapshot["status"] == "created"
+    assert snapshot["phase"] == "persistence_failed"
+    assert snapshot["message"] == "Agent 状态持久化失败"
+    assert snapshot["error"] == {
+        "type": "AgentPersistenceError",
+        "message": (
+            "Agent 异常：RuntimeError: Agent 执行失败；状态持久化失败：OSError: 数据库不可写"
+        ),
+    }
+    persisted = SQLiteCollectionStore(database_path).find_analysis_run_by_idempotency_key(
+        "persistence-agent"
+    )
+    assert persisted is not None
+    assert persisted.status is AnalysisRunStatus.CREATED
+
+
 def test_agent_run_cli_uses_separate_command(monkeypatch, capsys) -> None:
     report = AgentReport(
         run_id="run-123",
@@ -794,7 +885,7 @@ def test_agent_run_cli_uses_separate_command(monkeypatch, capsys) -> None:
         assert run_id == "run-123"
         assert timeout_seconds == 12
         assert max_steps == 2
-        assert max_attempts == 4
+        assert max_attempts == 3
         return report
 
     monkeypatch.setattr(
@@ -813,7 +904,7 @@ def test_agent_run_cli_uses_separate_command(monkeypatch, capsys) -> None:
             "--max-steps",
             "2",
             "--max-attempts",
-            "4",
+            "3",
         ],
     )
 
