@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ..storage import FeedSubscription, ReaderArticle, ReaderArticleState
+from ..storage import FeedSubscription, ReaderArticle, ReaderArticleAnswer, ReaderArticleState
 
 
 class FeedCreate(BaseModel):
@@ -42,6 +42,7 @@ class ArticleStateResponse(BaseModel):
 class ArticleResponse(BaseModel):
     id: str
     feed_id: str
+    snapshot_id: str
     source_url: str
     feed_url: str | None
     site_url: str | None
@@ -61,6 +62,7 @@ class ArticleQuestionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     question: str = Field(min_length=1, max_length=2000)
+    request_id: str | None = Field(default=None, max_length=200)
 
     @field_validator("question")
     @classmethod
@@ -70,10 +72,39 @@ class ArticleQuestionRequest(BaseModel):
             raise ValueError("question 不能为空")
         return normalized
 
+    @field_validator("request_id")
+    @classmethod
+    def normalize_request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("request_id 不能为空")
+        return normalized
+
 
 class ArticleAnswerResponse(BaseModel):
+    status: Literal["running", "completed"]
     article_id: str
+    request_id: str
+    snapshot_id: str
+    question: str
     answer: str
+    created_at: str
+    finished_at: str | None
+
+
+class ArticleAnswerHistoryResponse(BaseModel):
+    article_id: str
+    snapshot_id: str
+    answers: list[ArticleAnswerResponse]
+    has_more: bool
+    pending_request: ArticleAnswerResponse | None = None
+
+
+class ArticleAnswerClearResponse(BaseModel):
+    article_id: str
+    deleted_count: int
 
 
 class LLMSettingsResponse(BaseModel):
@@ -85,24 +116,41 @@ class LLMSettingsResponse(BaseModel):
     available: bool
 
 
-class EnvFileOpenResponse(BaseModel):
-    status: Literal["opened"]
+class SearchLLMSettingsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    api_key_configured: bool
+    model: str
+    base_url: str
+    result_count: int | None
+    content_size: str | None
+    timeout_seconds: float | None
+    available: bool
+    error: str | None
 
 
-class ArticleContextRequest(BaseModel):
+class LogSettingsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_count: int
+    total_bytes: int
+    earliest_at: str | None
+    retention_days: int
+    max_bytes: int
+
+
+class LogClearRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    url: str = Field(min_length=1, max_length=2048)
+    confirm: bool
 
 
-class ArticleContextResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class LogClearResponse(LogSettingsResponse):
+    deleted_count: int
 
-    context_id: str
-    source_url: str
-    title: str
-    is_local: bool
-    confirmed: bool
+
+class EnvFileOpenResponse(BaseModel):
+    status: Literal["opened"]
 
 
 class OpinionRequest(BaseModel):
@@ -149,9 +197,62 @@ class ResearchIngestRequest(BaseModel):
 
 
 class AgentRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     timeout_seconds: float = Field(default=180, gt=0, le=600)
     max_steps: int = Field(default=3, ge=1, le=10)
     max_attempts: int = Field(default=3, ge=1, le=10)
+    request_id: str | None = Field(default=None, max_length=200)
+
+    @field_validator("request_id")
+    @classmethod
+    def normalize_request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("request_id 不能为空")
+        return normalized
+
+
+class AgentStopRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    request_id: str | None = Field(default=None, max_length=200)
+
+    @field_validator("request_id")
+    @classmethod
+    def normalize_request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("request_id 不能为空")
+        return normalized
+
+
+class AgentTaskSnapshotResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str | None
+    run_id: str
+    analysis_run_id: str | None
+    status: Literal[
+        "queued",
+        "running",
+        "stopping",
+        "completed",
+        "partial",
+        "cancelled",
+        "failed",
+    ]
+    phase: str
+    attempt: int
+    max_attempts: int
+    retryable: bool | None
+    message: str
+    error: dict[str, str] | None
+    report: dict[str, Any] | None
 
 
 class ResearchRunsResponse(BaseModel):
@@ -177,6 +278,7 @@ def article_response(reader_article: ReaderArticle) -> ArticleResponse:
     return ArticleResponse(
         id=article.article_id,
         feed_id=reader_article.feed_id,
+        snapshot_id=reader_article.snapshot_id,
         source_url=article.source_url,
         feed_url=article.feed_url,
         site_url=article.site_url,
@@ -201,4 +303,19 @@ def article_state_response(state: ReaderArticleState) -> ArticleStateResponse:
         read_at=state.read_at,
         saved_at=state.saved_at,
         updated_at=state.updated_at,
+    )
+
+
+def article_answer_response(answer: ReaderArticleAnswer) -> ArticleAnswerResponse:
+    if answer.status == "completed" and not answer.answer:
+        raise ValueError("已完成的文章问答缺少 answer")
+    return ArticleAnswerResponse(
+        status=answer.status,  # type: ignore[arg-type]
+        article_id=answer.article_id,
+        request_id=answer.request_id,
+        snapshot_id=answer.snapshot_id,
+        question=answer.question,
+        answer=answer.answer or "",
+        created_at=answer.created_at,
+        finished_at=answer.finished_at,
     )

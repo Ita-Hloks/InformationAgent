@@ -20,7 +20,7 @@ SourceResult = tuple[str, list[RawFeedEntry], Exception | None]
 DEFAULT_MAX_WORKERS = 6
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_SOURCE_TIMEOUT_SECONDS = 15.0
-INITIAL_RETRY_DELAY_SECONDS = 0.1
+INITIAL_RETRY_DELAY_SECONDS = 5.0
 
 
 @dataclass(slots=True)

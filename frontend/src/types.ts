@@ -12,6 +12,7 @@ export type Feed = {
 export type Article = {
   id: string;
   feedId: string;
+  snapshotId: string;
   source: string;
   author: string;
   title: string;
@@ -28,15 +29,19 @@ export type Article = {
 
 export type ArticleAnswer = {
   articleId: string;
+  requestId: string;
+  snapshotId: string;
+  question: string;
   answer: string;
+  createdAt: string;
 };
 
-export type ArticleContext = {
-  contextId: string;
-  sourceUrl: string;
-  title: string;
-  isLocal: boolean;
-  confirmed: boolean;
+export type ArticleAnswerHistory = {
+  articleId: string;
+  snapshotId: string;
+  answers: ArticleAnswer[];
+  hasMore: boolean;
+  pendingRequest: ArticleAnswer | null;
 };
 
 export type LLMSettings = {
@@ -44,6 +49,25 @@ export type LLMSettings = {
   model: string;
   baseUrl: string;
   available: boolean;
+};
+
+export type SearchLLMSettings = {
+  apiKeyConfigured: boolean;
+  model: string;
+  baseUrl: string;
+  resultCount: number | null;
+  contentSize: string | null;
+  timeoutSeconds: number | null;
+  available: boolean;
+  error: string | null;
+};
+
+export type LogSettings = {
+  fileCount: number;
+  totalBytes: number;
+  earliestAt: string | null;
+  retentionDays: number;
+  maxBytes: number;
 };
 
 export type ResearchRun = {
@@ -93,4 +117,18 @@ export type AgentReport = {
   steps: number;
   stop_reason: string;
   errors: string[];
+};
+
+export type AgentTaskSnapshot = {
+  request_id: string | null;
+  run_id: string;
+  analysis_run_id: string | null;
+  status: "queued" | "running" | "stopping" | "completed" | "partial" | "cancelled" | "failed";
+  phase: string;
+  attempt: number;
+  max_attempts: number;
+  retryable: boolean | null;
+  message: string;
+  error: { type: string; message: string } | null;
+  report: AgentReport | null;
 };

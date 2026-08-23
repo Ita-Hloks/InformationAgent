@@ -2,11 +2,14 @@ import type {
   AgentReport,
   Article,
   ArticleAnswer,
-  ArticleContext,
+  ArticleAnswerHistory,
   Feed,
+  AgentTaskSnapshot,
   LLMSettings,
+  LogSettings,
   ResearchIngestResult,
   ResearchRun,
+  SearchLLMSettings,
 } from "../types";
 
 type FeedPayload = {
@@ -19,6 +22,7 @@ type FeedPayload = {
 type ArticlePayload = {
   id: string;
   feed_id: string;
+  snapshot_id: string;
   source_url: string;
   title: string;
   author: string | null;
@@ -37,21 +41,57 @@ type ArticleStatePayload = {
   updated_at: string;
 };
 type ArticleAnswerPayload = {
+  status: "running" | "completed";
   article_id: string;
+  request_id: string;
+  snapshot_id: string;
+  question: string;
   answer: string;
+  created_at: string;
+  finished_at: string | null;
 };
-type ArticleContextPayload = {
-  context_id: string;
-  source_url: string;
-  title: string;
-  is_local: boolean;
-  confirmed: boolean;
+type ArticleAnswerHistoryPayload = {
+  article_id: string;
+  snapshot_id: string;
+  answers: ArticleAnswerPayload[];
+  has_more: boolean;
+  pending_request: ArticleAnswerPayload | null;
 };
 type LLMSettingsPayload = {
   api_key_configured: boolean;
   model: string;
   base_url: string;
   available: boolean;
+};
+type SearchLLMSettingsPayload = {
+  api_key_configured: boolean;
+  model: string;
+  base_url: string;
+  result_count: number | null;
+  content_size: string | null;
+  timeout_seconds: number | null;
+  available: boolean;
+  error: string | null;
+};
+type LogSettingsPayload = {
+  file_count: number;
+  total_bytes: number;
+  earliest_at: string | null;
+  retention_days: number;
+  max_bytes: number;
+};
+type AgentTaskSnapshotPayload = {
+  request_id: string | null;
+  run_id: string;
+  analysis_run_id: string | null;
+  status: AgentTaskSnapshot["status"];
+  phase: string;
+  attempt: number;
+  max_attempts: number;
+  retryable: boolean | null;
+  message: string;
+  error: { type: string; message: string } | null;
+  report: AgentReport | null;
 };
 type ResearchRunPayload = {
   run_id: string;
@@ -128,6 +168,7 @@ export async function getArticles(feedId?: string): Promise<Article[]> {
   return articles.map(article => ({
     id: article.id,
     feedId: article.feed_id,
+    snapshotId: article.snapshot_id,
     source: "RSS",
     author: article.author ?? "未知作者",
     title: article.title,
@@ -167,6 +208,48 @@ export async function getLLMSettings(): Promise<LLMSettings> {
   };
 }
 
+export async function getSearchLLMSettings(): Promise<SearchLLMSettings> {
+  const payload = await request<SearchLLMSettingsPayload>("/api/settings/search");
+  return {
+    apiKeyConfigured: payload.api_key_configured,
+    model: payload.model,
+    baseUrl: payload.base_url,
+    resultCount: payload.result_count,
+    contentSize: payload.content_size,
+    timeoutSeconds: payload.timeout_seconds,
+    available: payload.available,
+    error: payload.error,
+  };
+}
+
+export async function getLogSettings(): Promise<LogSettings> {
+  const payload = await request<LogSettingsPayload>("/api/settings/logs");
+  return {
+    fileCount: payload.file_count,
+    totalBytes: payload.total_bytes,
+    earliestAt: payload.earliest_at,
+    retentionDays: payload.retention_days,
+    maxBytes: payload.max_bytes,
+  };
+}
+
+export async function clearLogDirectory(): Promise<LogSettings> {
+  const payload = await request<LogSettingsPayload & { deleted_count: number }>(
+    "/api/settings/logs/clear",
+    {
+      method: "POST",
+      body: JSON.stringify({ confirm: true }),
+    },
+  );
+  return {
+    fileCount: payload.file_count,
+    totalBytes: payload.total_bytes,
+    earliestAt: payload.earliest_at,
+    retentionDays: payload.retention_days,
+    maxBytes: payload.max_bytes,
+  };
+}
+
 export async function openProjectEnvFile(): Promise<void> {
   await request<{ status: "opened" }>("/api/settings/env/open", { method: "POST" });
 }
@@ -175,67 +258,130 @@ export async function askArticle(
   articleId: string,
   question: string,
   signal?: AbortSignal,
+  requestId = createArticleQuestionRequestId(),
 ): Promise<ArticleAnswer> {
   const payload = await request<ArticleAnswerPayload>(
     `/api/articles/${encodeURIComponent(articleId)}/ask`,
     {
       method: "POST",
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, request_id: requestId }),
       signal,
     },
   );
-  return { articleId: payload.article_id, answer: payload.answer };
+  return waitForArticleAnswer(articleId, requestId, payload, signal);
 }
 
-function toArticleContext(payload: ArticleContextPayload): ArticleContext {
-  return {
-    contextId: payload.context_id,
-    sourceUrl: payload.source_url,
-    title: payload.title,
-    isLocal: payload.is_local,
-    confirmed: payload.confirmed,
-  };
-}
-
-export async function resolveArticleContext(
-  url: string,
-  signal?: AbortSignal,
-): Promise<ArticleContext> {
-  return toArticleContext(
-    await request<ArticleContextPayload>("/api/article-context", {
-      method: "POST",
-      body: JSON.stringify({ url }),
-      signal,
-    }),
-  );
-}
-
-export async function confirmArticleContext(
-  contextId: string,
-  signal?: AbortSignal,
-): Promise<ArticleContext> {
-  return toArticleContext(
-    await request<ArticleContextPayload>(
-      `/api/article-context/${encodeURIComponent(contextId)}/confirm`,
-      { method: "POST", signal },
-    ),
-  );
-}
-
-export async function askArticleContext(
-  contextId: string,
-  question: string,
+export async function resumeArticleAnswer(
+  articleId: string,
+  requestId: string,
   signal?: AbortSignal,
 ): Promise<ArticleAnswer> {
   const payload = await request<ArticleAnswerPayload>(
-    `/api/article-context/${encodeURIComponent(contextId)}/ask`,
-    {
-      method: "POST",
-      body: JSON.stringify({ question }),
-      signal,
-    },
+    `/api/articles/${encodeURIComponent(articleId)}/ask/${encodeURIComponent(requestId)}`,
+    { signal },
   );
-  return { articleId: payload.article_id, answer: payload.answer };
+  return waitForArticleAnswer(articleId, requestId, payload, signal);
+}
+
+async function waitForArticleAnswer(
+  articleId: string,
+  requestId: string,
+  initialPayload: ArticleAnswerPayload,
+  signal?: AbortSignal,
+): Promise<ArticleAnswer> {
+  let payload = initialPayload;
+  let attempts = 0;
+  while (payload.status === "running" && attempts < 600) {
+    await waitForArticleAnswerPoll(signal);
+    payload = await request<ArticleAnswerPayload>(
+      `/api/articles/${encodeURIComponent(articleId)}/ask/${encodeURIComponent(requestId)}`,
+      { signal },
+    );
+    attempts += 1;
+  }
+  if (payload.status !== "completed" || !payload.answer) {
+    throw new Error("文章问答仍在运行，请稍后重试");
+  }
+  return toArticleAnswer(payload);
+}
+
+export function createArticleQuestionRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `article-question-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+export function createResearchAgentRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `research-agent-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+export async function getArticleAnswerHistory(
+  articleId: string,
+  signal?: AbortSignal,
+  offset = 0,
+): Promise<ArticleAnswerHistory> {
+  const payload = await request<ArticleAnswerHistoryPayload>(
+    `/api/articles/${encodeURIComponent(articleId)}/answers?limit=50&offset=${offset}`,
+    { signal },
+  );
+  return {
+    articleId: payload.article_id,
+    snapshotId: payload.snapshot_id,
+    answers: payload.answers
+      .filter(item => item.status === "completed" && Boolean(item.answer))
+      .map(toArticleAnswer),
+    hasMore: payload.has_more,
+    pendingRequest:
+      payload.pending_request?.status === "running"
+        ? toArticleAnswer(payload.pending_request)
+        : null,
+  };
+}
+
+export async function clearArticleAnswerHistory(
+  articleId: string,
+  scope: "current" | "all",
+): Promise<number> {
+  const suffix = scope === "current" ? "/current" : "";
+  const payload = await request<{ deleted_count: number }>(
+    `/api/articles/${encodeURIComponent(articleId)}/answers${suffix}`,
+    { method: "DELETE" },
+  );
+  return payload.deleted_count;
+}
+
+function toArticleAnswer(payload: ArticleAnswerPayload): ArticleAnswer {
+  return {
+    articleId: payload.article_id,
+    requestId: payload.request_id,
+    snapshotId: payload.snapshot_id,
+    question: payload.question,
+    answer: payload.answer,
+    createdAt: payload.created_at,
+  };
+}
+
+function waitForArticleAnswerPoll(signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("请求已取消", "AbortError"));
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, 500);
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(new DOMException("请求已取消", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function toResearchRun(run: ResearchRunPayload): ResearchRun {
@@ -256,13 +402,16 @@ export async function getResearchRuns(): Promise<ResearchRun[]> {
   return payload.runs.map(toResearchRun);
 }
 
-export async function getResearchAgentReport(
+export async function getResearchAgentStatus(
   runId: string,
+  requestId?: string | null,
   signal?: AbortSignal,
-): Promise<AgentReport | null> {
-  return request<AgentReport | null>(`/api/research/runs/${encodeURIComponent(runId)}/agent`, {
-    signal,
-  });
+): Promise<AgentTaskSnapshot> {
+  const query = requestId ? `?request_id=${encodeURIComponent(requestId)}` : "";
+  return request<AgentTaskSnapshotPayload>(
+    `/api/research/runs/${encodeURIComponent(runId)}/agent/status${query}`,
+    { signal },
+  );
 }
 
 export async function createResearchRun(input: {
@@ -285,13 +434,31 @@ export async function createResearchRun(input: {
 export async function runResearchAgent(
   runId: string,
   input: { timeoutSeconds: number; maxSteps: number; maxAttempts: number },
-): Promise<AgentReport> {
-  return request<AgentReport>(`/api/research/runs/${encodeURIComponent(runId)}/agent`, {
-    method: "POST",
-    body: JSON.stringify({
-      timeout_seconds: input.timeoutSeconds,
-      max_steps: input.maxSteps,
-      max_attempts: input.maxAttempts,
-    }),
-  });
+  requestId?: string,
+): Promise<AgentTaskSnapshot> {
+  return request<AgentTaskSnapshotPayload>(
+    `/api/research/runs/${encodeURIComponent(runId)}/agent`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        timeout_seconds: input.timeoutSeconds,
+        max_steps: input.maxSteps,
+        max_attempts: input.maxAttempts,
+        request_id: requestId,
+      }),
+    },
+  );
+}
+
+export async function stopResearchAgent(
+  runId: string,
+  requestId?: string | null,
+): Promise<AgentTaskSnapshot> {
+  return request<AgentTaskSnapshotPayload>(
+    `/api/research/runs/${encodeURIComponent(runId)}/agent/stop`,
+    {
+      method: "POST",
+      body: JSON.stringify({ request_id: requestId }),
+    },
+  );
 }

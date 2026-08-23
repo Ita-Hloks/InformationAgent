@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import time
 from dataclasses import replace
 from datetime import datetime
 from math import inf, nan
@@ -14,17 +15,13 @@ from information_agent import settings as settings_module
 from information_agent.agent import AgentReport, AgentStopReason
 from information_agent.api import create_app
 from information_agent.collection import FeedFetchResult, RawFeedEntry
-from information_agent.collection.web import MAX_PAGE_BYTES
 from information_agent.common import CONTENT_BATCH_CHARS
 from information_agent.contracts import PROJECT_TIMEZONE, CollectionReport, ContentType, RunStatus
 from information_agent.reader import (
     ArticleAssistant,
-    ArticleContextService,
-    ArticleContextUnavailableError,
     ArticleNotFoundError,
     ReaderService,
 )
-from information_agent.reader.context import ArticleContextUrlError, fetch_public_article
 from information_agent.storage import (
     AnalysisRunStatus,
     PersistedCollection,
@@ -122,7 +119,8 @@ def test_open_env_api_uses_fixed_project_path_without_accepting_client_path(
         raising=False,
     )
 
-    response = _client(tmp_path).post(
+    client = _client(tmp_path)
+    response = client.post(
         "/api/settings/env/open",
         json={"path": str(client_path)},
     )
@@ -204,282 +202,102 @@ def test_article_ask_api_reads_article_by_id_and_normalizes_question(tmp_path: P
     client = TestClient(create_app(service, article_assistant=assistant))
     response = client.post(
         f"/api/articles/{article_id}/ask",
-        json={"question": "  当前文章的核心是什么？  "},
+        json={
+            "question": "  当前文章的核心是什么？  ",
+            "request_id": "api-answer-1",
+        },
     )
 
     assert response.status_code == 200
-    assert response.json() == {"article_id": article_id, "answer": "基于文章的回答"}
+    assert response.json() == {
+        "status": "completed",
+        "article_id": article_id,
+        "request_id": "api-answer-1",
+        "snapshot_id": service.list_articles()[0].snapshot_id,
+        "question": "当前文章的核心是什么？",
+        "answer": "基于文章的回答",
+        "created_at": response.json()["created_at"],
+        "finished_at": response.json()["finished_at"],
+    }
     assert assistant.calls == [(article_id, "当前文章的核心是什么？")]
     assert (
         client.post(f"/api/articles/{article_id}/ask", json={"question": "  "}).status_code == 422
     )
 
 
-class _RecordingAssistant:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
+def test_article_answers_survive_reader_restart_and_reuse_request_id(tmp_path: Path) -> None:
+    database_path = tmp_path / "api.db"
+    service = ReaderService(database_path, fetcher=_fetcher)
+    service.subscribe("https://example.com/rss.xml")
+    article_id = service.list_articles()[0].article.article_id
 
-    def answer(self, article, question: str) -> str:
-        self.calls.append((article.article.article_id, question))
-        return "基于上下文的回答"
+    first_assistant = _RecordingAssistantForAnswers("持久化回答")
+    first_client = TestClient(create_app(service, article_assistant=first_assistant))
+    first = first_client.post(
+        f"/api/articles/{article_id}/ask",
+        json={"question": "文章的核心是什么？", "request_id": "restart-answer-1"},
+    )
+    assert first.status_code == 200
+
+    restarted = ReaderService(database_path, fetcher=_fetcher)
+    second_assistant = _RecordingAssistantForAnswers("不应再次调用")
+    second_client = TestClient(create_app(restarted, article_assistant=second_assistant))
+    repeated = second_client.post(
+        f"/api/articles/{article_id}/ask",
+        json={"question": "文章的核心是什么？", "request_id": "restart-answer-1"},
+    )
+
+    assert repeated.status_code == 200
+    assert repeated.json()["answer"] == "持久化回答"
+    assert second_assistant.calls == []
+    history = second_client.get(f"/api/articles/{article_id}/answers")
+    assert history.status_code == 200
+    assert [item["request_id"] for item in history.json()["answers"]] == ["restart-answer-1"]
 
 
-def _public_resolver(*_: object, **__: object) -> list[tuple[object, ...]]:
-    return [(0, 0, 0, "", ("93.184.216.34", 443))]
-
-
-def _private_resolver(*_: object, **__: object) -> list[tuple[object, ...]]:
-    return [(0, 0, 0, "", ("127.0.0.1", 80))]
-
-
-def test_article_context_reuses_local_article_and_requires_confirmation(tmp_path: Path) -> None:
+def test_failed_article_answer_is_not_saved_and_can_retry_same_request_id(tmp_path: Path) -> None:
     service = ReaderService(tmp_path / "api.db", fetcher=_fetcher)
     service.subscribe("https://example.com/rss.xml")
-    fetch_calls: list[str] = []
+    article_id = service.list_articles()[0].article.article_id
+    assistant = _FailOnceAssistant()
+    client = TestClient(create_app(service, article_assistant=assistant))
 
-    def fetcher(*args: object, **kwargs: object) -> object:
-        fetch_calls.append(str(args[0]))
-        raise AssertionError("本地文章不应重复抓取")
-
-    context_service = ArticleContextService(
-        service,
-        fetcher=fetcher,
-        resolver=_public_resolver,
+    failed = client.post(
+        f"/api/articles/{article_id}/ask",
+        json={"question": "请验证这条信息", "request_id": "retry-answer-1"},
     )
-    assistant = _RecordingAssistant()
-    client = TestClient(
-        create_app(service, article_assistant=assistant, article_context=context_service)
+    assert failed.status_code == 502
+    assert client.get(f"/api/articles/{article_id}/answers").json()["answers"] == []
+
+    retried = client.post(
+        f"/api/articles/{article_id}/ask",
+        json={"question": "请验证这条信息", "request_id": "retry-answer-1"},
     )
-
-    resolved = client.post("/api/article-context", json={"url": "https://example.com/article-1"})
-    assert resolved.status_code == 200
-    payload = resolved.json()
-    assert payload["is_local"] is True
-    assert payload["confirmed"] is False
-    context_id = payload["context_id"]
-    assert fetch_calls == []
-
-    blocked = client.post(
-        f"/api/article-context/{context_id}/ask",
-        json={"question": "文章的核心是什么？"},
-    )
-    assert blocked.status_code == 409
-    assert assistant.calls == []
-
-    confirmed = client.post(f"/api/article-context/{context_id}/confirm")
-    assert confirmed.status_code == 200
-    assert confirmed.json()["confirmed"] is True
-
-    answer = client.post(
-        f"/api/article-context/{context_id}/ask",
-        json={"question": "  文章的核心是什么？  "},
-    )
-    assert answer.status_code == 200
-    assert answer.json()["answer"] == "基于上下文的回答"
-    assert assistant.calls == [
-        (service.list_articles()[0].article.article_id, "文章的核心是什么？")
-    ]
+    assert retried.status_code == 200
+    assert retried.json()["answer"] == "重试成功"
+    assert len(client.get(f"/api/articles/{article_id}/answers").json()["answers"]) == 1
 
 
-def test_article_context_external_url_is_temporary_and_confirms_before_llm(
-    tmp_path: Path,
-) -> None:
-    service = ReaderService(tmp_path / "api.db", fetcher=_fetcher)
-    fetch_calls: list[str] = []
+class _RecordingAssistantForAnswers:
+    def __init__(self, answer: str) -> None:
+        self.answer_text = answer
+        self.calls: list[str] = []
 
-    def fetcher(url: str, **_: object) -> object:
-        fetch_calls.append(url)
-        return SimpleNamespace(
-            title="外部文章标题",
-            content="外部文章正文内容足够长，用于测试临时上下文。",
-        )
-
-    context_service = ArticleContextService(
-        service,
-        fetcher=fetcher,
-        resolver=_public_resolver,
-    )
-    assistant = _RecordingAssistant()
-    client = TestClient(
-        create_app(service, article_assistant=assistant, article_context=context_service)
-    )
-
-    resolved = client.post("/api/article-context", json={"url": "https://news.example.com/story"})
-    assert resolved.status_code == 200
-    payload = resolved.json()
-    assert payload["title"] == "外部文章标题"
-    assert payload["is_local"] is False
-    assert fetch_calls == ["https://news.example.com/story"]
-    assert service.list_articles() == []
-
-    blocked = client.post(
-        f"/api/article-context/{payload['context_id']}/ask",
-        json={"question": "这篇文章讲了什么？"},
-    )
-    assert blocked.status_code == 409
-    assert assistant.calls == []
-
-    client.post(f"/api/article-context/{payload['context_id']}/confirm")
-    answer = client.post(
-        f"/api/article-context/{payload['context_id']}/ask",
-        json={"question": "这篇文章讲了什么？"},
-    )
-    assert answer.status_code == 200
-    assert assistant.calls[0][1] == "这篇文章讲了什么？"
-    assert service.list_articles() == []
+    def answer(self, _article, question: str) -> str:
+        self.calls.append(question)
+        return self.answer_text
 
 
-def test_article_context_rejects_private_resolution_without_calling_llm(tmp_path: Path) -> None:
-    service = ReaderService(tmp_path / "api.db", fetcher=_fetcher)
-    fetch_calls: list[str] = []
+class _FailOnceAssistant(_RecordingAssistantForAnswers):
+    def __init__(self) -> None:
+        super().__init__("重试成功")
+        self.failed = False
 
-    def fetcher(url: str, **_: object) -> object:
-        fetch_calls.append(url)
-        raise AssertionError("不安全 URL 不应抓取")
-
-    context_service = ArticleContextService(
-        service,
-        fetcher=fetcher,
-        resolver=_private_resolver,
-    )
-    assistant = _RecordingAssistant()
-    client = TestClient(
-        create_app(service, article_assistant=assistant, article_context=context_service)
-    )
-
-    response = client.post("/api/article-context", json={"url": "https://news.example.com/story"})
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "unsafe_url"
-    assert fetch_calls == []
-    assert assistant.calls == []
-
-    local_service = ReaderService(tmp_path / "local-api.db", fetcher=_fetcher)
-    local_service.subscribe("https://example.com/rss.xml")
-    local_context_service = ArticleContextService(
-        local_service,
-        fetcher=fetcher,
-        resolver=_private_resolver,
-    )
-    local_client = TestClient(
-        create_app(
-            local_service,
-            article_assistant=assistant,
-            article_context=local_context_service,
-        )
-    )
-    local_response = local_client.post(
-        "/api/article-context",
-        json={"url": "https://example.com/article-1"},
-    )
-    assert local_response.status_code == 422
-    assert local_response.json()["detail"]["code"] == "unsafe_url"
-
-    for url in (
-        "http://localhost/story",
-        "file:///tmp/story",
-        "https://user:pass@example.com/story",
-        "https://@example.com/story",
-        "https://example.com:0/story",
-    ):
-        assert client.post("/api/article-context", json={"url": url}).status_code == 422
-
-
-def test_article_context_maps_fetch_failure_without_calling_llm(tmp_path: Path) -> None:
-    service = ReaderService(tmp_path / "api.db", fetcher=_fetcher)
-
-    def fetcher(*_: object, **__: object) -> object:
-        raise ArticleContextUnavailableError("网页正文为空")
-
-    context_service = ArticleContextService(
-        service,
-        fetcher=fetcher,
-        resolver=_public_resolver,
-    )
-    assistant = _RecordingAssistant()
-    client = TestClient(
-        create_app(service, article_assistant=assistant, article_context=context_service)
-    )
-
-    response = client.post("/api/article-context", json={"url": "https://news.example.com/empty"})
-    assert response.status_code == 502
-    assert response.json()["detail"]["code"] == "context_unavailable"
-    assert assistant.calls == []
-
-
-def test_public_article_fetch_parses_title_and_rejects_unsafe_redirect(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class Response:
-        status = 200
-        headers = {"Content-Type": "text/html; charset=utf-8"}
-
-        def __init__(self) -> None:
-            self._payload = (
-                "<html><head><title>网页标题</title></head>"
-                "<body><article>正文</article></body></html>"
-            ).encode()
-
-        def read(self, _limit: int) -> bytes:
-            payload, self._payload = self._payload, b""
-            return payload
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr(
-        "information_agent.reader.context._extract_text",
-        lambda _html: "解析后的网页正文内容足够长，用于验证外部页面正文提取。",
-    )
-    result = fetch_public_article(
-        "https://news.example.com/story",
-        resolver=_public_resolver,
-        opener=lambda *_args, **_kwargs: Response(),
-    )
-    assert result.title == "网页标题"
-    assert result.content == "解析后的网页正文内容足够长，用于验证外部页面正文提取。"
-
-    class RedirectResponse:
-        status = 302
-        headers = {"Location": "http://127.0.0.1/private"}
-
-        def close(self) -> None:
-            return None
-
-    calls: list[str] = []
-
-    def redirect_opener(request, **_kwargs: object) -> RedirectResponse:
-        calls.append(request.full_url)
-        return RedirectResponse()
-
-    with pytest.raises(ArticleContextUrlError):
-        fetch_public_article(
-            "https://news.example.com/story",
-            resolver=_public_resolver,
-            opener=redirect_opener,
-        )
-    assert calls == ["https://news.example.com/story"]
-
-
-def test_public_article_fetch_rejects_oversized_response_without_reading_body() -> None:
-    class OversizedResponse:
-        status = 200
-        headers = {
-            "content-type": "text/html",
-            "content-length": str(MAX_PAGE_BYTES + 1),
-        }
-
-        def read(self, _limit: int) -> bytes:
-            raise AssertionError("超限响应不应读取正文")
-
-        def close(self) -> None:
-            return None
-
-    with pytest.raises(ArticleContextUnavailableError, match="超过大小限制"):
-        fetch_public_article(
-            "https://news.example.com/story",
-            resolver=_public_resolver,
-            opener=lambda *_args, **_kwargs: OversizedResponse(),
-        )
+    def answer(self, article, question: str) -> str:
+        if not self.failed:
+            self.failed = True
+            raise ValueError("模拟模型输出错误")
+        return super().answer(article, question)
 
 
 def test_feed_subscription_and_article_fetch(tmp_path: Path) -> None:
@@ -648,7 +466,8 @@ def test_research_ingest_api_returns_persisted_collection(
     api_app_module = importlib.import_module("information_agent.api.app")
     monkeypatch.setattr(api_app_module, "ingest", fake_ingest)
 
-    response = _client(tmp_path).post(
+    client = _client(tmp_path)
+    response = client.post(
         "/api/research/ingest",
         json={
             "topic": "AI",
@@ -697,24 +516,35 @@ def test_research_agent_api_returns_agent_report(
 
     api_app_module = importlib.import_module("information_agent.api.app")
     monkeypatch.setattr(api_app_module, "agent_run", fake_agent_run)
+    monkeypatch.setenv("LLM_API_KEY", "test-main")
+    monkeypatch.setenv("SEARCH_LLM_API_KEY", "test-search")
+    monkeypatch.setenv("SEARCH_LLM_MODEL", "search-model")
+    monkeypatch.setenv("SEARCH_LLM_BASE_URL", "https://search.example/v1")
+    store = SQLiteCollectionStore(tmp_path / "api.db")
+    run_id = store.start_run("AI", ["https://example.com/rss.xml"])
+    store.complete_run(run_id, CollectionReport("AI", RunStatus.COMPLETED, []), [])
 
-    response = _client(tmp_path).post(
-        "/api/research/runs/run-api/agent",
-        json={"timeout_seconds": 30, "max_steps": 2, "max_attempts": 1},
+    client = _client(tmp_path)
+    response = client.post(
+        f"/api/research/runs/{run_id}/agent",
+        json={"timeout_seconds": 30, "max_steps": 2, "max_attempts": 1, "request_id": "api-agent"},
     )
 
     assert response.status_code == 200
-    assert response.json()["analysis_run_id"] == "analysis-api"
-    assert response.json()["final_answer"] == "已完成核查。"
-    assert calls == [
-        {
-            "run_id": "run-api",
-            "database_path": tmp_path / "api.db",
-            "timeout_seconds": 30.0,
-            "max_steps": 2,
-            "max_attempts": 1,
-        }
-    ]
+    assert response.json()["request_id"] == "api-agent"
+    for _ in range(20):
+        status = client.get(f"/api/research/runs/{run_id}/agent/status?request_id=api-agent")
+        if status.json()["status"] == "completed":
+            break
+        time.sleep(0.01)
+    assert status.json()["status"] == "completed"
+    assert status.json()["report"]["final_answer"] == "已完成核查。"
+    assert len(calls) == 1
+    assert calls[0]["run_id"] == run_id
+    assert calls[0]["database_path"] == tmp_path / "api.db"
+    assert calls[0]["timeout_seconds"] == 30.0
+    assert calls[0]["max_steps"] == 2
+    assert calls[0]["max_attempts"] == 1
 
 
 def test_research_agent_api_restores_latest_persisted_report(tmp_path: Path) -> None:
@@ -745,21 +575,20 @@ def test_research_agent_api_restores_latest_persisted_report(tmp_path: Path) -> 
     )
     store.set_analysis_run_status(analysis_run.id, AnalysisRunStatus.COMPLETED)
 
-    response = _client(tmp_path).get(f"/api/research/runs/{run_id}/agent")
+    response = _client(tmp_path).get(f"/api/research/runs/{run_id}/agent/status")
 
     assert response.status_code == 200
     assert response.json()["analysis_run_id"] == analysis_run.id
-    assert response.json()["final_answer"] == "已保存的结论"
+    assert response.json()["report"]["final_answer"] == "已保存的结论"
 
 
 def test_research_agent_api_returns_null_without_persisted_report(tmp_path: Path) -> None:
     store = SQLiteCollectionStore(tmp_path / "api.db")
     run_id = store.start_run("AI", ["https://example.com/rss.xml"])
 
-    response = _client(tmp_path).get(f"/api/research/runs/{run_id}/agent")
+    response = _client(tmp_path).get(f"/api/research/runs/{run_id}/agent/status")
 
-    assert response.status_code == 200
-    assert response.json() is None
+    assert response.status_code == 404
 
 
 def test_research_agent_api_distinguishes_missing_and_unready_runs(tmp_path: Path) -> None:
@@ -783,7 +612,25 @@ def test_research_agent_api_rejects_domain_value_errors(
 
     api_app_module = importlib.import_module("information_agent.api.app")
     monkeypatch.setattr(api_app_module, "agent_run", invalid_agent_run)
+    monkeypatch.setenv("LLM_API_KEY", "test-main")
+    monkeypatch.setenv("SEARCH_LLM_API_KEY", "test-search")
+    monkeypatch.setenv("SEARCH_LLM_MODEL", "search-model")
+    monkeypatch.setenv("SEARCH_LLM_BASE_URL", "https://search.example/v1")
+    store = SQLiteCollectionStore(tmp_path / "api.db")
+    run_id = store.start_run("AI", ["https://example.com/rss.xml"])
+    store.complete_run(run_id, CollectionReport("AI", RunStatus.COMPLETED, []), [])
 
-    response = _client(tmp_path).post("/api/research/runs/run-api/agent", json={})
+    client = _client(tmp_path)
+    response = client.post(
+        f"/api/research/runs/{run_id}/agent",
+        json={"request_id": "invalid-agent"},
+    )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
+    for _ in range(20):
+        status = client.get(f"/api/research/runs/{run_id}/agent/status?request_id=invalid-agent")
+        if status.json()["status"] == "failed":
+            break
+        time.sleep(0.01)
+    assert status.json()["status"] == "failed"
+    assert status.json()["error"]["message"] == "Agent 参数组合无效"

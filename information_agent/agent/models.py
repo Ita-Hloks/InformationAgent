@@ -69,6 +69,7 @@ class AgentStopReason(StrEnum):
     TIMEOUT = "timeout"
     ERROR = "error"
     REPEATED_QUERY = "repeated_query"
+    CANCELLED = "cancelled"
 
 
 @dataclass(slots=True)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from collections.abc import Callable
 from typing import Any
 
 from openai import OpenAI
@@ -16,8 +18,14 @@ from ..storage import ReaderArticle
 
 
 class ArticleAssistant:
-    def __init__(self, client: Any | None = None) -> None:
+    def __init__(
+        self,
+        client: Any | None = None,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self._client = client
+        self._sleep = sleep
 
     def answer(
         self,
@@ -25,6 +33,7 @@ class ArticleAssistant:
         question: str,
         *,
         timeout: float = DEFAULT_LLM_TIMEOUT_SECONDS,
+        request_id: str | None = None,
     ) -> str:
         content = _article_context(article.article.content)
         if not content:
@@ -53,6 +62,10 @@ class ArticleAssistant:
                     ),
                 },
             ],
+            max_attempts=3,
+            sleep=self._sleep,
+            record_content=False,
+            metadata={"request_id": request_id} if request_id else None,
         )
         return parse_article_answer(raw)
 

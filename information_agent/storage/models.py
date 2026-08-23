@@ -190,6 +190,25 @@ class ReaderArticle:
 
 
 @dataclass(frozen=True, slots=True)
+class ReaderArticleAnswer:
+    request_id: str
+    article_id: str
+    snapshot_id: str
+    content_hash: str
+    question: str
+    answer: str | None
+    status: str
+    created_at: str
+    finished_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ReaderArticleAnswerClaim:
+    record: ReaderArticleAnswer
+    owner: bool
+
+
+@dataclass(frozen=True, slots=True)
 class OpinionRunRecord:
     id: str
     article_id: str

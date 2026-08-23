@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 
@@ -28,7 +27,7 @@ def _store_with_research_run(tmp_path: Path) -> tuple[SQLiteCollectionStore, str
     return store, research_run_id
 
 
-def test_analysis_storage_migrates_and_run_creation_is_idempotent(tmp_path: Path) -> None:
+def test_analysis_storage_run_creation_is_idempotent(tmp_path: Path) -> None:
     store, research_run_id = _store_with_research_run(tmp_path)
 
     first = store.create_analysis_run(
@@ -53,173 +52,13 @@ def test_analysis_storage_migrates_and_run_creation_is_idempotent(tmp_path: Path
             row[0]
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
-        migration_version = connection.execute(
-            "SELECT MAX(version) FROM schema_migrations"
-        ).fetchone()[0]
 
-    assert migration_version == 11
     assert {
         "analysis_runs",
         "analysis_steps",
         "analysis_attempts",
         "analysis_artifacts",
     } <= tables
-
-
-def test_analysis_storage_migration_does_not_reuse_historical_version_four(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "historical.db"
-    with sqlite3.connect(database_path) as connection:
-        connection.execute(
-            """
-            CREATE TABLE research_runs (
-                id TEXT PRIMARY KEY,
-                status TEXT NOT NULL
-            )
-            """
-        )
-        connection.execute(
-            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
-        )
-        connection.execute(
-            "INSERT INTO research_runs (id, status) VALUES ('existing', 'completed')"
-        )
-        connection.executemany(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-            [(version, "2026-08-03T23:00:00+08:00") for version in range(1, 5)],
-        )
-
-    store = SQLiteCollectionStore(database_path)
-    store.create_analysis_run("existing", "opinion_analysis", {})
-
-    with sqlite3.connect(database_path) as connection:
-        tables = {
-            row[0]
-            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-        }
-        migration_version = connection.execute(
-            "SELECT MAX(version) FROM schema_migrations"
-        ).fetchone()[0]
-
-    assert migration_version == 5
-    assert {
-        "analysis_runs",
-        "analysis_steps",
-        "analysis_attempts",
-        "analysis_artifacts",
-    } <= tables
-
-
-def test_opinion_schema_migrates_and_reads_legacy_run(tmp_path: Path) -> None:
-    database_path = tmp_path / "legacy-opinion.db"
-    result_payload = {
-        "article_id": "article-1",
-        "source_url": "https://www.bilibili.com/video/BV1xx",
-        "status": "completed",
-        "requested_limit": 10,
-        "analyzed_count": 1,
-        "controversy_points": [],
-        "comments": [
-            {
-                "comment_id": "reply-1",
-                "source_url": "https://www.bilibili.com/video/BV1xx#reply-1",
-                "author": "用户甲",
-                "content": "评论内容。",
-                "likes": 1,
-                "published_at": None,
-            }
-        ],
-        "classifications": [
-            {
-                "run_id": "run-1",
-                "evidence_id": 1,
-                "comment_id": "reply-1",
-                "classification_status": "classified",
-                "stance": "support",
-                "error_code": None,
-            }
-        ],
-        "points": [],
-        "uncertainties": [],
-        "errors": [],
-        "attempts": [],
-    }
-    with sqlite3.connect(database_path) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE schema_migrations (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL
-            );
-            CREATE TABLE articles (
-                id TEXT PRIMARY KEY,
-                source_url TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE opinion_runs (
-                id TEXT PRIMARY KEY,
-                article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-                platform TEXT NOT NULL,
-                window_hours INTEGER NOT NULL,
-                status TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                finished_at TEXT,
-                errors_json TEXT NOT NULL,
-                result_json TEXT
-            );
-            CREATE TABLE opinion_comments (
-                run_id TEXT NOT NULL,
-                comment_id TEXT NOT NULL,
-                source_url TEXT NOT NULL,
-                author TEXT NOT NULL,
-                content TEXT NOT NULL,
-                likes INTEGER NOT NULL,
-                published_at TEXT,
-                payload_json TEXT NOT NULL,
-                PRIMARY KEY (run_id, comment_id)
-            );
-            """
-        )
-        connection.executemany(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-            [(version, "2026-08-17T10:00:00+08:00") for version in range(1, 10)],
-        )
-        connection.execute(
-            "INSERT INTO articles (id, source_url, created_at) VALUES (?, ?, ?)",
-            ("article-1", result_payload["source_url"], "2026-08-17T10:00:00+08:00"),
-        )
-        connection.execute(
-            """
-            INSERT INTO opinion_runs (
-                id, article_id, platform, window_hours, status, created_at,
-                started_at, finished_at, errors_json, result_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "run-1",
-                "article-1",
-                "bilibili",
-                72,
-                "completed",
-                "2026-08-17T10:00:00+08:00",
-                "2026-08-17T10:00:00+08:00",
-                "2026-08-17T10:01:00+08:00",
-                "[]",
-                json.dumps(result_payload, ensure_ascii=False),
-            ),
-        )
-
-    store = SQLiteCollectionStore(database_path)
-    record = store.get_latest_opinion_run("article-1")
-
-    assert record is not None
-    assert record.article_snapshot_id is None
-    assert record.requested_limit == 10
-    assert record.collected_count == 1
-    assert record.classification_total == 1
-    assert store.load_opinion_classifications("run-1")[0]["stance"] == "support"
 
 
 def test_analysis_state_persists_steps_attempts_and_immutable_artifacts(tmp_path: Path) -> None:

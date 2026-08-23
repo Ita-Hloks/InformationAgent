@@ -2,10 +2,23 @@
 
 from typing import Any
 
-__all__ = ["agent_run", "collect", "ingest", "plan", "plan_run", "run", "search"]
+__all__ = [
+    "AgentTaskManager",
+    "agent_run",
+    "collect",
+    "ingest",
+    "plan",
+    "plan_run",
+    "run",
+    "search",
+]
 
 
 def __getattr__(name: str) -> Any:
+    if name == "AgentTaskManager":
+        from .agent_tasks import AgentTaskManager
+
+        return AgentTaskManager
     if name == "agent_run":
         from .agent_workflow import agent_run
 

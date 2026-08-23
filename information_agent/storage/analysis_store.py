@@ -97,6 +97,68 @@ class AnalysisPersistenceMixin:
         assert row is not None
         return _analysis_run_from_row(row)
 
+    def recover_running_agent_runs(
+        self,
+        *,
+        reason: str = "后端重启，上一轮 Agent 未能继续运行",
+    ) -> int:
+        normalized_reason = reason.strip()
+        if not normalized_reason:
+            raise ValueError("Agent 恢复原因不能为空")
+        now = _format_datetime(project_now())
+        error = {
+            "type": "AgentProcessRestarted",
+            "message": normalized_reason,
+        }
+        error_json = json.dumps(error, ensure_ascii=False, sort_keys=True)
+        recovered_count = 0
+        with self._connect() as connection:
+            runs = connection.execute(
+                """
+                SELECT id, errors_json
+                FROM analysis_runs
+                WHERE analysis_type = 'agent_research'
+                  AND status IN ('created', 'running')
+                """
+            ).fetchall()
+            for run in runs:
+                errors = _load_json_list(run["errors_json"])
+                errors.append(error)
+                connection.execute(
+                    """
+                    UPDATE analysis_attempts
+                    SET status = 'interrupted', finished_at = ?, error_json = ?
+                    WHERE analysis_step_id IN (
+                        SELECT id FROM analysis_steps
+                        WHERE analysis_run_id = ? AND status = 'running'
+                    ) AND status = 'started'
+                    """,
+                    (now, error_json, run["id"]),
+                )
+                connection.execute(
+                    """
+                    UPDATE analysis_steps
+                    SET status = 'interrupted', updated_at = ?, finished_at = ?, error_json = ?
+                    WHERE analysis_run_id = ? AND status = 'running'
+                    """,
+                    (now, now, error_json, run["id"]),
+                )
+                connection.execute(
+                    """
+                    UPDATE analysis_runs
+                    SET status = 'partial', updated_at = ?, finished_at = ?, errors_json = ?
+                    WHERE id = ? AND status IN ('created', 'running')
+                    """,
+                    (
+                        now,
+                        now,
+                        json.dumps(errors, ensure_ascii=False, sort_keys=True),
+                        run["id"],
+                    ),
+                )
+                recovered_count += 1
+        return recovered_count
+
     def load_latest_agent_report(self, research_run_id: str) -> dict[str, Any] | None:
         """Return the latest persisted Agent report for a research run."""
 
@@ -124,6 +186,64 @@ class AnalysisPersistenceMixin:
             return None
         payload = _load_json_object(row["payload_json"], "payload_json")
         return {**payload, "analysis_run_id": str(row["analysis_run_id"])}
+
+    def find_analysis_run_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> AnalysisRun | None:
+        normalized_key = idempotency_key.strip()
+        if not normalized_key:
+            raise ValueError("分析幂等键不能为空")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM analysis_runs WHERE idempotency_key = ?",
+                (normalized_key,),
+            ).fetchone()
+        return _analysis_run_from_row(row) if row is not None else None
+
+    def load_latest_analysis_run(
+        self,
+        research_run_id: str,
+        *,
+        analysis_type: str = "agent_research",
+    ) -> AnalysisRun | None:
+        normalized_type = analysis_type.strip()
+        if not normalized_type:
+            raise ValueError("分析类型不能为空")
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT analysis_runs.*
+                FROM analysis_runs
+                WHERE research_run_id = ? AND analysis_type = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (research_run_id, normalized_type),
+            ).fetchone()
+        return _analysis_run_from_row(row) if row is not None else None
+
+    def load_analysis_report(self, analysis_run_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            run = connection.execute(
+                "SELECT 1 FROM analysis_runs WHERE id = ?",
+                (analysis_run_id,),
+            ).fetchone()
+            if run is None:
+                raise ValueError(f"不存在的分析运行：{analysis_run_id}")
+            row = connection.execute(
+                """
+                SELECT payload_json
+                FROM analysis_artifacts
+                WHERE analysis_run_id = ? AND kind = 'agent_report'
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (analysis_run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _load_json_object(row["payload_json"], "payload_json")
 
     def load_analysis_run(self, analysis_run_id: str) -> AnalysisRun:
         with self._connect() as connection:
