@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import time
 from dataclasses import replace
 from datetime import datetime
 from math import inf, nan
@@ -118,7 +119,8 @@ def test_open_env_api_uses_fixed_project_path_without_accepting_client_path(
         raising=False,
     )
 
-    response = _client(tmp_path).post(
+    client = _client(tmp_path)
+    response = client.post(
         "/api/settings/env/open",
         json={"path": str(client_path)},
     )
@@ -464,7 +466,8 @@ def test_research_ingest_api_returns_persisted_collection(
     api_app_module = importlib.import_module("information_agent.api.app")
     monkeypatch.setattr(api_app_module, "ingest", fake_ingest)
 
-    response = _client(tmp_path).post(
+    client = _client(tmp_path)
+    response = client.post(
         "/api/research/ingest",
         json={
             "topic": "AI",
@@ -513,24 +516,35 @@ def test_research_agent_api_returns_agent_report(
 
     api_app_module = importlib.import_module("information_agent.api.app")
     monkeypatch.setattr(api_app_module, "agent_run", fake_agent_run)
+    monkeypatch.setenv("LLM_API_KEY", "test-main")
+    monkeypatch.setenv("SEARCH_LLM_API_KEY", "test-search")
+    monkeypatch.setenv("SEARCH_LLM_MODEL", "search-model")
+    monkeypatch.setenv("SEARCH_LLM_BASE_URL", "https://search.example/v1")
+    store = SQLiteCollectionStore(tmp_path / "api.db")
+    run_id = store.start_run("AI", ["https://example.com/rss.xml"])
+    store.complete_run(run_id, CollectionReport("AI", RunStatus.COMPLETED, []), [])
 
-    response = _client(tmp_path).post(
-        "/api/research/runs/run-api/agent",
-        json={"timeout_seconds": 30, "max_steps": 2, "max_attempts": 1},
+    client = _client(tmp_path)
+    response = client.post(
+        f"/api/research/runs/{run_id}/agent",
+        json={"timeout_seconds": 30, "max_steps": 2, "max_attempts": 1, "request_id": "api-agent"},
     )
 
     assert response.status_code == 200
-    assert response.json()["analysis_run_id"] == "analysis-api"
-    assert response.json()["final_answer"] == "已完成核查。"
-    assert calls == [
-        {
-            "run_id": "run-api",
-            "database_path": tmp_path / "api.db",
-            "timeout_seconds": 30.0,
-            "max_steps": 2,
-            "max_attempts": 1,
-        }
-    ]
+    assert response.json()["request_id"] == "api-agent"
+    for _ in range(20):
+        status = client.get(f"/api/research/runs/{run_id}/agent/status?request_id=api-agent")
+        if status.json()["status"] == "completed":
+            break
+        time.sleep(0.01)
+    assert status.json()["status"] == "completed"
+    assert status.json()["report"]["final_answer"] == "已完成核查。"
+    assert len(calls) == 1
+    assert calls[0]["run_id"] == run_id
+    assert calls[0]["database_path"] == tmp_path / "api.db"
+    assert calls[0]["timeout_seconds"] == 30.0
+    assert calls[0]["max_steps"] == 2
+    assert calls[0]["max_attempts"] == 1
 
 
 def test_research_agent_api_restores_latest_persisted_report(tmp_path: Path) -> None:
@@ -561,21 +575,20 @@ def test_research_agent_api_restores_latest_persisted_report(tmp_path: Path) -> 
     )
     store.set_analysis_run_status(analysis_run.id, AnalysisRunStatus.COMPLETED)
 
-    response = _client(tmp_path).get(f"/api/research/runs/{run_id}/agent")
+    response = _client(tmp_path).get(f"/api/research/runs/{run_id}/agent/status")
 
     assert response.status_code == 200
     assert response.json()["analysis_run_id"] == analysis_run.id
-    assert response.json()["final_answer"] == "已保存的结论"
+    assert response.json()["report"]["final_answer"] == "已保存的结论"
 
 
 def test_research_agent_api_returns_null_without_persisted_report(tmp_path: Path) -> None:
     store = SQLiteCollectionStore(tmp_path / "api.db")
     run_id = store.start_run("AI", ["https://example.com/rss.xml"])
 
-    response = _client(tmp_path).get(f"/api/research/runs/{run_id}/agent")
+    response = _client(tmp_path).get(f"/api/research/runs/{run_id}/agent/status")
 
-    assert response.status_code == 200
-    assert response.json() is None
+    assert response.status_code == 404
 
 
 def test_research_agent_api_distinguishes_missing_and_unready_runs(tmp_path: Path) -> None:
@@ -599,7 +612,25 @@ def test_research_agent_api_rejects_domain_value_errors(
 
     api_app_module = importlib.import_module("information_agent.api.app")
     monkeypatch.setattr(api_app_module, "agent_run", invalid_agent_run)
+    monkeypatch.setenv("LLM_API_KEY", "test-main")
+    monkeypatch.setenv("SEARCH_LLM_API_KEY", "test-search")
+    monkeypatch.setenv("SEARCH_LLM_MODEL", "search-model")
+    monkeypatch.setenv("SEARCH_LLM_BASE_URL", "https://search.example/v1")
+    store = SQLiteCollectionStore(tmp_path / "api.db")
+    run_id = store.start_run("AI", ["https://example.com/rss.xml"])
+    store.complete_run(run_id, CollectionReport("AI", RunStatus.COMPLETED, []), [])
 
-    response = _client(tmp_path).post("/api/research/runs/run-api/agent", json={})
+    client = _client(tmp_path)
+    response = client.post(
+        f"/api/research/runs/{run_id}/agent",
+        json={"request_id": "invalid-agent"},
+    )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
+    for _ in range(20):
+        status = client.get(f"/api/research/runs/{run_id}/agent/status?request_id=invalid-agent")
+        if status.json()["status"] == "failed":
+            break
+        time.sleep(0.01)
+    assert status.json()["status"] == "failed"
+    assert status.json()["error"]["message"] == "Agent 参数组合无效"
