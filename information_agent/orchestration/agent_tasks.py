@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import inspect
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from ..agent import AgentReport
 from ..common import DEFAULT_LLM_TIMEOUT_SECONDS
@@ -25,7 +24,20 @@ from .agent_workflow import (
     agent_run,
 )
 
-AgentRunner = Callable[..., AgentReport]
+
+class AgentRunner(Protocol):
+    def __call__(
+        self,
+        research_run_id: str,
+        *,
+        database_path: Path,
+        timeout_seconds: float,
+        max_steps: int,
+        max_attempts: int,
+        idempotency_key: str,
+        should_stop: Callable[[], bool],
+        on_progress: Callable[[dict[str, Any]], None],
+    ) -> AgentReport: ...
 
 
 @dataclass(slots=True)
@@ -237,22 +249,16 @@ class AgentTaskManager:
         return report
 
     def _invoke_runner(self, task: _AgentTask) -> AgentReport:
-        parameters = inspect.signature(self._runner).parameters
-        kwargs: dict[str, Any] = {
-            "database_path": self.database_path,
-            "timeout_seconds": task.timeout_seconds,
-            "max_steps": task.max_steps,
-            "max_attempts": task.max_attempts,
-        }
-        optional = {
-            "idempotency_key": task.request_id,
-            "should_stop": task.stop_event.is_set,
-            "on_progress": lambda payload: self._update_progress(task, payload),
-        }
-        for name, value in optional.items():
-            if name in parameters:
-                kwargs[name] = value
-        return self._runner(task.research_run_id, **kwargs)
+        return self._runner(
+            task.research_run_id,
+            database_path=self.database_path,
+            timeout_seconds=task.timeout_seconds,
+            max_steps=task.max_steps,
+            max_attempts=task.max_attempts,
+            idempotency_key=task.request_id,
+            should_stop=task.stop_event.is_set,
+            on_progress=lambda payload: self._update_progress(task, payload),
+        )
 
     def _update_progress(self, task: _AgentTask, payload: dict[str, Any]) -> None:
         with self._lock:

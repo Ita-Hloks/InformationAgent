@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -811,7 +812,17 @@ def test_agent_task_exposes_persistence_failure_without_masking_agent_error(
 ) -> None:
     database_path, run_id = _ingested_run(tmp_path)
 
-    def failing_runner(_: str, **__: object) -> AgentReport:
+    def failing_runner(
+        _: str,
+        *,
+        database_path: Path,
+        timeout_seconds: float,
+        max_steps: int,
+        max_attempts: int,
+        idempotency_key: str,
+        should_stop: Callable[[], bool],
+        on_progress: Callable[[dict[str, object]], None],
+    ) -> AgentReport:
         raise RuntimeError("Agent 执行失败")
 
     manager = AgentTaskManager(database_path, runner=failing_runner)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from math import inf, nan
@@ -200,10 +201,10 @@ def test_article_ask_api_reads_article_by_id_and_normalizes_question(tmp_path: P
 
     class RecordingAssistant:
         def __init__(self) -> None:
-            self.calls: list[tuple[str, str]] = []
+            self.calls: list[tuple[str, str, str]] = []
 
-        def answer(self, article, question: str) -> str:
-            self.calls.append((article.article.article_id, question))
+        def answer(self, article, question: str, *, request_id: str) -> str:
+            self.calls.append((article.article.article_id, question, request_id))
             return "基于文章的回答"
 
     assistant = RecordingAssistant()
@@ -227,7 +228,7 @@ def test_article_ask_api_reads_article_by_id_and_normalizes_question(tmp_path: P
         "created_at": response.json()["created_at"],
         "finished_at": response.json()["finished_at"],
     }
-    assert assistant.calls == [(article_id, "当前文章的核心是什么？")]
+    assert assistant.calls == [(article_id, "当前文章的核心是什么？", "api-answer-1")]
     assert (
         client.post(f"/api/articles/{article_id}/ask", json={"question": "  "}).status_code == 422
     )
@@ -338,10 +339,10 @@ def test_failed_article_answer_is_not_saved_and_can_retry_same_request_id(tmp_pa
 class _RecordingAssistantForAnswers:
     def __init__(self, answer: str) -> None:
         self.answer_text = answer
-        self.calls: list[str] = []
+        self.calls: list[tuple[str, str]] = []
 
-    def answer(self, _article, question: str) -> str:
-        self.calls.append(question)
+    def answer(self, _article, question: str, *, request_id: str) -> str:
+        self.calls.append((question, request_id))
         return self.answer_text
 
 
@@ -350,11 +351,11 @@ class _FailOnceAssistant(_RecordingAssistantForAnswers):
         super().__init__("重试成功")
         self.failed = False
 
-    def answer(self, article, question: str) -> str:
+    def answer(self, article, question: str, *, request_id: str) -> str:
         if not self.failed:
             self.failed = True
             raise ValueError("模拟模型输出错误")
-        return super().answer(article, question)
+        return super().answer(article, question, request_id=request_id)
 
 
 def test_feed_subscription_and_article_fetch(tmp_path: Path) -> None:
@@ -554,8 +555,29 @@ def test_research_agent_api_returns_agent_report(
 ) -> None:
     calls: list[dict[str, object]] = []
 
-    def fake_agent_run(run_id: str, **kwargs: object) -> AgentReport:
-        calls.append({"run_id": run_id, **kwargs})
+    def fake_agent_run(
+        run_id: str,
+        *,
+        database_path: Path,
+        timeout_seconds: float,
+        max_steps: int,
+        max_attempts: int,
+        idempotency_key: str,
+        should_stop: Callable[[], bool],
+        on_progress: Callable[[dict[str, object]], None],
+    ) -> AgentReport:
+        calls.append(
+            {
+                "run_id": run_id,
+                "database_path": database_path,
+                "timeout_seconds": timeout_seconds,
+                "max_steps": max_steps,
+                "max_attempts": max_attempts,
+                "idempotency_key": idempotency_key,
+                "should_stop": should_stop,
+                "on_progress": on_progress,
+            }
+        )
         report = AgentReport(
             run_id=run_id,
             topic="AI",
@@ -570,7 +592,7 @@ def test_research_agent_api_returns_agent_report(
             stop_reason=AgentStopReason.FINISHED,
             analysis_run_id="analysis-api",
         )
-        store = SQLiteCollectionStore(kwargs["database_path"])
+        store = SQLiteCollectionStore(database_path)
         analysis_run = store.load_latest_analysis_run(run_id)
         assert analysis_run is not None
         payload = agent_report_to_payload(report)
@@ -614,6 +636,9 @@ def test_research_agent_api_returns_agent_report(
     assert calls[0]["timeout_seconds"] == 30.0
     assert calls[0]["max_steps"] == 2
     assert calls[0]["max_attempts"] == 1
+    assert calls[0]["idempotency_key"] == "api-agent"
+    assert callable(calls[0]["should_stop"])
+    assert callable(calls[0]["on_progress"])
 
 
 def test_research_agent_api_restores_latest_persisted_report(tmp_path: Path) -> None:
@@ -676,7 +701,17 @@ def test_research_agent_api_rejects_domain_value_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def invalid_agent_run(*_: object, **__: object) -> AgentReport:
+    def invalid_agent_run(
+        _: str,
+        *,
+        database_path: Path,
+        timeout_seconds: float,
+        max_steps: int,
+        max_attempts: int,
+        idempotency_key: str,
+        should_stop: Callable[[], bool],
+        on_progress: Callable[[dict[str, object]], None],
+    ) -> AgentReport:
         raise ValueError("Agent 参数组合无效")
 
     api_app_module = importlib.import_module("information_agent.api.app")
