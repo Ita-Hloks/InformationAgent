@@ -22,7 +22,6 @@ from ..investigation import (
 )
 from ..normalization import NormalizedArticle
 from ..selection import SelectedEvidence
-from .analysis_schema import migrate_analysis_schema
 from .analysis_store import AnalysisPersistenceMixin
 from .common import (
     _format_datetime,
@@ -42,7 +41,6 @@ from .models import (
     ResearchRunNotFoundError,
     ResearchRunNotReadyError,
 )
-from .reader_answer_schema import migrate_reader_answer_schema
 from .reader_answers import ReaderAnswerPersistenceMixin
 from .run_listing import ResearchRunListingMixin
 
@@ -1302,16 +1300,14 @@ class SQLiteCollectionStore(
         connection.execute(
             """
             INSERT INTO article_snapshots (
-                id, article_id, content_hash, payload_json, normalizer_version,
-                collected_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                id, article_id, content_hash, payload_json, collected_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 snapshot_id,
                 article.article_id,
                 content_hash,
                 json.dumps(_article_payload(article), ensure_ascii=False, sort_keys=True),
-                1,
                 _format_datetime(article.collected_at),
                 created_at,
             ),
@@ -1380,21 +1376,9 @@ class SQLiteCollectionStore(
 
     @staticmethod
     def _migrate(connection: sqlite3.Connection) -> None:
-        connection.execute(
+        connection.executescript(
             """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL
-            )
-            """
-        )
-        applied_versions = {
-            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
-        }
-        if 1 not in applied_versions:
-            connection.executescript(
-                """
-            CREATE TABLE research_runs (
+            CREATE TABLE IF NOT EXISTS research_runs (
                 id TEXT PRIMARY KEY,
                 topic TEXT NOT NULL,
                 feeds_json TEXT NOT NULL,
@@ -1406,24 +1390,23 @@ class SQLiteCollectionStore(
                 errors_json TEXT NOT NULL
             );
 
-            CREATE TABLE articles (
+            CREATE TABLE IF NOT EXISTS articles (
                 id TEXT PRIMARY KEY,
                 source_url TEXT NOT NULL UNIQUE,
                 created_at TEXT NOT NULL
             );
 
-            CREATE TABLE article_snapshots (
+            CREATE TABLE IF NOT EXISTS article_snapshots (
                 id TEXT PRIMARY KEY,
                 article_id TEXT NOT NULL REFERENCES articles(id),
                 content_hash TEXT NOT NULL,
                 payload_json TEXT NOT NULL,
-                normalizer_version INTEGER NOT NULL,
                 collected_at TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 UNIQUE(article_id, content_hash)
             );
 
-            CREATE TABLE run_evidence (
+            CREATE TABLE IF NOT EXISTS run_evidence (
                 run_id TEXT NOT NULL REFERENCES research_runs(id),
                 snapshot_id TEXT NOT NULL REFERENCES article_snapshots(id),
                 evidence_no INTEGER,
@@ -1431,574 +1414,311 @@ class SQLiteCollectionStore(
                 PRIMARY KEY (run_id, snapshot_id),
                 UNIQUE (run_id, evidence_no)
             );
-            """
-            )
-            connection.execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                (1, _format_datetime(project_now())),
-            )
-        if 2 not in applied_versions:
-            connection.executescript(
-                """
-                CREATE TABLE feeds (
-                    id TEXT PRIMARY KEY,
-                    feed_url TEXT NOT NULL UNIQUE,
-                    etag TEXT,
-                    last_modified TEXT,
-                    last_success_at TEXT
-                );
 
-                CREATE TABLE feed_entries (
-                    feed_id TEXT NOT NULL REFERENCES feeds(id),
-                    entry_key TEXT NOT NULL,
-                    article_url TEXT NOT NULL,
-                    article_id TEXT REFERENCES articles(id),
-                    updated_marker TEXT,
-                    first_seen_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL,
-                    PRIMARY KEY (feed_id, entry_key)
-                );
-                """
-            )
-            connection.execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                (2, _format_datetime(project_now())),
-            )
-        if 3 not in applied_versions:
-            connection.executescript(
-                """
-                CREATE TABLE planning_runs (
-                    id TEXT PRIMARY KEY,
-                    run_id TEXT NOT NULL REFERENCES research_runs(id),
-                    status TEXT NOT NULL CHECK (status IN ('started', 'completed', 'failed')),
-                    raw_response TEXT,
-                    errors_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    finished_at TEXT,
-                    UNIQUE (id, run_id)
-                );
+            CREATE TABLE IF NOT EXISTS feeds (
+                id TEXT PRIMARY KEY,
+                feed_url TEXT NOT NULL UNIQUE,
+                etag TEXT,
+                last_modified TEXT,
+                last_success_at TEXT
+            );
 
-                CREATE TABLE search_plans (
-                    id TEXT PRIMARY KEY,
-                    planning_run_id TEXT NOT NULL,
-                    run_id TEXT NOT NULL,
-                    snapshot_id TEXT NOT NULL,
-                    evidence_no INTEGER NOT NULL,
-                    trigger_quote TEXT NOT NULL,
-                    question TEXT NOT NULL,
-                    kind TEXT NOT NULL,
-                    priority INTEGER NOT NULL,
-                    FOREIGN KEY (planning_run_id, run_id)
-                        REFERENCES planning_runs(id, run_id),
-                    FOREIGN KEY (run_id, snapshot_id)
-                        REFERENCES run_evidence(run_id, snapshot_id)
-                );
+            CREATE TABLE IF NOT EXISTS feed_entries (
+                feed_id TEXT NOT NULL REFERENCES feeds(id),
+                entry_key TEXT NOT NULL,
+                article_url TEXT NOT NULL,
+                article_id TEXT REFERENCES articles(id),
+                updated_marker TEXT,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                PRIMARY KEY (feed_id, entry_key)
+            );
 
-                CREATE TABLE search_queries (
-                    plan_id TEXT NOT NULL REFERENCES search_plans(id),
-                    position INTEGER NOT NULL,
-                    query TEXT NOT NULL,
-                    purpose TEXT NOT NULL,
-                    PRIMARY KEY (plan_id, position)
-                );
+            CREATE TABLE IF NOT EXISTS planning_runs (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL REFERENCES research_runs(id),
+                status TEXT NOT NULL CHECK (status IN ('started', 'completed', 'failed')),
+                raw_response TEXT,
+                errors_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                finished_at TEXT,
+                UNIQUE (id, run_id)
+            );
 
-                CREATE INDEX planning_runs_run_id_idx ON planning_runs(run_id);
-                CREATE INDEX search_plans_planning_run_id_idx
-                    ON search_plans(planning_run_id);
-                """
-            )
-            connection.execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                (3, _format_datetime(project_now())),
-            )
-        migrate_analysis_schema(connection)
-        migrate_reader_answer_schema(connection)
-        applied_versions = {
-            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
-        }
-        feed_tables_exist = (
-            connection.execute(
-                """
-            SELECT COUNT(*) FROM sqlite_master
-            WHERE type = 'table' AND name IN ('feeds', 'feed_entries')
-            """
-            ).fetchone()[0]
-            == 2
-        )
-        if 6 not in applied_versions and feed_tables_exist:
-            connection.executescript(
-                """
-                CREATE TABLE feed_subscriptions (
-                    feed_id TEXT PRIMARY KEY REFERENCES feeds(id) ON DELETE CASCADE,
-                    title TEXT NOT NULL,
-                    site_url TEXT,
-                    subscribed_at TEXT NOT NULL,
-                    last_refreshed_at TEXT,
-                    last_error TEXT
-                );
+            CREATE TABLE IF NOT EXISTS search_plans (
+                id TEXT PRIMARY KEY,
+                planning_run_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                snapshot_id TEXT NOT NULL,
+                evidence_no INTEGER NOT NULL,
+                trigger_quote TEXT NOT NULL,
+                question TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                priority INTEGER NOT NULL,
+                FOREIGN KEY (planning_run_id, run_id)
+                    REFERENCES planning_runs(id, run_id),
+                FOREIGN KEY (run_id, snapshot_id)
+                    REFERENCES run_evidence(run_id, snapshot_id)
+            );
 
-                CREATE INDEX feed_entries_article_id_idx ON feed_entries(article_id);
-                """
-            )
-            connection.execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                (6, _format_datetime(project_now())),
-            )
-        applied_versions = {
-            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
-        }
-        if 7 not in applied_versions and feed_tables_exist:
-            connection.executescript(
-                """
-                CREATE TABLE reader_article_states (
-                    article_id TEXT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
-                    is_read INTEGER NOT NULL DEFAULT 0 CHECK (is_read IN (0, 1)),
-                    is_saved INTEGER NOT NULL DEFAULT 0 CHECK (is_saved IN (0, 1)),
-                    read_at TEXT,
-                    saved_at TEXT,
-                    updated_at TEXT NOT NULL
-                );
+            CREATE TABLE IF NOT EXISTS search_queries (
+                plan_id TEXT NOT NULL REFERENCES search_plans(id),
+                position INTEGER NOT NULL,
+                query TEXT NOT NULL,
+                purpose TEXT NOT NULL,
+                PRIMARY KEY (plan_id, position)
+            );
 
-                CREATE INDEX reader_article_states_updated_at_idx
-                    ON reader_article_states(updated_at);
-                """
-            )
-            connection.execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                (7, _format_datetime(project_now())),
-            )
-        applied_versions = {
-            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
-        }
-        planning_tables_exist = (
-            connection.execute(
-                """
-                SELECT COUNT(*) FROM sqlite_master
-                WHERE type = 'table' AND name IN ('planning_runs', 'run_evidence')
-                """
-            ).fetchone()[0]
-            == 2
-        )
-        if 8 not in applied_versions and planning_tables_exist:
-            connection.executescript(
-                """
-                CREATE TABLE opinion_plans (
-                    id TEXT PRIMARY KEY,
-                    planning_run_id TEXT NOT NULL,
-                    run_id TEXT NOT NULL,
-                    snapshot_id TEXT NOT NULL,
-                    evidence_no INTEGER NOT NULL,
-                    trigger_quote TEXT NOT NULL,
-                    question TEXT NOT NULL,
-                    platform TEXT NOT NULL CHECK (platform = 'bilibili'),
-                    window_hours INTEGER NOT NULL CHECK (window_hours = 72),
-                    UNIQUE (planning_run_id, evidence_no),
-                    FOREIGN KEY (planning_run_id, run_id)
-                        REFERENCES planning_runs(id, run_id),
-                    FOREIGN KEY (run_id, snapshot_id)
-                        REFERENCES run_evidence(run_id, snapshot_id)
-                );
-
-                CREATE TABLE opinion_queries (
-                    plan_id TEXT NOT NULL REFERENCES opinion_plans(id),
-                    position INTEGER NOT NULL,
-                    query TEXT NOT NULL,
-                    purpose TEXT NOT NULL,
-                    PRIMARY KEY (plan_id, position)
-                );
-
-                CREATE INDEX opinion_plans_planning_run_id_idx
-                    ON opinion_plans(planning_run_id);
-                """
-            )
-            connection.execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                (8, _format_datetime(project_now())),
-            )
-        applied_versions = {
-            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
-        }
-        article_tables_exist = (
-            connection.execute(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'articles'"
-            ).fetchone()[0]
-            == 1
-        )
-        if 9 not in applied_versions and article_tables_exist:
-            connection.executescript(
-                """
-                CREATE TABLE opinion_runs (
-                    id TEXT PRIMARY KEY,
-                    article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-                    platform TEXT NOT NULL CHECK (platform = 'bilibili'),
-                    window_hours INTEGER NOT NULL CHECK (window_hours = 72),
-                    status TEXT NOT NULL CHECK (
-                        status IN ('running', 'completed', 'partial', 'failed')
-                    ),
-                    created_at TEXT NOT NULL,
-                    started_at TEXT NOT NULL,
-                    finished_at TEXT,
-                    errors_json TEXT NOT NULL,
-                    result_json TEXT
-                );
-
-                CREATE TABLE opinion_comments (
-                    run_id TEXT NOT NULL REFERENCES opinion_runs(id) ON DELETE CASCADE,
-                    comment_id TEXT NOT NULL,
-                    source_url TEXT NOT NULL,
-                    author TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    likes INTEGER NOT NULL CHECK (likes >= 0),
-                    published_at TEXT,
-                    payload_json TEXT NOT NULL,
-                    PRIMARY KEY (run_id, comment_id)
-                );
-
-                CREATE INDEX opinion_runs_article_id_idx
-                    ON opinion_runs(article_id, created_at);
-                CREATE INDEX opinion_comments_run_id_idx
-                    ON opinion_comments(run_id, published_at);
-                """
-            )
-            connection.execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                (9, _format_datetime(project_now())),
-            )
-        applied_versions = {
-            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
-        }
-        opinion_table_exists = (
-            connection.execute(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'opinion_runs'"
-            ).fetchone()[0]
-            == 1
-        )
-        if 10 not in applied_versions and opinion_table_exists:
-            connection.executescript(
-                """
-                ALTER TABLE opinion_runs ADD COLUMN last_heartbeat_at TEXT;
-                ALTER TABLE opinion_runs ADD COLUMN timeout_seconds REAL NOT NULL DEFAULT 300.0;
-                UPDATE opinion_runs
-                SET last_heartbeat_at = COALESCE(last_heartbeat_at, started_at, created_at);
-                """
-            )
-            duplicate_groups = connection.execute(
-                """
-                SELECT article_id, platform, window_hours
-                FROM opinion_runs
-                WHERE status = 'running'
-                GROUP BY article_id, platform, window_hours
-                HAVING COUNT(*) > 1
-                """
-            ).fetchall()
-            for group in duplicate_groups:
-                rows = connection.execute(
-                    """
-                    SELECT * FROM opinion_runs
-                    WHERE article_id = ? AND platform = ? AND window_hours = ?
-                      AND status = 'running'
-                    ORDER BY created_at DESC, id DESC
-                    """,
-                    (group["article_id"], group["platform"], group["window_hours"]),
-                ).fetchall()
-                for row in rows[1:]:
-                    _mark_stale_opinion_run(connection, row, project_now())
-            connection.execute(
-                """
-                CREATE UNIQUE INDEX opinion_runs_active_target_idx
-                    ON opinion_runs(article_id, platform, window_hours)
-                    WHERE status = 'running'
-                """
-            )
-            connection.execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                (10, _format_datetime(project_now())),
-            )
-        applied_versions = {
-            row[0] for row in connection.execute("SELECT version FROM schema_migrations")
-        }
-        if 11 not in applied_versions and opinion_table_exists:
-            opinion_columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(opinion_runs)").fetchall()
-            }
-            opinion_column_definitions = {
-                "article_snapshot_id": "TEXT",
-                "content_hash": "TEXT",
-                "requested_limit": "INTEGER",
-                "collected_count": "INTEGER NOT NULL DEFAULT 0",
-                "analyzed_count": "INTEGER NOT NULL DEFAULT 0",
-                "classification_total": "INTEGER NOT NULL DEFAULT 0",
-                "classified_count": "INTEGER NOT NULL DEFAULT 0",
-                "unclassified_count": "INTEGER NOT NULL DEFAULT 0",
-                "status_reason": "TEXT NOT NULL DEFAULT 'failed'",
-            }
-            for column, definition in opinion_column_definitions.items():
-                if column not in opinion_columns:
-                    connection.execute(f"ALTER TABLE opinion_runs ADD COLUMN {column} {definition}")
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS opinion_comments (
-                    run_id TEXT NOT NULL REFERENCES opinion_runs(id) ON DELETE CASCADE,
-                    comment_id TEXT NOT NULL,
-                    source_url TEXT NOT NULL,
-                    author TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    likes INTEGER NOT NULL CHECK (likes >= 0),
-                    published_at TEXT,
-                    payload_json TEXT NOT NULL,
-                    PRIMARY KEY (run_id, comment_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS opinion_classifications (
-                    run_id TEXT NOT NULL REFERENCES opinion_runs(id) ON DELETE CASCADE,
-                    evidence_id INTEGER NOT NULL CHECK (evidence_id > 0),
-                    comment_id TEXT NOT NULL,
-                    classification_status TEXT NOT NULL CHECK (
-                        classification_status IN ('classified', 'unclassified')
-                    ),
-                    stance TEXT CHECK (
-                        stance IS NULL OR stance IN ('support', 'oppose', 'mixed', 'unclear')
-                    ),
-                    error_code TEXT,
-                    PRIMARY KEY (run_id, evidence_id, comment_id),
-                    FOREIGN KEY (run_id, comment_id)
-                        REFERENCES opinion_comments(run_id, comment_id),
-                    CHECK (
-                        (classification_status = 'classified'
-                         AND stance IS NOT NULL AND error_code IS NULL)
-                        OR
-                        (classification_status = 'unclassified'
-                         AND stance IS NULL AND error_code IS NOT NULL)
+            CREATE TABLE IF NOT EXISTS analysis_runs (
+                id TEXT PRIMARY KEY,
+                research_run_id TEXT NOT NULL REFERENCES research_runs(id),
+                analysis_type TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'created', 'running', 'paused', 'interrupted',
+                        'completed', 'partial', 'skipped', 'failed', 'cancelled'
                     )
+                ),
+                current_step_key TEXT,
+                config_json TEXT NOT NULL,
+                idempotency_key TEXT UNIQUE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                errors_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS analysis_steps (
+                id TEXT PRIMARY KEY,
+                analysis_run_id TEXT NOT NULL REFERENCES analysis_runs(id),
+                position INTEGER NOT NULL CHECK (position > 0),
+                step_key TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'pending', 'running', 'succeeded', 'failed',
+                        'interrupted', 'skipped', 'cancelled'
+                    )
+                ),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                error_json TEXT,
+                UNIQUE (analysis_run_id, position),
+                UNIQUE (analysis_run_id, step_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS analysis_attempts (
+                id TEXT PRIMARY KEY,
+                analysis_step_id TEXT NOT NULL REFERENCES analysis_steps(id),
+                attempt_no INTEGER NOT NULL CHECK (attempt_no > 0),
+                operation TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                request_hash TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN ('started', 'succeeded', 'failed', 'interrupted', 'cancelled')
+                ),
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                error_json TEXT,
+                UNIQUE (analysis_step_id, attempt_no),
+                UNIQUE (analysis_step_id, idempotency_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS analysis_artifacts (
+                id TEXT PRIMARY KEY,
+                analysis_run_id TEXT NOT NULL REFERENCES analysis_runs(id),
+                artifact_key TEXT NOT NULL,
+                step_id TEXT REFERENCES analysis_steps(id),
+                attempt_id TEXT REFERENCES analysis_attempts(id),
+                kind TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (analysis_run_id, artifact_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS feed_subscriptions (
+                feed_id TEXT PRIMARY KEY REFERENCES feeds(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                site_url TEXT,
+                subscribed_at TEXT NOT NULL,
+                last_refreshed_at TEXT,
+                last_error TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS reader_article_states (
+                article_id TEXT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+                is_read INTEGER NOT NULL DEFAULT 0 CHECK (is_read IN (0, 1)),
+                is_saved INTEGER NOT NULL DEFAULT 0 CHECK (is_saved IN (0, 1)),
+                read_at TEXT,
+                saved_at TEXT,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS opinion_plans (
+                id TEXT PRIMARY KEY,
+                planning_run_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                snapshot_id TEXT NOT NULL,
+                evidence_no INTEGER NOT NULL,
+                trigger_quote TEXT NOT NULL,
+                question TEXT NOT NULL,
+                platform TEXT NOT NULL CHECK (platform = 'bilibili'),
+                window_hours INTEGER NOT NULL CHECK (window_hours = 72),
+                UNIQUE (planning_run_id, evidence_no),
+                FOREIGN KEY (planning_run_id, run_id)
+                    REFERENCES planning_runs(id, run_id),
+                FOREIGN KEY (run_id, snapshot_id)
+                    REFERENCES run_evidence(run_id, snapshot_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS opinion_queries (
+                plan_id TEXT NOT NULL REFERENCES opinion_plans(id),
+                position INTEGER NOT NULL,
+                query TEXT NOT NULL,
+                purpose TEXT NOT NULL,
+                PRIMARY KEY (plan_id, position)
+            );
+
+            CREATE TABLE IF NOT EXISTS opinion_runs (
+                id TEXT PRIMARY KEY,
+                article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                platform TEXT NOT NULL CHECK (platform = 'bilibili'),
+                window_hours INTEGER NOT NULL CHECK (window_hours = 72),
+                status TEXT NOT NULL CHECK (
+                    status IN ('running', 'completed', 'partial', 'failed')
+                ),
+                created_at TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                last_heartbeat_at TEXT,
+                timeout_seconds REAL NOT NULL DEFAULT 300.0,
+                article_snapshot_id TEXT,
+                content_hash TEXT,
+                requested_limit INTEGER,
+                collected_count INTEGER NOT NULL DEFAULT 0,
+                analyzed_count INTEGER NOT NULL DEFAULT 0,
+                classification_total INTEGER NOT NULL DEFAULT 0,
+                classified_count INTEGER NOT NULL DEFAULT 0,
+                unclassified_count INTEGER NOT NULL DEFAULT 0,
+                status_reason TEXT NOT NULL DEFAULT 'failed',
+                errors_json TEXT NOT NULL,
+                result_json TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS opinion_comments (
+                run_id TEXT NOT NULL REFERENCES opinion_runs(id) ON DELETE CASCADE,
+                comment_id TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                author TEXT NOT NULL,
+                content TEXT NOT NULL,
+                likes INTEGER NOT NULL CHECK (likes >= 0),
+                published_at TEXT,
+                payload_json TEXT NOT NULL,
+                PRIMARY KEY (run_id, comment_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS opinion_classifications (
+                run_id TEXT NOT NULL REFERENCES opinion_runs(id) ON DELETE CASCADE,
+                evidence_id INTEGER NOT NULL CHECK (evidence_id > 0),
+                comment_id TEXT NOT NULL,
+                classification_status TEXT NOT NULL CHECK (
+                    classification_status IN ('classified', 'unclassified')
+                ),
+                stance TEXT CHECK (
+                    stance IS NULL OR stance IN ('support', 'oppose', 'mixed', 'unclear')
+                ),
+                error_code TEXT,
+                PRIMARY KEY (run_id, evidence_id, comment_id),
+                FOREIGN KEY (run_id, comment_id)
+                    REFERENCES opinion_comments(run_id, comment_id),
+                CHECK (
+                    (classification_status = 'classified'
+                     AND stance IS NOT NULL AND error_code IS NULL)
+                    OR
+                    (classification_status = 'unclassified'
+                     AND stance IS NULL AND error_code IS NOT NULL)
+                )
+            );
+
+            CREATE TABLE IF NOT EXISTS opinion_attempts (
+                run_id TEXT NOT NULL REFERENCES opinion_runs(id) ON DELETE CASCADE,
+                stage TEXT NOT NULL CHECK (
+                    stage IN (
+                        'opinion_planning', 'aid_resolution', 'comment_collection',
+                        'opinion_analysis', 'classification'
+                    )
+                ),
+                attempt_no INTEGER NOT NULL CHECK (attempt_no > 0),
+                started_at TEXT NOT NULL,
+                finished_at TEXT NOT NULL,
+                outcome TEXT NOT NULL CHECK (
+                    outcome IN ('succeeded', 'failed', 'timed_out', 'skipped')
+                ),
+                error_code TEXT,
+                error_summary TEXT,
+                PRIMARY KEY (run_id, stage, attempt_no)
+            );
+
+            CREATE TABLE IF NOT EXISTS article_answer_requests (
+                request_id TEXT PRIMARY KEY,
+                article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                snapshot_id TEXT NOT NULL REFERENCES article_snapshots(id) ON DELETE CASCADE,
+                content_hash TEXT NOT NULL,
+                question TEXT NOT NULL,
+                answer TEXT,
+                status TEXT NOT NULL CHECK (status IN ('running', 'completed')),
+                created_at TEXT NOT NULL,
+                finished_at TEXT,
+                CHECK (
+                    (status = 'running' AND answer IS NULL AND finished_at IS NULL)
+                    OR
+                    (status = 'completed' AND answer IS NOT NULL AND finished_at IS NOT NULL)
+                )
+            );
+
+            CREATE INDEX IF NOT EXISTS planning_runs_run_id_idx
+                ON planning_runs(run_id);
+            CREATE INDEX IF NOT EXISTS search_plans_planning_run_id_idx
+                ON search_plans(planning_run_id);
+            CREATE INDEX IF NOT EXISTS analysis_runs_research_run_id_idx
+                ON analysis_runs(research_run_id);
+            CREATE INDEX IF NOT EXISTS analysis_steps_run_id_idx
+                ON analysis_steps(analysis_run_id, position);
+            CREATE INDEX IF NOT EXISTS analysis_attempts_step_id_idx
+                ON analysis_attempts(analysis_step_id, attempt_no);
+            CREATE INDEX IF NOT EXISTS analysis_artifacts_run_id_idx
+                ON analysis_artifacts(analysis_run_id, created_at);
+            CREATE INDEX IF NOT EXISTS feed_entries_article_id_idx
+                ON feed_entries(article_id);
+            CREATE INDEX IF NOT EXISTS reader_article_states_updated_at_idx
+                ON reader_article_states(updated_at);
+            CREATE INDEX IF NOT EXISTS opinion_plans_planning_run_id_idx
+                ON opinion_plans(planning_run_id);
+            CREATE INDEX IF NOT EXISTS opinion_runs_article_id_idx
+                ON opinion_runs(article_id, created_at);
+            CREATE INDEX IF NOT EXISTS opinion_comments_run_id_idx
+                ON opinion_comments(run_id, published_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS opinion_runs_active_target_idx
+                ON opinion_runs(article_id, platform, window_hours)
+                WHERE status = 'running';
+            CREATE INDEX IF NOT EXISTS opinion_runs_identity_idx
+                ON opinion_runs(
+                    article_id, article_snapshot_id, content_hash,
+                    platform, window_hours, requested_limit, created_at
                 );
-
-                CREATE TABLE IF NOT EXISTS opinion_attempts (
-                    run_id TEXT NOT NULL REFERENCES opinion_runs(id) ON DELETE CASCADE,
-                    stage TEXT NOT NULL CHECK (
-                        stage IN (
-                            'opinion_planning', 'aid_resolution', 'comment_collection',
-                            'opinion_analysis', 'classification'
-                        )
-                    ),
-                    attempt_no INTEGER NOT NULL CHECK (attempt_no > 0),
-                    started_at TEXT NOT NULL,
-                    finished_at TEXT NOT NULL,
-                    outcome TEXT NOT NULL CHECK (
-                        outcome IN ('succeeded', 'failed', 'timed_out', 'skipped')
-                    ),
-                    error_code TEXT,
-                    error_summary TEXT,
-                    PRIMARY KEY (run_id, stage, attempt_no)
-                );
-
-                CREATE INDEX IF NOT EXISTS opinion_runs_identity_idx
-                    ON opinion_runs(
-                        article_id, article_snapshot_id, content_hash,
-                        platform, window_hours, requested_limit, created_at
-                    );
-                CREATE INDEX IF NOT EXISTS opinion_classifications_run_id_idx
-                    ON opinion_classifications(run_id, evidence_id, comment_id);
-                CREATE INDEX IF NOT EXISTS opinion_attempts_run_id_idx
-                    ON opinion_attempts(run_id, stage, attempt_no);
-                """
-            )
-
-            legacy_runs = connection.execute(
-                "SELECT * FROM opinion_runs ORDER BY created_at, id"
-            ).fetchall()
-            for run in legacy_runs:
-                payload = {}
-                if run["result_json"] is not None:
-                    try:
-                        candidate = json.loads(run["result_json"])
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        candidate = None
-                    if isinstance(candidate, dict):
-                        payload = candidate
-
-                raw_comments = payload.get("comments", [])
-                try:
-                    legacy_comments = _opinion_comment_rows(raw_comments)
-                except ValueError:
-                    legacy_comments = []
-                existing_comment_ids = {
-                    str(item[0])
-                    for item in connection.execute(
-                        "SELECT comment_id FROM opinion_comments WHERE run_id = ?",
-                        (run["id"],),
-                    ).fetchall()
-                }
-                for comment in legacy_comments:
-                    if comment["comment_id"] in existing_comment_ids:
-                        continue
-                    try:
-                        connection.execute(
-                            """
-                            INSERT INTO opinion_comments (
-                                run_id, comment_id, source_url, author, content,
-                                likes, published_at, payload_json
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                run["id"],
-                                comment["comment_id"],
-                                comment["source_url"],
-                                comment["author"],
-                                comment["content"],
-                                comment["likes"],
-                                comment["published_at"],
-                                json.dumps(comment, ensure_ascii=False, sort_keys=True),
-                            ),
-                        )
-                    except sqlite3.IntegrityError:
-                        continue
-
-                raw_classifications = payload.get("classifications", [])
-                if isinstance(raw_classifications, list):
-                    for item in raw_classifications:
-                        if not isinstance(item, dict):
-                            continue
-                        legacy_item = dict(item)
-                        legacy_item.setdefault("run_id", str(run["id"]))
-                        try:
-                            classifications = _opinion_classification_rows(
-                                [legacy_item], run_id=str(run["id"])
-                            )
-                        except ValueError:
-                            continue
-                        comment_exists = connection.execute(
-                            """
-                            SELECT 1 FROM opinion_comments
-                            WHERE run_id = ? AND comment_id = ?
-                            """,
-                            (run["id"], classifications[0]["comment_id"]),
-                        ).fetchone()
-                        if comment_exists is None:
-                            continue
-                        connection.execute(
-                            """
-                            INSERT OR IGNORE INTO opinion_classifications (
-                                run_id, evidence_id, comment_id, classification_status,
-                                stance, error_code
-                            ) VALUES (?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                run["id"],
-                                classifications[0]["evidence_id"],
-                                classifications[0]["comment_id"],
-                                classifications[0]["classification_status"],
-                                classifications[0]["stance"],
-                                classifications[0]["error_code"],
-                            ),
-                        )
-
-                raw_attempts = payload.get("attempts", [])
-                if isinstance(raw_attempts, list):
-                    for item in raw_attempts:
-                        if not isinstance(item, dict):
-                            continue
-                        try:
-                            attempt = _opinion_attempt_rows([item])[0]
-                        except ValueError:
-                            continue
-                        connection.execute(
-                            """
-                            INSERT OR IGNORE INTO opinion_attempts (
-                                run_id, stage, attempt_no, started_at, finished_at,
-                                outcome, error_code, error_summary
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                run["id"],
-                                attempt["stage"],
-                                attempt["attempt"],
-                                attempt["started_at"],
-                                attempt["finished_at"],
-                                attempt["outcome"],
-                                attempt["error_code"],
-                                attempt["error_summary"],
-                            ),
-                        )
-
-                stored_comment_count = connection.execute(
-                    "SELECT COUNT(*) FROM opinion_comments WHERE run_id = ?",
-                    (run["id"],),
-                ).fetchone()[0]
-                stored_classifications = connection.execute(
-                    """
-                    SELECT classification_status, COUNT(*) AS count
-                    FROM opinion_classifications
-                    WHERE run_id = ?
-                    GROUP BY classification_status
-                    """,
-                    (run["id"],),
-                ).fetchall()
-                classification_counts = {
-                    str(item["classification_status"]): int(item["count"])
-                    for item in stored_classifications
-                }
-                requested_limit = _opinion_optional_limit(
-                    payload.get("requested_limit", run["requested_limit"])
-                )
-                analyzed_count = payload.get("analyzed_count", run["analyzed_count"])
-                if type(analyzed_count) is not int or analyzed_count < 0:
-                    analyzed_count = 0
-                if analyzed_count > stored_comment_count:
-                    analyzed_count = stored_comment_count
-                status = str(run["status"])
-                status_reason = str(payload.get("status_reason") or "")
-                if status_reason not in _OPINION_STATUS_REASONS.get(status, set()):
-                    status_reason = _default_opinion_status_reason(status)
-                snapshot_id = _optional_text(
-                    payload.get("article_snapshot_id", run["article_snapshot_id"])
-                )
-                content_hash = _optional_text(payload.get("content_hash", run["content_hash"]))
-                if (snapshot_id is None) != (content_hash is None):
-                    snapshot_id = None
-                    content_hash = None
-                payload.update(
-                    {
-                        "article_snapshot_id": snapshot_id,
-                        "content_hash": content_hash,
-                        "requested_limit": requested_limit,
-                        "collected_count": int(stored_comment_count),
-                        "analyzed_count": analyzed_count,
-                        "classification_total": sum(classification_counts.values()),
-                        "classified_count": classification_counts.get("classified", 0),
-                        "unclassified_count": classification_counts.get("unclassified", 0),
-                        "status": status,
-                        "status_reason": status_reason,
-                    }
-                )
-                connection.execute(
-                    """
-                    UPDATE opinion_runs
-                    SET article_snapshot_id = ?, content_hash = ?, requested_limit = ?,
-                        collected_count = ?, analyzed_count = ?, classification_total = ?,
-                        classified_count = ?, unclassified_count = ?, status_reason = ?,
-                        result_json = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        snapshot_id,
-                        content_hash,
-                        requested_limit,
-                        int(stored_comment_count),
-                        analyzed_count,
-                        sum(classification_counts.values()),
-                        classification_counts.get("classified", 0),
-                        classification_counts.get("unclassified", 0),
-                        status_reason,
-                        json.dumps(payload, ensure_ascii=False, sort_keys=True)
-                        if payload
-                        else run["result_json"],
-                        run["id"],
-                    ),
-                )
-            connection.execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                (11, _format_datetime(project_now())),
-            )
+            CREATE INDEX IF NOT EXISTS opinion_classifications_run_id_idx
+                ON opinion_classifications(run_id, evidence_id, comment_id);
+            CREATE INDEX IF NOT EXISTS opinion_attempts_run_id_idx
+                ON opinion_attempts(run_id, stage, attempt_no);
+            CREATE INDEX IF NOT EXISTS article_answer_requests_article_idx
+                ON article_answer_requests(article_id, snapshot_id, status, created_at);
+            """
+        )
 
 
 def _article_payload(article: NormalizedArticle) -> dict[str, object]:
