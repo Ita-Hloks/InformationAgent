@@ -42,6 +42,7 @@ class ReaderService:
         if not math.isfinite(feed_timeout_seconds) or feed_timeout_seconds <= 0:
             raise ValueError("feed_timeout_seconds must be a finite positive number")
         self.store = SQLiteCollectionStore(database_path or default_database_path())
+        self.store.recover_running_article_answers()
         self.feed_timeout_seconds = feed_timeout_seconds
         self.fetcher = fetcher
 

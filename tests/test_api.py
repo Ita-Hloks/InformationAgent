@@ -255,6 +255,55 @@ def test_article_answers_survive_reader_restart_and_reuse_request_id(tmp_path: P
     assert [item["request_id"] for item in history.json()["answers"]] == ["restart-answer-1"]
 
 
+def test_reader_restart_recovers_running_article_answers_and_allows_retry(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "api.db"
+    service = ReaderService(database_path, fetcher=_fetcher)
+    service.subscribe("https://example.com/rss.xml")
+    article = service.list_articles()[0]
+    request_ids = ("recovery-answer-1", "recovery-answer-2")
+
+    for request_id in request_ids:
+        claim = service.store.claim_article_answer(
+            article,
+            request_id=request_id,
+            question="文章的核心是什么？",
+        )
+        assert claim.owner is True
+        assert claim.record.status == "running"
+
+    restarted = ReaderService(database_path, fetcher=_fetcher)
+    client = TestClient(
+        create_app(
+            restarted,
+            article_assistant=_RecordingAssistantForAnswers("重启后回答"),
+        )
+    )
+
+    for request_id in request_ids:
+        assert (
+            client.get(f"/api/articles/{article.article.article_id}/ask/{request_id}").status_code
+            == 404
+        )
+        assert restarted.store.get_article_answer(request_id) is None
+
+    retried = client.post(
+        f"/api/articles/{article.article.article_id}/ask",
+        json={"question": "文章的核心是什么？", "request_id": request_ids[0]},
+    )
+    assert retried.status_code == 200
+    assert retried.json()["status"] == "completed"
+    assert retried.json()["answer"] == "重启后回答"
+
+    repeated = client.post(
+        f"/api/articles/{article.article.article_id}/ask",
+        json={"question": "文章的核心是什么？", "request_id": request_ids[0]},
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["answer"] == "重启后回答"
+
+
 def test_failed_article_answer_is_not_saved_and_can_retry_same_request_id(tmp_path: Path) -> None:
     service = ReaderService(tmp_path / "api.db", fetcher=_fetcher)
     service.subscribe("https://example.com/rss.xml")
