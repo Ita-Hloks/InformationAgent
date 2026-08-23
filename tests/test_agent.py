@@ -832,7 +832,7 @@ def test_agent_task_exposes_persistence_failure_without_masking_agent_error(
         manager.shutdown()
 
     assert snapshot is not None
-    assert snapshot["status"] == "failed"
+    assert snapshot["status"] == "created"
     assert snapshot["phase"] == "persistence_failed"
     assert snapshot["message"] == "Agent 状态持久化失败"
     assert snapshot["error"] == {

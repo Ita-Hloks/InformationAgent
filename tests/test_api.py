@@ -23,6 +23,7 @@ from information_agent.reader import (
     ArticleNotFoundError,
     ReaderService,
 )
+from information_agent.serialization import agent_report_to_payload
 from information_agent.storage import (
     AnalysisRunStatus,
     PersistedCollection,
@@ -555,7 +556,7 @@ def test_research_agent_api_returns_agent_report(
 
     def fake_agent_run(run_id: str, **kwargs: object) -> AgentReport:
         calls.append({"run_id": run_id, **kwargs})
-        return AgentReport(
+        report = AgentReport(
             run_id=run_id,
             topic="AI",
             status=RunStatus.COMPLETED,
@@ -569,6 +570,18 @@ def test_research_agent_api_returns_agent_report(
             stop_reason=AgentStopReason.FINISHED,
             analysis_run_id="analysis-api",
         )
+        store = SQLiteCollectionStore(kwargs["database_path"])
+        analysis_run = store.load_latest_analysis_run(run_id)
+        assert analysis_run is not None
+        payload = agent_report_to_payload(report)
+        store.record_analysis_artifact(
+            analysis_run.id,
+            "agent_report",
+            payload,
+            artifact_key="finalize:attempt-1:result",
+        )
+        store.set_analysis_run_status(analysis_run.id, AnalysisRunStatus.COMPLETED)
+        return replace(report, analysis_run_id=analysis_run.id)
 
     api_app_module = importlib.import_module("information_agent.api.app")
     monkeypatch.setattr(api_app_module, "agent_run", fake_agent_run)

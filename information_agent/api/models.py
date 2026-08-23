@@ -231,6 +231,30 @@ class AgentStopRequest(BaseModel):
         return normalized
 
 
+class AgentAttemptDetailResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_no: int
+    operation: str
+    status: Literal["started", "succeeded", "failed", "interrupted", "cancelled"]
+    error: dict[str, Any] | None
+    retryable: bool
+
+
+class AgentStageDetailResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    step_key: str
+    status: Literal[
+        "pending", "running", "succeeded", "failed", "interrupted", "skipped", "cancelled"
+    ]
+    attempts: list[AgentAttemptDetailResponse]
+    attempt: int
+    max_attempts: int
+    error: dict[str, Any] | None
+    retryable: bool
+
+
 class AgentTaskSnapshotResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -238,20 +262,23 @@ class AgentTaskSnapshotResponse(BaseModel):
     run_id: str
     analysis_run_id: str | None
     status: Literal[
-        "queued",
+        "created",
         "running",
-        "stopping",
+        "paused",
+        "interrupted",
         "completed",
         "partial",
-        "cancelled",
+        "skipped",
         "failed",
+        "cancelled",
     ]
     phase: str
     attempt: int
     max_attempts: int
     retryable: bool | None
     message: str
-    error: dict[str, str] | None
+    error: dict[str, Any] | None
+    stage_details: list[AgentStageDetailResponse]
     report: dict[str, Any] | None
 
 
