@@ -163,7 +163,7 @@ export function ReaderWorkspacePage() {
         if (controller.signal.aborted || agentReportRequestId.current !== requestId) return;
         setAgentTask(task);
         setAgentReport(task.report);
-        const active = ["queued", "running", "stopping"].includes(task.status);
+        const active = ["created", "running"].includes(task.status);
         setResearchPhase(active ? "running-agent" : "idle");
         if (active) timer = window.setTimeout(() => void poll(), 500);
       } catch (error) {

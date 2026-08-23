@@ -1,5 +1,4 @@
 import type {
-  AgentReport,
   Article,
   ArticleAnswer,
   ArticleAnswerHistory,
@@ -80,19 +79,7 @@ type LogSettingsPayload = {
   retention_days: number;
   max_bytes: number;
 };
-type AgentTaskSnapshotPayload = {
-  request_id: string | null;
-  run_id: string;
-  analysis_run_id: string | null;
-  status: AgentTaskSnapshot["status"];
-  phase: string;
-  attempt: number;
-  max_attempts: number;
-  retryable: boolean | null;
-  message: string;
-  error: { type: string; message: string } | null;
-  report: AgentReport | null;
-};
+type AgentTaskSnapshotPayload = AgentTaskSnapshot;
 type ResearchRunPayload = {
   run_id: string;
   topic: string;

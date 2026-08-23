@@ -104,6 +104,7 @@ export type AgentReport = {
   uncertainties: string[];
   plans: Array<{
     evidence_id: number;
+    trigger_quote: string;
     question: string;
     queries: Array<{ query: string; purpose: string }>;
   }>;
@@ -119,16 +120,49 @@ export type AgentReport = {
   errors: string[];
 };
 
+export type AgentError = {
+  type: string;
+  message: string;
+};
+
+export type AgentAttemptDetail = {
+  attempt_no: number;
+  operation: string;
+  status: "started" | "succeeded" | "failed" | "interrupted" | "cancelled";
+  error: AgentError | null;
+  retryable: boolean;
+};
+
+export type AgentStageDetail = {
+  step_key: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "interrupted" | "skipped" | "cancelled";
+  attempts: AgentAttemptDetail[];
+  attempt: number;
+  max_attempts: number;
+  error: AgentError | null;
+  retryable: boolean;
+};
+
 export type AgentTaskSnapshot = {
   request_id: string | null;
   run_id: string;
   analysis_run_id: string | null;
-  status: "queued" | "running" | "stopping" | "completed" | "partial" | "cancelled" | "failed";
+  status:
+    | "created"
+    | "running"
+    | "paused"
+    | "interrupted"
+    | "completed"
+    | "partial"
+    | "skipped"
+    | "failed"
+    | "cancelled";
   phase: string;
   attempt: number;
   max_attempts: number;
   retryable: boolean | null;
   message: string;
-  error: { type: string; message: string } | null;
+  error: AgentError | null;
+  stage_details: AgentStageDetail[];
   report: AgentReport | null;
 };
