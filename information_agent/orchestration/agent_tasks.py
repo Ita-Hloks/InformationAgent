@@ -196,8 +196,6 @@ class AgentTaskManager:
             return self.wait(resolved_request_id, timeout=timeout)
         except TimeoutError:
             return self.get(research_run_id, request_id=resolved_request_id)
-        except Exception:
-            return self.get(research_run_id, request_id=resolved_request_id)
 
     def wait(self, request_id: str, timeout: float | None = None) -> dict[str, Any]:
         with self._lock:
@@ -217,6 +215,30 @@ class AgentTaskManager:
             report = self._invoke_runner(task)
         except Exception as exc:
             error = {"type": type(exc).__name__, "message": str(exc)}
+            try:
+                self._store.set_analysis_run_status(
+                    task.analysis_run_id,
+                    AnalysisRunStatus.FAILED,
+                    error=exc,
+                )
+            except Exception as persistence_exc:
+                diagnostic_error = {
+                    "type": "AgentPersistenceError",
+                    "message": (
+                        f"Agent 异常：{type(exc).__name__}: {exc}；"
+                        f"状态持久化失败：{type(persistence_exc).__name__}: {persistence_exc}"
+                    ),
+                }
+                with self._lock:
+                    task.error = diagnostic_error
+                    task.progress = {
+                        **task.progress,
+                        "phase": "persistence_failed",
+                        "message": "Agent 状态持久化失败",
+                        "retryable": False,
+                        "error": diagnostic_error,
+                    }
+                raise exc from persistence_exc
             with self._lock:
                 task.error = error
                 task.progress = {
@@ -225,14 +247,6 @@ class AgentTaskManager:
                     "retryable": False,
                     "error": error,
                 }
-            try:
-                self._store.set_analysis_run_status(
-                    task.analysis_run_id,
-                    AnalysisRunStatus.FAILED,
-                    error=exc,
-                )
-            except (OSError, ValueError):
-                pass
             raise
 
         with self._lock:

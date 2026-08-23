@@ -28,6 +28,7 @@ from information_agent.investigation import (
     SearchQuery,
 )
 from information_agent.investigation import planner as investigation_planner
+from information_agent.orchestration.agent_tasks import AgentTaskManager
 from information_agent.orchestration.agent_workflow import agent_run
 from information_agent.orchestration.ingestion import ingest
 from information_agent.search import SearchAnswer, SearchAnswerStatus, SearchSource
@@ -780,6 +781,71 @@ def test_agent_persists_partial_report_after_decision_failure(tmp_path: Path) ->
         artifact for artifact in state.artifacts if artifact.kind == "agent_report"
     )
     assert final_artifact.payload["errors"] == report.errors
+
+
+def test_stop_and_wait_preserves_timeout_fallback_but_propagates_other_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = AgentTaskManager(tmp_path / "agent-tasks.db")
+    expected = {"status": "running", "request_id": "stop-agent"}
+    monkeypatch.setattr(manager, "stop", lambda *_args, **_kwargs: expected)
+
+    def raise_timeout(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise TimeoutError("等待超时")
+
+    monkeypatch.setattr(manager, "wait", raise_timeout)
+    monkeypatch.setattr(manager, "get", lambda *_args, **_kwargs: expected)
+    assert manager.stop_and_wait("research", request_id="stop-agent") == expected
+
+    def raise_error(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("等待失败")
+
+    monkeypatch.setattr(manager, "wait", raise_error)
+    with pytest.raises(RuntimeError, match="等待失败"):
+        manager.stop_and_wait("research", request_id="stop-agent")
+    manager.shutdown()
+
+
+def test_agent_task_exposes_persistence_failure_without_masking_agent_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+
+    def failing_runner(_: str, **__: object) -> AgentReport:
+        raise RuntimeError("Agent 执行失败")
+
+    manager = AgentTaskManager(database_path, runner=failing_runner)
+    persistence_error = OSError("数据库不可写")
+
+    def fail_persistence(*_args: object, **_kwargs: object) -> None:
+        raise persistence_error
+
+    monkeypatch.setattr(manager._store, "set_analysis_run_status", fail_persistence)
+    try:
+        manager.submit(run_id, request_id="persistence-agent")
+        with pytest.raises(RuntimeError, match="Agent 执行失败") as raised:
+            manager.wait("persistence-agent")
+
+        assert raised.value.__cause__ is persistence_error
+        snapshot = manager.get(run_id, request_id="persistence-agent")
+    finally:
+        manager.shutdown()
+
+    assert snapshot is not None
+    assert snapshot["status"] == "failed"
+    assert snapshot["phase"] == "persistence_failed"
+    assert snapshot["message"] == "Agent 状态持久化失败"
+    assert snapshot["error"] == {
+        "type": "AgentPersistenceError",
+        "message": (
+            "Agent 异常：RuntimeError: Agent 执行失败；状态持久化失败：OSError: 数据库不可写"
+        ),
+    }
+    persisted = SQLiteCollectionStore(database_path).find_analysis_run_by_idempotency_key(
+        "persistence-agent"
+    )
+    assert persisted is not None
+    assert persisted.status is AnalysisRunStatus.CREATED
 
 
 def test_agent_run_cli_uses_separate_command(monkeypatch, capsys) -> None:
