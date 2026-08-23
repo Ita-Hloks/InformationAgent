@@ -237,7 +237,10 @@ def create_app(
             reader.store.fail_article_answer(request_id)
             raise HTTPException(
                 status_code=503,
-                detail={"code": "llm_unavailable", "message": str(exc)},
+                detail={
+                    "code": "llm_unavailable",
+                    "message": "模型服务暂时不可用，请稍后重试",
+                },
             ) from exc
         except (ValueError, TypeError, KeyError) as exc:
             reader.store.fail_article_answer(request_id)
@@ -430,7 +433,13 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "research_ingest_failed",
+                    "message": "采集入库失败，请稍后重试",
+                },
+            ) from exc
         return persisted_collection_to_payload(result)
 
     @app.post("/api/research/runs/{run_id}/agent")

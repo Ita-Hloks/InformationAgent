@@ -538,10 +538,35 @@ function DiagnosticError({
     <div
       className={`min-w-0 rounded-md bg-[#fff7f3] px-3 py-2 text-xs leading-5 text-[#8a3e24] ${className}`}
     >
-      <p className="break-words">错误类型：{error.type}</p>
-      <p className="mt-1 whitespace-pre-wrap break-words">错误信息：{error.message}</p>
+      <p className="break-words">提示：{friendlyDiagnosticMessage(error)}</p>
     </div>
   );
+}
+
+const internalErrorPatterns = [
+  /Traceback/i,
+  /File\s+["'`]/i,
+  /\bline \d+\b/i,
+  /\bNoneType\b/i,
+  /\bnot iterable\b/i,
+  /\bsubscriptable\b/i,
+  /\bhas no attribute\b/i,
+  /\bNameError\b/i,
+  /\bTypeError\b/i,
+  /\bValueError\b/i,
+  /\bRuntimeError\b/i,
+  /\bAssertionError\b/i,
+];
+
+function friendlyDiagnosticMessage(error: { type: string; message: string }) {
+  const message = error.message.trim();
+  if (!message) {
+    return "Agent 运行失败，请稍后重试";
+  }
+  if (internalErrorPatterns.some(pattern => pattern.test(message))) {
+    return "Agent 运行失败，请稍后重试";
+  }
+  return message;
 }
 
 function retryableLabel(value: boolean | null) {

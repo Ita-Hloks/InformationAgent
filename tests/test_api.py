@@ -549,6 +549,37 @@ def test_research_ingest_api_returns_persisted_collection(
     ]
 
 
+def test_research_ingest_api_hides_internal_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken_ingest(topic: str, feeds: list[str], **kwargs: object) -> PersistedCollection:
+        raise RuntimeError("数据库连接失败：底层异常")
+
+    api_app_module = importlib.import_module("information_agent.api.app")
+    monkeypatch.setattr(api_app_module, "ingest", broken_ingest)
+
+    client = _client(tmp_path)
+    response = client.post(
+        "/api/research/ingest",
+        json={
+            "topic": "AI",
+            "feeds": ["https://example.com/rss.xml"],
+            "timeout_seconds": 12,
+            "limit": 3,
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": {
+            "code": "research_ingest_failed",
+            "message": "采集入库失败，请稍后重试",
+        }
+    }
+    assert "数据库连接失败" not in response.text
+
+
 def test_research_agent_api_returns_agent_report(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -738,3 +769,29 @@ def test_research_agent_api_rejects_domain_value_errors(
         time.sleep(0.01)
     assert status.json()["status"] == "failed"
     assert status.json()["error"]["message"] == "Agent 参数组合无效"
+
+
+def test_article_ask_api_hides_runtime_error_details(tmp_path: Path) -> None:
+    service = ReaderService(tmp_path / "api.db", fetcher=_fetcher)
+    service.subscribe("https://example.com/rss.xml")
+    article_id = service.list_articles()[0].article.article_id
+
+    class _BrokenAssistant:
+        def answer(self, _article, _question: str, *, request_id: str) -> str:
+            raise RuntimeError("数据库连接失败：底层异常")
+
+    response = TestClient(
+        create_app(service, article_assistant=_BrokenAssistant())
+    ).post(
+        f"/api/articles/{article_id}/ask",
+        json={"question": "文章说了什么？", "request_id": "api-answer-runtime-error"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "code": "llm_unavailable",
+            "message": "模型服务暂时不可用，请稍后重试",
+        }
+    }
+    assert "数据库连接失败" not in response.text
