@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 
 from information_agent.collection import FeedFetchResult, RawFeedEntry
-from information_agent.contracts import PROJECT_TIMEZONE, ContentType
+from information_agent.contracts import ContentType
 from information_agent.reader import ReaderService
 
 
@@ -42,7 +42,7 @@ def test_article_answers_are_bound_to_snapshot_and_support_pagination_and_cleanu
     second_article = replace(
         article.article,
         content="更新后的正文内容，用于验证不同快照不会共享问答历史。",
-        collected_at=datetime(2026, 8, 23, tzinfo=PROJECT_TIMEZONE),
+        collected_at=article.article.collected_at + timedelta(seconds=1),
     )
     with store._connect() as connection:
         store._upsert_snapshot(connection, second_article)
