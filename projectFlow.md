@@ -359,7 +359,8 @@ CLI 会加载 `.env`；前端不应读取这些密钥，也不应直接访问 SQ
 
 ## 11. SQLite 分析生命周期基础设施
 
-`information_agent/storage/analysis_schema.py` 和 `analysis_store.py` 已提供一套更细的分析生命周期模型：
+`information_agent/storage/analysis_store.py` 提供分析生命周期持久化混入，SQLite 表结构由
+`information_agent/storage/store.py` 初始化：
 
 ```text
 analysis_runs -> analysis_steps -> analysis_attempts -> analysis_artifacts
@@ -371,12 +372,14 @@ analysis_runs -> analysis_steps -> analysis_attempts -> analysis_artifacts
 
 - `SQLiteCollectionStore` 已继承这套持久化能力
 - `agent-run` 会创建 `analysis_run`，逐次记录决策和搜索的真实重试、错误与最终报告，并返回 `analysis_run_id`
-- `GET /api/research/runs/{run_id}/agent` 读取最近一次持久化的 Agent 报告，无历史结果时返回 `null`
-- `POST /api/research/runs/{run_id}/agent` 同步运行 Agent，前端研究工作区展示并在重新选择运行时恢复结果
+- `POST /api/research/runs/{run_id}/agent` 只提交后台 Agent 任务并立即返回任务快照；快照包含 `run_id`、`analysis_run_id`、`request_id`、状态、阶段、尝试信息和可用报告
+- `GET /api/research/runs/{run_id}/agent/status` 按 `run_id` 和可选的 `request_id` 查询任务；任务完成后从 SQLite 恢复持久化状态和报告
+- `POST /api/research/runs/{run_id}/agent/stop` 按 `run_id` 和可选的 `request_id` 请求协作式停止；停止期间状态为 `stopping`，最终收口为 `cancelled` 或保留部分结果的 `partial`
+- 同一 `request_id` 对同一研究运行具有幂等性，断线重试不会重复创建或执行同一个 Agent 任务
+- Agent 管理器启动时会把上次进程遗留的 `created/running` 运行收口为 `partial`；这表示运行被中断并可查询已持久化结果，不表示自动从断点继续执行
 - `orchestration/` 的一次性 `analyze` 尚未调用这套分析生命周期接口
-- 当前没有通用分析状态查询、后台队列、取消、SSE 或 WebSocket 接口
 
-因此，分析生命周期已接入受限 Agent 工作流，但尚未形成通用的异步分析任务服务。
+因此，受限 Agent 已形成带后台执行、状态查询、停止、幂等和进程重启收口的异步任务服务；这套生命周期仍专用于 Agent，不是通用分析队列。
 
 ## 12. 前端当前边界
 
@@ -392,19 +395,20 @@ ResearchWorkspace -> /api/research/runs | /api/research/ingest
                   -> orchestration -> SQLite / LLM / hosted search
 ```
 
-当前已实现订阅阅读闭环和同步研究运行入口：
+当前已实现订阅阅读闭环和异步研究运行入口：
 
 - `GET/POST /api/feeds` 和 `GET /api/articles` 只覆盖本地 RSS 订阅与文章读取
 - `PUT /api/articles/state` 保存当前本地阅读器的已读/收藏状态
 - `GET /api/research/runs` 列出历史研究运行，`POST /api/research/ingest` 创建采集运行
-- `GET /api/research/runs/{run_id}/agent` 从分析生命周期表读取最近一次最终报告
-- `POST /api/research/runs/{run_id}/agent` 同步执行 Agent，并返回本次结果和 `analysis_run_id`
-- 没有后台分析任务、状态轮询、取消、SSE 或 WebSocket
+- `POST /api/research/runs/{run_id}/agent` 提交后台 Agent，并返回 `run_id`、`request_id`、`analysis_run_id` 和初始状态快照
+- `GET /api/research/runs/{run_id}/agent/status` 用于状态轮询和断线后按 `run_id` 恢复任务快照
+- `POST /api/research/runs/{run_id}/agent/stop` 请求停止 Agent，并返回停止后的状态或仍在收口中的 `stopping` 快照
+- 没有 SSE 或 WebSocket；前端使用状态轮询
 - 没有把 HTTP 请求路由到 Python CLI 的长任务生命周期
 - 前端不能直接读取 LLM 密钥、调用 SQLite 或替代后端编排
 - 后端已提供舆情 `GET/POST` 接口，但前端暂未接入；`GET` 只读，只有显式 `POST` 才触发评论采集和 LLM 分析
 
-若要把同步研究入口扩展为通用长任务服务，仍需增加分析状态和结果查询、取消操作，以及将后台任务状态映射为 `queued`、`running`、`completed`、`partial`、`failed`、`cancelled` 和 `insufficient_evidence`。
+CLI 的 `agent-run` 仍是等待完成后输出结果的一次性命令；HTTP 研究入口则使用上述异步任务契约。
 
 ## 13. 代码地图
 
