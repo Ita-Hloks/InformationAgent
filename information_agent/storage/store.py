@@ -358,40 +358,6 @@ class SQLiteCollectionStore(
             content_hash=str(row["content_hash"]),
         )
 
-    def get_reader_article_by_source_url(self, source_url: str) -> ReaderArticle | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT entries.feed_id, snapshots.id AS snapshot_id, snapshots.content_hash,
-                       snapshots.payload_json,
-                       COALESCE(states.is_read, 0) AS is_read,
-                       COALESCE(states.is_saved, 0) AS is_saved
-                FROM articles
-                JOIN feed_entries AS entries
-                    ON entries.article_id = articles.id
-                JOIN feed_subscriptions AS subscriptions
-                    ON subscriptions.feed_id = entries.feed_id
-                JOIN article_snapshots AS snapshots
-                    ON snapshots.article_id = entries.article_id
-                LEFT JOIN reader_article_states AS states
-                    ON states.article_id = entries.article_id
-                WHERE articles.source_url = ?
-                ORDER BY snapshots.collected_at DESC, snapshots.created_at DESC
-                LIMIT 1
-                """,
-                (source_url,),
-            ).fetchone()
-        if row is None:
-            return None
-        return ReaderArticle(
-            feed_id=str(row["feed_id"]),
-            article=_article_from_payload(json.loads(row["payload_json"])),
-            is_read=bool(row["is_read"]),
-            is_saved=bool(row["is_saved"]),
-            snapshot_id=str(row["snapshot_id"]),
-            content_hash=str(row["content_hash"]),
-        )
-
     def update_reader_article_states(
         self,
         article_ids: list[str],
