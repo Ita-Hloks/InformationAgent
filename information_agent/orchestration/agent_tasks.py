@@ -140,6 +140,8 @@ class AgentTaskManager:
         if analysis_run is not None and analysis_run.research_run_id != research_run_id:
             raise ValueError("Agent 请求不属于当前研究运行")
         if analysis_run is None:
+            if request_id is not None:
+                return None
             if latest_report is None:
                 return None
             return _report_snapshot(
@@ -226,7 +228,7 @@ class AgentTaskManager:
             try:
                 self._store.set_analysis_run_status(
                     task.analysis_run_id,
-                    AnalysisRunStatus.PARTIAL,
+                    AnalysisRunStatus.FAILED,
                     error=exc,
                 )
             except (OSError, ValueError):

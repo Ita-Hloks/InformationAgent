@@ -439,6 +439,12 @@ def create_app(
         run_id: str,
         request: AgentRunRequest,
     ) -> AgentTaskSnapshotResponse:
+        try:
+            reader.store.load_planning_input(run_id)
+        except ResearchRunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ResearchRunNotReadyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         main_settings = MainLLMConfig.from_env()
         search_settings = public_status_from_env()
         if not main_settings.available:
