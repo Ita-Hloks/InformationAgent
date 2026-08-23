@@ -56,6 +56,7 @@ class AgentTaskManager:
         self.database_path = Path(database_path or default_database_path())
         self._runner = runner
         self._store = SQLiteCollectionStore(self.database_path)
+        self._store.recover_running_agent_runs()
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="information-agent",
@@ -136,6 +137,8 @@ class AgentTaskManager:
             if request_id
             else self._store.load_latest_analysis_run(research_run_id)
         )
+        if analysis_run is not None and analysis_run.research_run_id != research_run_id:
+            raise ValueError("Agent 请求不属于当前研究运行")
         if analysis_run is None:
             if latest_report is None:
                 return None
@@ -146,7 +149,13 @@ class AgentTaskManager:
             )
         return self._persisted_snapshot(
             analysis_run,
-            persisted_report=latest_report if request_id is None else None,
+            persisted_report=(
+                latest_report
+                if request_id is None
+                and latest_report is not None
+                and latest_report.get("analysis_run_id") == analysis_run.id
+                else None
+            ),
         )
 
     def stop(
@@ -167,6 +176,26 @@ class AgentTaskManager:
                 return self._snapshot(task)
 
         return self.get(research_run_id, request_id=request_id)
+
+    def stop_and_wait(
+        self,
+        research_run_id: str,
+        *,
+        request_id: str | None = None,
+        timeout: float = 2.0,
+    ) -> dict[str, Any] | None:
+        snapshot = self.stop(research_run_id, request_id=request_id)
+        if snapshot is None or snapshot["status"] not in {"stopping", "running"}:
+            return snapshot
+        resolved_request_id = snapshot.get("request_id")
+        if not isinstance(resolved_request_id, str):
+            return snapshot
+        try:
+            return self.wait(resolved_request_id, timeout=timeout)
+        except TimeoutError:
+            return self.get(research_run_id, request_id=resolved_request_id)
+        except Exception:
+            return self.get(research_run_id, request_id=resolved_request_id)
 
     def wait(self, request_id: str, timeout: float | None = None) -> dict[str, Any]:
         with self._lock:
@@ -277,6 +306,10 @@ class AgentTaskManager:
     ) -> dict[str, Any]:
         report = persisted_report or self._store.load_analysis_report(analysis_run.id)
         if report is not None:
+            report = {
+                **report,
+                "analysis_run_id": analysis_run.id,
+            }
             return _report_snapshot(
                 report,
                 research_run_id=analysis_run.research_run_id,

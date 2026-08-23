@@ -10,9 +10,16 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from ..common import (
+    LOG_MAX_BYTES,
+    LOG_RETENTION_DAYS,
+    cleanup_log_directory,
+    clear_log_directory,
+    inspect_log_directory,
+)
 from ..opinion import BilibiliTargetError, OpinionAnalysisService, OpinionStatus
 from ..opinion.service import OpinionArticleNotFoundError, OpinionSnapshotMismatchError
-from ..orchestration import agent_run, ingest
+from ..orchestration import AgentTaskManager, agent_run, ingest
 from ..reader import (
     ArticleAssistant,
     ArticleNotFoundError,
@@ -20,8 +27,8 @@ from ..reader import (
     FeedUnavailableError,
     ReaderService,
 )
+from ..search import public_status_from_env
 from ..serialization import (
-    agent_report_to_payload,
     opinion_report_to_payload,
     persisted_collection_to_payload,
     research_run_summaries_to_payload,
@@ -30,6 +37,8 @@ from ..settings import EnvFileOpenError, MainLLMConfig, open_project_env_file
 from ..storage import ResearchRunNotFoundError, ResearchRunNotReadyError
 from .models import (
     AgentRunRequest,
+    AgentStopRequest,
+    AgentTaskSnapshotResponse,
     ArticleAnswerClearResponse,
     ArticleAnswerHistoryResponse,
     ArticleAnswerResponse,
@@ -41,10 +50,14 @@ from .models import (
     FeedCreate,
     FeedResponse,
     LLMSettingsResponse,
+    LogClearRequest,
+    LogClearResponse,
+    LogSettingsResponse,
     OpinionRequest,
     OpinionResponse,
     ResearchIngestRequest,
     ResearchRunsResponse,
+    SearchLLMSettingsResponse,
     article_answer_response,
     article_response,
     article_state_response,
@@ -61,7 +74,13 @@ def create_app(
     reader = service or ReaderService()
     opinion = opinion_service or OpinionAnalysisService(store=reader.store)
     assistant = article_assistant or ArticleAssistant()
+    agent_tasks = AgentTaskManager(reader.store.database_path, runner=agent_run)
+    try:
+        cleanup_log_directory()
+    except OSError:
+        pass
     app = FastAPI(title="Information Agent API")
+    app.router.on_shutdown.append(agent_tasks.shutdown)
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error(
@@ -84,6 +103,39 @@ def create_app(
     @app.get("/api/settings", response_model=LLMSettingsResponse)
     def get_settings() -> LLMSettingsResponse:
         return LLMSettingsResponse(**MainLLMConfig.from_env().to_public_status())
+
+    @app.get("/api/settings/search", response_model=SearchLLMSettingsResponse)
+    def get_search_settings() -> SearchLLMSettingsResponse:
+        return SearchLLMSettingsResponse(**public_status_from_env())
+
+    @app.get("/api/settings/logs", response_model=LogSettingsResponse)
+    def get_log_settings() -> LogSettingsResponse:
+        usage = inspect_log_directory()
+        return LogSettingsResponse(
+            file_count=usage.file_count,
+            total_bytes=usage.total_bytes,
+            earliest_at=usage.earliest_at,
+            retention_days=LOG_RETENTION_DAYS,
+            max_bytes=LOG_MAX_BYTES,
+        )
+
+    @app.post("/api/settings/logs/clear", response_model=LogClearResponse)
+    def clear_logs(request: LogClearRequest) -> LogClearResponse:
+        if not request.confirm:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "confirmation_required", "message": "清理日志需要确认"},
+            )
+        deleted_count = clear_log_directory()
+        usage = inspect_log_directory()
+        return LogClearResponse(
+            file_count=usage.file_count,
+            total_bytes=usage.total_bytes,
+            earliest_at=usage.earliest_at,
+            retention_days=LOG_RETENTION_DAYS,
+            max_bytes=LOG_MAX_BYTES,
+            deleted_count=deleted_count,
+        )
 
     @app.post("/api/settings/env/open", response_model=EnvFileOpenResponse)
     def open_env_file() -> EnvFileOpenResponse:
@@ -382,19 +434,33 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return persisted_collection_to_payload(result)
 
-    @app.get("/api/research/runs/{run_id}/agent")
-    def get_research_agent_report(run_id: str) -> dict[str, Any] | None:
-        try:
-            return reader.store.load_latest_agent_report(run_id)
-        except ResearchRunNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-
     @app.post("/api/research/runs/{run_id}/agent")
-    def run_research_agent(run_id: str, request: AgentRunRequest) -> dict[str, Any]:
+    def run_research_agent(
+        run_id: str,
+        request: AgentRunRequest,
+    ) -> AgentTaskSnapshotResponse:
+        main_settings = MainLLMConfig.from_env()
+        search_settings = public_status_from_env()
+        if not main_settings.available:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "main_llm_unavailable",
+                    "message": "主 LLM 配置不完整，无法运行 Agent",
+                },
+            )
+        if not search_settings["available"]:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "search_llm_unavailable",
+                    "message": "联网搜索配置不完整，无法运行 Agent",
+                },
+            )
         try:
-            report = agent_run(
+            snapshot = agent_tasks.submit(
                 run_id,
-                database_path=reader.store.database_path,
+                request_id=request.request_id or uuid4().hex,
                 timeout_seconds=request.timeout_seconds,
                 max_steps=request.max_steps,
                 max_attempts=request.max_attempts,
@@ -405,9 +471,52 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return agent_report_to_payload(report)
+        return AgentTaskSnapshotResponse(**snapshot)
+
+    @app.get(
+        "/api/research/runs/{run_id}/agent/status",
+        response_model=AgentTaskSnapshotResponse,
+    )
+    def get_research_agent_status(
+        run_id: str,
+        request_id: str | None = Query(default=None, max_length=200),
+    ) -> AgentTaskSnapshotResponse:
+        try:
+            snapshot = agent_tasks.get(run_id, request_id=request_id)
+        except ResearchRunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if snapshot is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "agent_not_found", "message": "不存在的 Agent 运行"},
+            )
+        return AgentTaskSnapshotResponse(**snapshot)
+
+    @app.post(
+        "/api/research/runs/{run_id}/agent/stop",
+        response_model=AgentTaskSnapshotResponse,
+    )
+    def stop_research_agent(
+        run_id: str,
+        request: AgentStopRequest | None = None,
+    ) -> AgentTaskSnapshotResponse:
+        try:
+            snapshot = agent_tasks.stop_and_wait(
+                run_id,
+                request_id=request.request_id if request else None,
+            )
+        except ResearchRunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if snapshot is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "agent_not_found", "message": "不存在的 Agent 运行"},
+            )
+        return AgentTaskSnapshotResponse(**snapshot)
 
     return app
 

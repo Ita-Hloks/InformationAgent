@@ -4,18 +4,21 @@ import { useLocation, useMatch, useNavigate, useOutlet, useSearchParams } from "
 import { feedPath, viewFromPath, viewPaths, viewTitles } from "../../app/navigation";
 import {
   addFeed as createFeed,
+  createResearchAgentRequestId,
   createResearchRun,
   getArticles,
   getFeeds,
-  getResearchAgentReport,
+  getResearchAgentStatus,
   getResearchRuns,
   runResearchAgent,
+  stopResearchAgent,
   type ArticleStateUpdate,
   updateArticleStates,
 } from "../../api/client";
 import { initialArticles, initialFeeds } from "../../data/localState";
 import type {
   AgentReport,
+  AgentTaskSnapshot,
   Feed,
   LibraryView,
   ResearchIngestResult,
@@ -51,14 +54,19 @@ export function ReaderWorkspacePage() {
   const [feeds, setFeeds] = useState<Feed[]>(initialFeeds);
   const [articles, setArticles] = useState(initialArticles);
   const [researchRuns, setResearchRuns] = useState<ResearchRun[]>([]);
-  const [selectedResearchRunId, setSelectedResearchRunId] = useState<string | null>(null);
+  const [selectedResearchRunId, setSelectedResearchRunId] = useState<string | null>(() =>
+    searchParams.get("run_id"),
+  );
   const [ingestResult, setIngestResult] = useState<ResearchIngestResult | null>(null);
   const [agentReport, setAgentReport] = useState<AgentReport | null>(null);
+  const [agentTask, setAgentTask] = useState<AgentTaskSnapshot | null>(null);
   const [researchPhase, setResearchPhase] = useState<"idle" | "ingesting" | "running-agent">(
     "idle",
   );
   const [researchError, setResearchError] = useState<string | null>(null);
   const agentReportRequestId = useRef(0);
+  const agentTaskRequestId = useRef<string | null>(null);
+  const [agentPollKey, setAgentPollKey] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [savedIds, setSavedIds] = useState(
     () => new Set(initialArticles.filter(article => article.starred).map(article => article.id)),
@@ -69,6 +77,8 @@ export function ReaderWorkspacePage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [apiStatus, setApiStatus] = useState<ApiStatus>("connecting");
+  const selectedFeedId = feedMatch?.params.feedId ?? null;
+  const activeView = selectedFeedId ? "all" : viewFromPath(location.pathname);
 
   const applyArticleStates = (states: Awaited<ReturnType<typeof updateArticleStates>>) => {
     setReadIds(current => {
@@ -121,25 +131,68 @@ export function ReaderWorkspacePage() {
   }, []);
 
   useEffect(() => {
-    if (!selectedResearchRunId) return;
+    if (activeView !== "research") return;
+    const urlRunId = searchParams.get("run_id");
+    if (urlRunId && urlRunId !== selectedResearchRunId) {
+      setSelectedResearchRunId(urlRunId);
+      return;
+    }
+    if (activeView === "research" && !urlRunId && researchRuns[0]) {
+      setSelectedResearchRunId(researchRuns[0].id);
+      navigate(`/research?run_id=${encodeURIComponent(researchRuns[0].id)}`, { replace: true });
+    }
+  }, [activeView, navigate, researchRuns, searchParams, selectedResearchRunId]);
+
+  useEffect(() => {
+    if (activeView !== "research" || !selectedResearchRunId) {
+      setAgentTask(null);
+      setAgentReport(null);
+      return;
+    }
     const requestId = ++agentReportRequestId.current;
     const controller = new AbortController();
+    let timer: number | null = null;
     setAgentReport(null);
-    void getResearchAgentReport(selectedResearchRunId, controller.signal)
-      .then(report => {
-        if (agentReportRequestId.current === requestId) setAgentReport(report);
-      })
-      .catch(error => {
+    const poll = async () => {
+      try {
+        const task = await getResearchAgentStatus(
+          selectedResearchRunId,
+          agentTaskRequestId.current,
+          controller.signal,
+        );
         if (controller.signal.aborted || agentReportRequestId.current !== requestId) return;
-        setResearchError(error instanceof Error ? error.message : "Agent 结果读取失败");
-      });
+        setAgentTask(task);
+        setAgentReport(task.report);
+        const active = ["queued", "running", "stopping"].includes(task.status);
+        setResearchPhase(active ? "running-agent" : "idle");
+        if (active) timer = window.setTimeout(() => void poll(), 500);
+      } catch (error) {
+        if (controller.signal.aborted || agentReportRequestId.current !== requestId) return;
+        setAgentTask(null);
+        setAgentReport(null);
+        if (!(error instanceof Error && error.message === "不存在的 Agent 运行")) {
+          setResearchError(error instanceof Error ? error.message : "Agent 状态读取失败");
+        }
+      }
+    };
+    void poll();
     return () => {
       controller.abort();
+      if (timer !== null) window.clearTimeout(timer);
     };
-  }, [selectedResearchRunId]);
+  }, [activeView, agentPollKey, selectedResearchRunId]);
 
-  const selectedFeedId = feedMatch?.params.feedId ?? null;
-  const activeView = selectedFeedId ? "all" : viewFromPath(location.pathname);
+  useEffect(() => {
+    if (
+      activeView !== "research" ||
+      !selectedResearchRunId ||
+      searchParams.get("run_id") === selectedResearchRunId
+    ) {
+      return;
+    }
+    navigate(`/research?run_id=${encodeURIComponent(selectedResearchRunId)}`, { replace: true });
+  }, [activeView, navigate, searchParams, selectedResearchRunId]);
+
   const articleParam = searchParams.get("article");
   const dialogParam = searchParams.get("dialog");
   const panelParam = searchParams.get("panel");
@@ -218,9 +271,12 @@ export function ReaderWorkspacePage() {
   const selectResearchRun = (runId: string) => {
     setSelectedResearchRunId(runId);
     setIngestResult(null);
+    agentTaskRequestId.current = null;
+    setAgentTask(null);
     setAgentReport(null);
     setResearchError(null);
-    navigate(viewPaths.research);
+    setAgentPollKey(current => current + 1);
+    navigate(`${viewPaths.research}?run_id=${encodeURIComponent(runId)}`);
   };
 
   const selectArticle = (articleId: string) => {
@@ -295,11 +351,16 @@ export function ReaderWorkspacePage() {
   }) => {
     setResearchPhase("ingesting");
     setResearchError(null);
+    agentTaskRequestId.current = null;
+    setAgentTask(null);
     setAgentReport(null);
     try {
       const result = await createResearchRun(input);
       setIngestResult(result);
       setSelectedResearchRunId(result.run_id);
+      agentTaskRequestId.current = null;
+      setAgentTask(null);
+      navigate(`${viewPaths.research}?run_id=${encodeURIComponent(result.run_id)}`);
       await refreshResearchRuns();
     } catch (error) {
       setResearchError(error instanceof Error ? error.message : "研究运行创建失败");
@@ -310,23 +371,44 @@ export function ReaderWorkspacePage() {
 
   const runAgent = async (runId: string) => {
     const requestId = ++agentReportRequestId.current;
+    const taskRequestId = createResearchAgentRequestId();
+    agentTaskRequestId.current = taskRequestId;
     setResearchPhase("running-agent");
     setResearchError(null);
     setAgentReport(null);
+    setAgentTask(null);
     try {
-      const report = await runResearchAgent(runId, {
-        timeoutSeconds: 180,
-        maxSteps: 3,
-        maxAttempts: 3,
-      });
-      if (agentReportRequestId.current === requestId) setAgentReport(report);
+      const task = await runResearchAgent(
+        runId,
+        {
+          timeoutSeconds: 180,
+          maxSteps: 3,
+          maxAttempts: 3,
+        },
+        taskRequestId,
+      );
+      if (agentReportRequestId.current === requestId) {
+        setAgentTask(task);
+        setAgentReport(task.report);
+        setAgentPollKey(current => current + 1);
+      }
       await refreshResearchRuns();
     } catch (error) {
       if (agentReportRequestId.current === requestId) {
         setResearchError(error instanceof Error ? error.message : "Agent 运行失败");
       }
-    } finally {
-      setResearchPhase("idle");
+    }
+  };
+
+  const stopAgent = async (runId: string) => {
+    setResearchError(null);
+    try {
+      const task = await stopResearchAgent(runId, agentTaskRequestId.current);
+      setAgentTask(task);
+      setAgentReport(task.report);
+      setAgentPollKey(current => current + 1);
+    } catch (error) {
+      setResearchError(error instanceof Error ? error.message : "Agent 停止失败");
     }
   };
 
@@ -422,10 +504,12 @@ export function ReaderWorkspacePage() {
               selectedRunId={selectedResearchRunId}
               ingestResult={ingestResult}
               agentReport={agentReport}
+              agentTask={agentTask}
               phase={researchPhase}
               error={researchError}
               onCreateRun={createRun}
               onRunAgent={runAgent}
+              onStopAgent={stopAgent}
               onSelectRun={selectResearchRun}
               onRefreshRuns={refreshResearchRuns}
             />

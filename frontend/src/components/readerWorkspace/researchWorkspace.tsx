@@ -1,13 +1,19 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
-import { Bot, FlaskConical, Loader2, Play, RotateCw } from "lucide-react";
+import { Bot, FlaskConical, Loader2, Play, RotateCw, Square } from "lucide-react";
 
-import type { AgentReport, ResearchIngestResult, ResearchRun } from "../../types";
+import type {
+  AgentReport,
+  AgentTaskSnapshot,
+  ResearchIngestResult,
+  ResearchRun,
+} from "../../types";
 
 type ResearchWorkspaceProps = {
   runs: ResearchRun[];
   selectedRunId: string | null;
   ingestResult: ResearchIngestResult | null;
   agentReport: AgentReport | null;
+  agentTask: AgentTaskSnapshot | null;
   phase: "idle" | "ingesting" | "running-agent";
   error: string | null;
   onCreateRun: (input: {
@@ -17,6 +23,7 @@ type ResearchWorkspaceProps = {
     limit: number;
   }) => Promise<void>;
   onRunAgent: (runId: string) => Promise<void>;
+  onStopAgent: (runId: string) => Promise<void>;
   onSelectRun: (runId: string) => void;
   onRefreshRuns: () => Promise<void>;
 };
@@ -28,10 +35,12 @@ export function ResearchWorkspace({
   selectedRunId,
   ingestResult,
   agentReport,
+  agentTask,
   phase,
   error,
   onCreateRun,
   onRunAgent,
+  onStopAgent,
   onSelectRun,
   onRefreshRuns,
 }: ResearchWorkspaceProps) {
@@ -47,7 +56,10 @@ export function ResearchWorkspace({
   const activeRunId = ingestResult?.run_id ?? selectedRunId;
   const activeEvidenceCount = ingestResult?.articles.length ?? selectedRun?.articleCount ?? 0;
   const busy = phase !== "idle";
-  const canRunAgent = Boolean(activeRunId) && activeEvidenceCount > 0;
+  const agentActive = Boolean(
+    agentTask && ["queued", "running", "stopping"].includes(agentTask.status),
+  );
+  const canRunAgent = Boolean(activeRunId) && activeEvidenceCount > 0 && !agentActive;
   const selectedRunTitle = selectedRun?.title;
 
   useEffect(() => {
@@ -187,20 +199,33 @@ export function ResearchWorkspace({
               </h2>
             </div>
             {activeRunId && (
-              <button
-                type="button"
-                className="flex h-10 items-center gap-2 rounded-md bg-[#ef8354] px-4 text-sm font-medium text-[#25140d] hover:bg-[#f09670] disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={busy || !canRunAgent}
-                title={canRunAgent ? "运行 Agent" : "没有入选证据，不能运行 Agent"}
-                onClick={() => void onRunAgent(activeRunId)}
-              >
-                {phase === "running-agent" ? (
-                  <Loader2 size={16} className="animate-spin" />
-                ) : (
-                  <Bot size={16} />
+              <div className="flex items-center gap-2">
+                {agentActive && (
+                  <button
+                    type="button"
+                    className="flex h-10 items-center gap-2 rounded-md border border-[#d59c87] bg-white px-4 text-sm font-medium text-[#8a3e24] hover:bg-[#fff2ec] disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={agentTask?.status === "stopping"}
+                    onClick={() => void onStopAgent(activeRunId)}
+                  >
+                    {agentTask?.status === "stopping" ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Square size={15} />
+                    )}
+                    停止 Agent
+                  </button>
                 )}
-                运行 Agent
-              </button>
+                <button
+                  type="button"
+                  className="flex h-10 items-center gap-2 rounded-md bg-[#ef8354] px-4 text-sm font-medium text-[#25140d] hover:bg-[#f09670] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={busy || !canRunAgent}
+                  title={canRunAgent ? "运行 Agent" : "没有入选证据，不能运行 Agent"}
+                  onClick={() => void onRunAgent(activeRunId)}
+                >
+                  {agentActive ? <Loader2 size={16} className="animate-spin" /> : <Bot size={16} />}
+                  运行 Agent
+                </button>
+              </div>
             )}
           </div>
 
@@ -225,6 +250,19 @@ export function ResearchWorkspace({
               当前运行没有入选证据。采集可能命中了缓存、没有新文章，或语义筛选未保留候选；
               请换一个主题、RSS 地址，或等待来源更新后重新采集。
             </div>
+          )}
+
+          {agentTask && agentTask.status !== "completed" && !agentReport && (
+            <section className="mt-6 rounded-md border border-[#d9dad4] bg-white p-4">
+              <div className="flex items-center gap-3">
+                <Loader2 size={18} className="text-[#3978a8]" />
+                <h3 className="text-sm font-semibold">Agent 状态</h3>
+                <span className="text-xs text-[#73767b]">{agentTask.message}</span>
+              </div>
+              <p className="mt-3 text-xs text-[#777a80]">
+                阶段：{agentTask.phase}，尝试：{agentTask.attempt}/{agentTask.max_attempts}
+              </p>
+            </section>
           )}
 
           {agentReport ? (
@@ -263,6 +301,59 @@ export function ResearchWorkspace({
                         <p className="mt-1 text-xs text-[#85888e]">
                           证据：{citation.evidence_ids.join(", ") || "无"}
                         </p>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {agentReport.plans.length > 0 && (
+                <section className="rounded-md border border-[#d9dad4] bg-white p-4">
+                  <h3 className="text-sm font-semibold">研究问题与查询</h3>
+                  <div className="mt-3 space-y-3">
+                    {agentReport.plans.map(plan => (
+                      <div
+                        key={`${plan.evidence_id}-${plan.question}`}
+                        className="text-sm leading-6"
+                      >
+                        <p className="text-[#3f4248]">{plan.question}</p>
+                        <ul className="mt-1 space-y-1 text-xs text-[#777a80]">
+                          {plan.queries.map(query => (
+                            <li key={query.query}>{query.query}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {agentReport.answers.length > 0 && (
+                <section className="rounded-md border border-[#d9dad4] bg-white p-4">
+                  <h3 className="text-sm font-semibold">搜索回答与来源</h3>
+                  <div className="mt-3 space-y-4">
+                    {agentReport.answers.map(answer => (
+                      <div
+                        key={`${answer.evidence_id}-${answer.question}`}
+                        className="text-sm leading-6"
+                      >
+                        <p className="text-[#3f4248]">{answer.answer}</p>
+                        {answer.sources.length > 0 && (
+                          <ul className="mt-1 space-y-1 text-xs text-[#777a80]">
+                            {answer.sources.map(source => (
+                              <li key={source.url}>
+                                <a
+                                  className="text-[#3978a8] hover:underline"
+                                  href={source.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {source.title || source.url}
+                                </a>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                       </div>
                     ))}
                   </div>

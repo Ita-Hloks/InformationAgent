@@ -231,6 +231,30 @@ class AgentStopRequest(BaseModel):
         return normalized
 
 
+class AgentTaskSnapshotResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str | None
+    run_id: str
+    analysis_run_id: str | None
+    status: Literal[
+        "queued",
+        "running",
+        "stopping",
+        "completed",
+        "partial",
+        "cancelled",
+        "failed",
+    ]
+    phase: str
+    attempt: int
+    max_attempts: int
+    retryable: bool | None
+    message: str
+    error: dict[str, str] | None
+    report: dict[str, Any] | None
+
+
 class ResearchRunsResponse(BaseModel):
     runs: list[dict[str, Any]]
 

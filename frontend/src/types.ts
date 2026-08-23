@@ -51,6 +51,25 @@ export type LLMSettings = {
   available: boolean;
 };
 
+export type SearchLLMSettings = {
+  apiKeyConfigured: boolean;
+  model: string;
+  baseUrl: string;
+  resultCount: number | null;
+  contentSize: string | null;
+  timeoutSeconds: number | null;
+  available: boolean;
+  error: string | null;
+};
+
+export type LogSettings = {
+  fileCount: number;
+  totalBytes: number;
+  earliestAt: string | null;
+  retentionDays: number;
+  maxBytes: number;
+};
+
 export type ResearchRun = {
   id: string;
   title: string;
@@ -98,4 +117,18 @@ export type AgentReport = {
   steps: number;
   stop_reason: string;
   errors: string[];
+};
+
+export type AgentTaskSnapshot = {
+  request_id: string | null;
+  run_id: string;
+  analysis_run_id: string | null;
+  status: "queued" | "running" | "stopping" | "completed" | "partial" | "cancelled" | "failed";
+  phase: string;
+  attempt: number;
+  max_attempts: number;
+  retryable: boolean | null;
+  message: string;
+  error: { type: string; message: string } | null;
+  report: AgentReport | null;
 };
