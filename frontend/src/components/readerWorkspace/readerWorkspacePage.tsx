@@ -10,6 +10,7 @@ import {
   getArticleResearch,
   getReaderAutomationSettings,
   getFeeds,
+  refreshFeed,
   removeFeed,
   getResearchAgentStatus,
   getResearchRuns,
@@ -91,6 +92,7 @@ export function ReaderWorkspacePage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [apiStatus, setApiStatus] = useState<ApiStatus>("connecting");
+  const [feedActionId, setFeedActionId] = useState<string | null>(null);
   const [readingActivity, setReadingActivity] = useState({
     key: null as string | null,
     progress: 0,
@@ -130,36 +132,41 @@ export function ReaderWorkspacePage() {
     }
   };
 
+  const applyReaderData = useCallback(
+    (loadedFeeds: Feed[], loadedArticles: typeof initialArticles) => {
+      const nextArticles = bindArticleSources(loadedArticles, loadedFeeds);
+      setFeeds(loadedFeeds);
+      setArticles(nextArticles);
+      setReadIds(
+        new Set(nextArticles.filter(article => !article.unread).map(article => article.id)),
+      );
+      setSavedIds(
+        new Set(nextArticles.filter(article => article.starred).map(article => article.id)),
+      );
+    },
+    [],
+  );
+
+  const reloadReaderData = useCallback(async () => {
+    const [loadedFeeds, loadedArticles] = await Promise.all([getFeeds(), getArticles()]);
+    applyReaderData(loadedFeeds, loadedArticles);
+  }, [applyReaderData]);
+
   const refreshArticles = useCallback(async () => {
-    const loadedArticles = await getArticles();
-    const nextArticles = bindArticleSources(loadedArticles, feeds);
-    setArticles(nextArticles);
-    setReadIds(new Set(nextArticles.filter(article => !article.unread).map(article => article.id)));
-    setSavedIds(
-      new Set(nextArticles.filter(article => article.starred).map(article => article.id)),
-    );
-  }, [feeds]);
+    applyReaderData(feeds, await getArticles());
+  }, [applyReaderData, feeds]);
 
   useEffect(() => {
-    void Promise.all([getFeeds(), getArticles(), getResearchRuns(), getReaderAutomationSettings()])
-      .then(([loadedFeeds, loadedArticles, loadedResearchRuns, loadedAutomationSettings]) => {
-        setFeeds(loadedFeeds);
-        const nextArticles = bindArticleSources(loadedArticles, loadedFeeds);
-        setArticles(nextArticles);
+    void Promise.all([reloadReaderData(), getResearchRuns(), getReaderAutomationSettings()])
+      .then(([, loadedResearchRuns, loadedAutomationSettings]) => {
         setResearchRuns(loadedResearchRuns);
         setAutomationSettings(loadedAutomationSettings);
-        setReadIds(
-          new Set(nextArticles.filter(article => !article.unread).map(article => article.id)),
-        );
-        setSavedIds(
-          new Set(nextArticles.filter(article => article.starred).map(article => article.id)),
-        );
         setApiStatus("connected");
       })
       .catch(() => {
         setApiStatus("unavailable");
       });
-  }, []);
+  }, [reloadReaderData]);
 
   const hasPendingSummaries = articles.some(article =>
     ["pending", "running"].includes(article.summaryStatus),
@@ -506,32 +513,35 @@ export function ReaderWorkspacePage() {
   };
 
   const addFeed = async (input: { url: string; title?: string }) => {
-    const feed = await createFeed(input);
-    const [loadedFeeds, loadedArticles] = await Promise.all([getFeeds(), getArticles()]);
-    const nextArticles = bindArticleSources(loadedArticles, loadedFeeds);
-    setFeeds(loadedFeeds.some(item => item.id === feed.id) ? loadedFeeds : [...loadedFeeds, feed]);
-    setArticles(nextArticles);
-    setReadIds(new Set(nextArticles.filter(article => !article.unread).map(article => article.id)));
-    setSavedIds(
-      new Set(nextArticles.filter(article => article.starred).map(article => article.id)),
-    );
+    await createFeed(input);
+    await reloadReaderData();
     setApiStatus("connected");
+  };
+
+  const updateFeed = async (feedId: string) => {
+    if (feedActionId !== null) return;
+    setFeedActionId(feedId);
+    try {
+      await refreshFeed(feedId);
+      await reloadReaderData();
+      setApiStatus("connected");
+    } finally {
+      setFeedActionId(null);
+    }
   };
 
   const unsubscribeFeed = async (feedId: string) => {
     const feed = feeds.find(item => item.id === feedId);
-    if (!feed || !window.confirm(`取消订阅“${feed.name}”？`)) return;
-    await removeFeed(feedId);
-    const [loadedFeeds, loadedArticles] = await Promise.all([getFeeds(), getArticles()]);
-    setFeeds(loadedFeeds);
-    const nextArticles = bindArticleSources(loadedArticles, loadedFeeds);
-    setArticles(nextArticles);
-    setReadIds(new Set(nextArticles.filter(article => !article.unread).map(article => article.id)));
-    setSavedIds(
-      new Set(nextArticles.filter(article => article.starred).map(article => article.id)),
-    );
-    if (selectedFeedId === feedId) navigate("/");
-    setApiStatus("connected");
+    if (!feed || feedActionId !== null || !window.confirm(`取消订阅“${feed.name}”？`)) return;
+    setFeedActionId(feedId);
+    try {
+      await removeFeed(feedId);
+      await reloadReaderData();
+      if (selectedFeedId === feedId) navigate("/");
+      setApiStatus("connected");
+    } finally {
+      setFeedActionId(null);
+    }
   };
 
   const refreshResearchRuns = useCallback(async () => {
@@ -689,6 +699,9 @@ export function ReaderWorkspacePage() {
           onSelectFeed={selectFeed}
           onSelectResearchRun={selectResearchRun}
           onAddFeed={() => openOverlay("add-feed")}
+          onRefreshFeed={feedId => {
+            void updateFeed(feedId).catch(() => setApiStatus("unavailable"));
+          }}
           onUnsubscribe={feedId => {
             void unsubscribeFeed(feedId).catch(() => setApiStatus("unavailable"));
           }}

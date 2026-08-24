@@ -166,6 +166,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(detail);
   }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
@@ -196,6 +197,14 @@ export async function addFeed(input: { url: string; title?: string }): Promise<F
 
 export async function removeFeed(feedId: string): Promise<void> {
   await request<void>(`/api/feeds/${encodeURIComponent(feedId)}`, { method: "DELETE" });
+}
+
+export async function refreshFeed(feedId: string): Promise<Feed> {
+  return toFeed(
+    await request<FeedPayload>(`/api/feeds/${encodeURIComponent(feedId)}/refresh`, {
+      method: "POST",
+    }),
+  );
 }
 
 export async function getArticles(feedId?: string): Promise<Article[]> {

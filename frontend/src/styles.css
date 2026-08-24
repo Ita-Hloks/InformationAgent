@@ -209,6 +209,10 @@ textarea:focus-visible {
     visibility: hidden;
   }
 
+  .sidebar-layout.is-collapsed .sidebar-feed-action {
+    display: none;
+  }
+
   .sidebar-meta {
     display: block;
     max-width: 40px;

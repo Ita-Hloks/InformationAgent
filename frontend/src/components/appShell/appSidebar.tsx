@@ -6,13 +6,14 @@ import {
   FlaskConical,
   Inbox,
   Library,
-  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
   Rss,
+  RefreshCw,
   Settings,
   Sun,
+  Trash2,
   X,
 } from "lucide-react";
 
@@ -34,6 +35,7 @@ type AppSidebarProps = {
   onSelectFeed: (feedId: string) => void;
   onSelectResearchRun: (runId: string) => void;
   onAddFeed: () => void;
+  onRefreshFeed: (feedId: string) => void;
   onUnsubscribe: (feedId: string) => void;
   settingsActive: boolean;
   onOpenSettings: () => void;
@@ -62,6 +64,7 @@ export function AppSidebar({
   onSelectFeed,
   onSelectResearchRun,
   onAddFeed,
+  onRefreshFeed,
   onUnsubscribe,
   settingsActive,
   onOpenSettings,
@@ -256,12 +259,21 @@ export function AppSidebar({
                 </button>
                 <button
                   type="button"
-                  className="grid size-6 shrink-0 place-items-center rounded text-[#777b82] opacity-0 hover:bg-white/10 hover:text-white group-hover:opacity-100 group-focus-within:opacity-100"
+                  className="sidebar-feed-action grid size-6 shrink-0 place-items-center rounded text-[#777b82] hover:bg-white/10 hover:text-white"
+                  aria-label={`刷新 ${feed.name}`}
+                  title={`刷新 ${feed.name}`}
+                  onClick={() => onRefreshFeed(feed.id)}
+                >
+                  <RefreshCw size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="sidebar-feed-action grid size-6 shrink-0 place-items-center rounded text-[#777b82] hover:bg-white/10 hover:text-white"
                   aria-label={`取消订阅 ${feed.name}`}
                   title={`取消订阅 ${feed.name}`}
                   onClick={() => onUnsubscribe(feed.id)}
                 >
-                  <MoreHorizontal size={15} />
+                  <Trash2 size={14} />
                 </button>
               </div>
             ))}

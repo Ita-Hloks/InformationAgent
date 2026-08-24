@@ -99,13 +99,14 @@ def _app(
     tmp_path: Path,
     *,
     monkeypatch: pytest.MonkeyPatch | None = None,
+    fetcher: Any = _fetcher,
 ) -> tuple[TestClient, SQLiteCollectionStore, _FakeSummaryManager, _FakeResearchManager]:
     if monkeypatch is not None:
         monkeypatch.setenv("LLM_API_KEY", "test-main")
         monkeypatch.setenv("SEARCH_LLM_API_KEY", "test-search")
         monkeypatch.setenv("SEARCH_LLM_MODEL", "search-model")
         monkeypatch.setenv("SEARCH_LLM_BASE_URL", "https://search.example/v1")
-    service = ReaderService(tmp_path / "reader-api.db", fetcher=_fetcher)
+    service = ReaderService(tmp_path / "reader-api.db", fetcher=fetcher)
     store = service.store
     summary = _FakeSummaryManager(store)
     research = _FakeResearchManager(store)
@@ -160,6 +161,60 @@ def test_feed_unsubscribe_preserves_data_and_allows_resubscribe(tmp_path: Path) 
 
     missing = client.delete("/api/feeds/missing")
     assert missing.status_code == 404
+
+
+def test_feed_refresh_updates_entries_and_preserves_not_modified_articles(tmp_path: Path) -> None:
+    feed_url = "https://example.com/rss.xml"
+    first_entry = RawFeedEntry(
+        source_url="https://example.com/reader-api-article",
+        title="Reader API 刷新文章",
+        content="这是 RSS 刷新前的文章正文，内容足够长并且会被保存为初始快照。",
+        feed_url=feed_url,
+        entry_id="entry-1",
+        updated_at="2026-08-24T10:00:00+08:00",
+        content_type=ContentType.RSS_CONTENT,
+    )
+    updated_entry = RawFeedEntry(
+        source_url=first_entry.source_url,
+        title=first_entry.title,
+        content="这是 RSS 刷新后的文章正文，内容已经变化并且应该生成新的文章快照。",
+        feed_url=feed_url,
+        entry_id=first_entry.entry_id,
+        updated_at="2026-08-24T11:00:00+08:00",
+        content_type=ContentType.RSS_CONTENT,
+    )
+    responses = [
+        FeedFetchResult(feed_url, [first_entry], '"v1"', None),
+        FeedFetchResult(feed_url, [updated_entry], '"v2"', None),
+        FeedFetchResult(feed_url, [], '"v2"', None, not_modified=True),
+    ]
+    requests: list[tuple[str | None, str | None]] = []
+
+    def fetcher(url: str, _timeout: float, **kwargs: object) -> FeedFetchResult:
+        assert url == feed_url
+        requests.append((kwargs.get("etag"), kwargs.get("last_modified")))
+        return responses.pop(0)
+
+    client, store, _, _ = _app(tmp_path, fetcher=fetcher)
+    created = client.post("/api/feeds", json={"url": feed_url})
+    assert created.status_code == 200
+    feed_id = created.json()["id"]
+    initial_article = client.get("/api/articles").json()[0]
+
+    refreshed = client.post(f"/api/feeds/{feed_id}/refresh")
+    assert refreshed.status_code == 200
+    assert refreshed.json()["article_count"] == 1
+    refreshed_article = client.get("/api/articles").json()[0]
+    assert refreshed_article["content"] == updated_entry.content
+    assert refreshed_article["snapshot_id"] != initial_article["snapshot_id"]
+
+    unchanged = client.post(f"/api/feeds/{feed_id}/refresh")
+    assert unchanged.status_code == 200
+    assert client.get("/api/articles").json()[0]["content"] == updated_entry.content
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM article_snapshots").fetchone()[0] == 2
+
+    assert requests == [(None, None), ('"v1"', None), ('"v2"', None)]
 
 
 def test_historical_snapshot_schema_is_migrated_once(tmp_path: Path) -> None:
