@@ -565,7 +565,7 @@ export function ReaderWorkspacePage() {
 
   const unsubscribeFeed = async (feedId: string) => {
     const feed = feeds.find(item => item.id === feedId);
-    if (!feed || feedActionId !== null || !window.confirm(`取消订阅“${feed.name}”？`)) return;
+    if (!feed || feedActionId !== null) return;
     setFeedActionId(feedId);
     try {
       await removeFeed(feedId);

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Bookmark,
   ChevronDown,
@@ -68,6 +69,8 @@ export function AppSidebar({
   settingsActive,
   onOpenSettings,
 }: AppSidebarProps) {
+  const [confirmingFeedId, setConfirmingFeedId] = useState<string | null>(null);
+
   const selectView = (view: LibraryView) => {
     onSelectView(view);
     onClose();
@@ -82,6 +85,16 @@ export function AppSidebar({
     onSelectResearchRun(runId);
     onClose();
   };
+
+  const requestUnsubscribe = (feedId: string) => {
+    if (confirmingFeedId === feedId) {
+      setConfirmingFeedId(null);
+      onUnsubscribe(feedId);
+      return;
+    }
+    setConfirmingFeedId(feedId);
+  };
+
   const sidebarToggleLabel = collapsed ? "展开侧边栏" : "收起侧边栏";
 
   return (
@@ -258,12 +271,27 @@ export function AppSidebar({
                 </button>
                 <button
                   type="button"
-                  className="sidebar-feed-action grid size-6 shrink-0 place-items-center rounded text-[#777b82] hover:bg-white/10 hover:text-white"
-                  aria-label={`取消订阅 ${feed.name}`}
-                  title={`取消订阅 ${feed.name}`}
-                  onClick={() => onUnsubscribe(feed.id)}
+                  className={`sidebar-feed-action shrink-0 rounded text-xs transition-[width,padding,color,background-color] duration-200 disabled:cursor-wait ${
+                    confirmingFeedId === feed.id
+                      ? "flex h-7 items-center gap-1.5 bg-[#fbe9e4] px-2 text-[#b7523c] hover:bg-[#f8dfd8]"
+                      : "grid size-6 place-items-center text-[#777b82] hover:bg-white/10 hover:text-white"
+                  }`}
+                  aria-label={
+                    confirmingFeedId === feed.id
+                      ? `确认取消订阅 ${feed.name}`
+                      : `取消订阅 ${feed.name}`
+                  }
+                  title={
+                    confirmingFeedId === feed.id
+                      ? `确认取消订阅 ${feed.name}`
+                      : `取消订阅 ${feed.name}`
+                  }
+                  onClick={() => requestUnsubscribe(feed.id)}
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={14} className="shrink-0" />
+                  {confirmingFeedId === feed.id && (
+                    <span className="whitespace-nowrap">确认取消订阅</span>
+                  )}
                 </button>
               </div>
             ))}
