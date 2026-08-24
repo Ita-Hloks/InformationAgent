@@ -10,7 +10,6 @@ import {
   PanelLeftOpen,
   Plus,
   Rss,
-  RefreshCw,
   Settings,
   Sun,
   Trash2,
@@ -35,7 +34,6 @@ type AppSidebarProps = {
   onSelectFeed: (feedId: string) => void;
   onSelectResearchRun: (runId: string) => void;
   onAddFeed: () => void;
-  onRefreshFeed: (feedId: string) => void;
   onUnsubscribe: (feedId: string) => void;
   settingsActive: boolean;
   onOpenSettings: () => void;
@@ -64,7 +62,6 @@ export function AppSidebar({
   onSelectFeed,
   onSelectResearchRun,
   onAddFeed,
-  onRefreshFeed,
   onUnsubscribe,
   settingsActive,
   onOpenSettings,
@@ -259,15 +256,6 @@ export function AppSidebar({
                       {feed.unread}
                     </span>
                   )}
-                </button>
-                <button
-                  type="button"
-                  className="sidebar-feed-action grid size-6 shrink-0 place-items-center rounded text-[#777b82] hover:bg-white/10 hover:text-white"
-                  aria-label={`刷新 ${feed.name}`}
-                  title={`刷新 ${feed.name}`}
-                  onClick={() => onRefreshFeed(feed.id)}
-                >
-                  <RefreshCw size={14} />
                 </button>
                 <button
                   type="button"

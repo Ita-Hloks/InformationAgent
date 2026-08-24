@@ -732,9 +732,6 @@ export function ReaderWorkspacePage() {
           onSelectFeed={selectFeed}
           onSelectResearchRun={selectResearchRun}
           onAddFeed={() => openOverlay("add-feed")}
-          onRefreshFeed={feedId => {
-            void updateFeed(feedId).catch(() => setApiStatus("unavailable"));
-          }}
           onUnsubscribe={feedId => {
             void unsubscribeFeed(feedId).catch(() => setApiStatus("unavailable"));
           }}
@@ -778,6 +775,14 @@ export function ReaderWorkspacePage() {
                 onToggleSaved={toggleSaved}
                 onMarkAllRead={markAllRead}
                 onOpenSidebar={openSidebar}
+                onRefreshFeed={
+                  selectedFeedId
+                    ? () => {
+                        void updateFeed(selectedFeedId).catch(() => setApiStatus("unavailable"));
+                      }
+                    : null
+                }
+                refreshingFeed={selectedFeedId !== null && feedActionId === selectedFeedId}
               />
             </div>
 
