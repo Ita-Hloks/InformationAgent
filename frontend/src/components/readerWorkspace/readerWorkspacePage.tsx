@@ -10,6 +10,7 @@ import {
   getArticleResearch,
   getReaderAutomationSettings,
   getFeeds,
+  removeFeed,
   getResearchAgentStatus,
   getResearchRuns,
   retryArticleSummary,
@@ -517,6 +518,22 @@ export function ReaderWorkspacePage() {
     setApiStatus("connected");
   };
 
+  const unsubscribeFeed = async (feedId: string) => {
+    const feed = feeds.find(item => item.id === feedId);
+    if (!feed || !window.confirm(`取消订阅“${feed.name}”？`)) return;
+    await removeFeed(feedId);
+    const [loadedFeeds, loadedArticles] = await Promise.all([getFeeds(), getArticles()]);
+    setFeeds(loadedFeeds);
+    const nextArticles = bindArticleSources(loadedArticles, loadedFeeds);
+    setArticles(nextArticles);
+    setReadIds(new Set(nextArticles.filter(article => !article.unread).map(article => article.id)));
+    setSavedIds(
+      new Set(nextArticles.filter(article => article.starred).map(article => article.id)),
+    );
+    if (selectedFeedId === feedId) navigate("/");
+    setApiStatus("connected");
+  };
+
   const refreshResearchRuns = useCallback(async () => {
     try {
       const loadedResearchRuns = await getResearchRuns();
@@ -672,6 +689,9 @@ export function ReaderWorkspacePage() {
           onSelectFeed={selectFeed}
           onSelectResearchRun={selectResearchRun}
           onAddFeed={() => openOverlay("add-feed")}
+          onUnsubscribe={feedId => {
+            void unsubscribeFeed(feedId).catch(() => setApiStatus("unavailable"));
+          }}
           settingsActive={location.pathname === "/settings"}
           onOpenSettings={() => {
             navigate("/settings");

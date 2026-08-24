@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -122,6 +123,97 @@ def _create_article(client: TestClient) -> str:
     assert client.post("/api/feeds", json={"url": "https://example.com/rss.xml"}).status_code == 200
     article = client.get("/api/articles").json()[0]
     return str(article["id"])
+
+
+def test_feed_unsubscribe_preserves_data_and_allows_resubscribe(tmp_path: Path) -> None:
+    client, store, _, _ = _app(tmp_path)
+    created = client.post("/api/feeds", json={"url": "https://example.com/rss.xml"})
+    assert created.status_code == 200
+    feed_id = created.json()["id"]
+    article_id = client.get("/api/articles").json()[0]["id"]
+    assert (
+        client.put(
+            "/api/articles/state",
+            json={"article_ids": [article_id], "is_read": True, "is_saved": True},
+        ).status_code
+        == 200
+    )
+
+    deleted = client.delete(f"/api/feeds/{feed_id}")
+    assert deleted.status_code == 204
+    assert client.get("/api/feeds").json() == []
+    assert client.get("/api/articles").json() == []
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM feeds").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM feed_entries").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM articles").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM article_snapshots").fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT is_read, is_saved FROM reader_article_states WHERE article_id = ?",
+            (article_id,),
+        ).fetchone() == (1, 1)
+
+    resubscribed = client.post("/api/feeds", json={"url": "https://example.com/rss.xml"})
+    assert resubscribed.status_code == 200
+    assert resubscribed.json()["id"] == feed_id
+    assert client.get("/api/articles").json()[0]["id"] == article_id
+
+    missing = client.delete("/api/feeds/missing")
+    assert missing.status_code == 404
+
+
+def test_historical_snapshot_schema_is_migrated_once(tmp_path: Path) -> None:
+    database_path = tmp_path / "legacy.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE articles (
+                id TEXT PRIMARY KEY,
+                source_url TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE article_snapshots (
+                id TEXT PRIMARY KEY,
+                article_id TEXT NOT NULL REFERENCES articles(id),
+                content_hash TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                collected_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                normalizer_version INTEGER NOT NULL,
+                UNIQUE(article_id, content_hash)
+            );
+            INSERT INTO articles VALUES (
+                'article-1', 'https://example.com/a', '2026-08-24T00:00:00+08:00'
+            );
+            INSERT INTO article_snapshots VALUES (
+                'snapshot-1', 'article-1', 'hash-1', '{}',
+                '2026-08-24T00:00:00+08:00', '2026-08-24T00:00:00+08:00', 1
+            );
+            """
+        )
+
+    SQLiteCollectionStore(database_path).list_subscriptions()
+    with sqlite3.connect(database_path) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(article_snapshots)")}
+        assert "normalizer_version" not in columns
+        assert connection.execute("SELECT COUNT(*) FROM article_snapshots").fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM information_agent_migrations WHERE migration_id = ?",
+                ("20260824_remove_article_snapshot_normalizer_version",),
+            ).fetchone()[0]
+            == 1
+        )
+
+    SQLiteCollectionStore(database_path).list_subscriptions()
+    with sqlite3.connect(database_path) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM information_agent_migrations WHERE migration_id = ?",
+                ("20260824_remove_article_snapshot_normalizer_version",),
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_reader_automation_settings_api_persists_and_rejects_strict_input(

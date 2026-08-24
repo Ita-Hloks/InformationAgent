@@ -232,6 +232,13 @@ def create_app(
         summary_tasks.wake()
         return feed_response(subscription)
 
+    @app.delete("/api/feeds/{feed_id}", status_code=204)
+    def delete_feed(feed_id: str) -> None:
+        try:
+            reader.unsubscribe(feed_id)
+        except FeedNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.post("/api/feeds/{feed_id}/refresh", response_model=FeedResponse)
     def refresh_feed(feed_id: str) -> FeedResponse:
         try:

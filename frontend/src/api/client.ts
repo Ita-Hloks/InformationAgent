@@ -194,6 +194,10 @@ export async function addFeed(input: { url: string; title?: string }): Promise<F
   );
 }
 
+export async function removeFeed(feedId: string): Promise<void> {
+  await request<void>(`/api/feeds/${encodeURIComponent(feedId)}`, { method: "DELETE" });
+}
+
 export async function getArticles(feedId?: string): Promise<Article[]> {
   const path = feedId ? `/api/articles?feed_id=${encodeURIComponent(feedId)}` : "/api/articles";
   const articles = await request<ArticlePayload[]>(path);

@@ -6,6 +6,7 @@ import {
   FlaskConical,
   Inbox,
   Library,
+  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -33,6 +34,7 @@ type AppSidebarProps = {
   onSelectFeed: (feedId: string) => void;
   onSelectResearchRun: (runId: string) => void;
   onAddFeed: () => void;
+  onUnsubscribe: (feedId: string) => void;
   settingsActive: boolean;
   onOpenSettings: () => void;
 };
@@ -60,6 +62,7 @@ export function AppSidebar({
   onSelectFeed,
   onSelectResearchRun,
   onAddFeed,
+  onUnsubscribe,
   settingsActive,
   onOpenSettings,
 }: AppSidebarProps) {
@@ -223,31 +226,44 @@ export function AppSidebar({
           </div>
           <div className="space-y-0.5">
             {feeds.map(feed => (
-              <button
+              <div
                 key={feed.id}
-                type="button"
-                className={`sidebar-compact-item flex min-h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors ${
+                className={`sidebar-compact-item group flex min-h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors ${
                   selectedFeedId === feed.id
                     ? "bg-white/9 text-white"
                     : "text-[#aeb1b7] hover:bg-white/6 hover:text-white"
                 }`}
-                aria-label={collapsed ? feed.name : undefined}
-                title={collapsed ? feed.name : undefined}
-                onClick={() => selectFeed(feed.id)}
               >
-                <span
-                  className="grid size-5 shrink-0 place-items-center rounded text-[9px] font-semibold text-white"
-                  style={{ backgroundColor: feed.color }}
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                  aria-label={collapsed ? feed.name : undefined}
+                  title={collapsed ? feed.name : undefined}
+                  onClick={() => selectFeed(feed.id)}
                 >
-                  {feed.name.slice(0, 1).toUpperCase()}
-                </span>
-                <span className="sidebar-label min-w-0 flex-1 truncate text-left">{feed.name}</span>
-                {feed.unread > 0 && (
-                  <span className="sidebar-meta text-xs tabular-nums text-[#777c84]">
-                    {feed.unread}
+                  <span
+                    className="grid size-5 shrink-0 place-items-center rounded text-[9px] font-semibold text-white"
+                    style={{ backgroundColor: feed.color }}
+                  >
+                    {feed.name.slice(0, 1).toUpperCase()}
                   </span>
-                )}
-              </button>
+                  <span className="sidebar-label min-w-0 flex-1 truncate">{feed.name}</span>
+                  {feed.unread > 0 && (
+                    <span className="sidebar-meta text-xs tabular-nums text-[#777c84]">
+                      {feed.unread}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="grid size-6 shrink-0 place-items-center rounded text-[#777b82] opacity-0 hover:bg-white/10 hover:text-white group-hover:opacity-100 group-focus-within:opacity-100"
+                  aria-label={`取消订阅 ${feed.name}`}
+                  title={`取消订阅 ${feed.name}`}
+                  onClick={() => onUnsubscribe(feed.id)}
+                >
+                  <MoreHorizontal size={15} />
+                </button>
+              </div>
             ))}
           </div>
           <button
