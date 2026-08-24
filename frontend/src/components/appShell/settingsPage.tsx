@@ -15,14 +15,22 @@ import {
   clearLogDirectory,
   getLLMSettings,
   getLogSettings,
+  getReaderAutomationSettings,
   getSearchLLMSettings,
   openProjectEnvFile,
+  updateReaderAutomationSettings,
 } from "../../api/client";
-import type { LLMSettings, LogSettings, SearchLLMSettings } from "../../types";
+import type {
+  LLMSettings,
+  LogSettings,
+  ReaderAutomationSettings,
+  SearchLLMSettings,
+} from "../../types";
 
 type LoadPhase = "loading" | "ready" | "error";
 type OpenPhase = "idle" | "opening" | "opened" | "error";
 type ClearPhase = "idle" | "clearing" | "cleared" | "error";
+type SavePhase = "idle" | "saving" | "saved" | "error";
 
 export function SettingsPage() {
   const [settings, setSettings] = useState<LLMSettings | null>(null);
@@ -38,6 +46,13 @@ export function SettingsPage() {
   const [clearError, setClearError] = useState("");
   const [openPhase, setOpenPhase] = useState<OpenPhase>("idle");
   const [openError, setOpenError] = useState("");
+  const [automationSettings, setAutomationSettings] = useState<ReaderAutomationSettings | null>(
+    null,
+  );
+  const [automationLoadPhase, setAutomationLoadPhase] = useState<LoadPhase>("loading");
+  const [automationLoadError, setAutomationLoadError] = useState("");
+  const [automationSavePhase, setAutomationSavePhase] = useState<SavePhase>("idle");
+  const [automationSaveError, setAutomationSaveError] = useState("");
 
   const loadSettings = () => {
     setLoadPhase("loading");
@@ -81,6 +96,22 @@ export function SettingsPage() {
       });
   };
 
+  const loadAutomationSettings = () => {
+    setAutomationLoadPhase("loading");
+    setAutomationLoadError("");
+    void getReaderAutomationSettings()
+      .then(result => {
+        setAutomationSettings(result);
+        setAutomationLoadPhase("ready");
+      })
+      .catch(error => {
+        setAutomationLoadError(
+          error instanceof Error ? error.message : "阅读自动研究设置读取失败，请重试",
+        );
+        setAutomationLoadPhase("error");
+      });
+  };
+
   useEffect(() => {
     loadSettings();
   }, []);
@@ -92,6 +123,27 @@ export function SettingsPage() {
   useEffect(() => {
     loadLogSettings();
   }, []);
+
+  useEffect(() => {
+    loadAutomationSettings();
+  }, []);
+
+  const saveAutomationSettings = () => {
+    if (!automationSettings || automationSavePhase === "saving") return;
+    setAutomationSavePhase("saving");
+    setAutomationSaveError("");
+    void updateReaderAutomationSettings(automationSettings)
+      .then(result => {
+        setAutomationSettings(result);
+        setAutomationSavePhase("saved");
+      })
+      .catch(error => {
+        setAutomationSaveError(
+          error instanceof Error ? error.message : "阅读自动研究设置保存失败，请重试",
+        );
+        setAutomationSavePhase("error");
+      });
+  };
 
   const handleOpenEnv = () => {
     if (openPhase === "opening") return;
@@ -171,6 +223,135 @@ export function SettingsPage() {
               />
             </div>
           )}
+
+          <div className="mt-8 border-t border-[#ddded8] pt-5">
+            <h2 className="text-sm font-semibold text-[#303238]">阅读自动研究</h2>
+
+            {automationLoadPhase === "loading" && (
+              <div className="mt-4 flex items-center gap-2 text-sm text-[#73767b]">
+                <Loader2 size={16} className="animate-spin" />
+                读取中
+              </div>
+            )}
+
+            {automationLoadPhase === "error" && (
+              <div className="mt-4 flex items-center gap-3 text-sm text-[#8a3e24]" role="alert">
+                <TriangleAlert size={17} className="shrink-0" />
+                <span>{automationLoadError}</span>
+                <button
+                  type="button"
+                  className="grid size-8 shrink-0 place-items-center rounded-md border border-[#e6b7a5] hover:bg-[#fff2ec]"
+                  aria-label="重新读取阅读自动研究设置"
+                  title="重新读取阅读自动研究设置"
+                  onClick={loadAutomationSettings}
+                >
+                  <RotateCw size={14} />
+                </button>
+              </div>
+            )}
+
+            {automationLoadPhase === "ready" && automationSettings && (
+              <div className="mt-4 border-y border-[#d9dad4] bg-white">
+                <div className="flex min-h-14 items-center justify-between gap-5 px-4 py-3">
+                  <span className="text-xs font-medium text-[#62656b]">启用</span>
+                  <input
+                    className="size-4 accent-[#3978a8]"
+                    type="checkbox"
+                    checked={automationSettings.enabled}
+                    onChange={event =>
+                      setAutomationSettings(current =>
+                        current ? { ...current, enabled: event.target.checked } : current,
+                      )
+                    }
+                  />
+                </div>
+                <AutomationNumberRow
+                  label="停留秒数"
+                  value={automationSettings.dwellSeconds}
+                  min={1}
+                  max={3600}
+                  onChange={value =>
+                    setAutomationSettings(current =>
+                      current ? { ...current, dwellSeconds: value } : current,
+                    )
+                  }
+                />
+                <AutomationNumberRow
+                  label="阅读比例"
+                  value={automationSettings.readRatio}
+                  min={0.01}
+                  max={1}
+                  step={0.01}
+                  onChange={value =>
+                    setAutomationSettings(current =>
+                      current ? { ...current, readRatio: value } : current,
+                    )
+                  }
+                />
+                <AutomationNumberRow
+                  label="Agent 超时"
+                  value={automationSettings.agentTimeoutSeconds}
+                  min={1}
+                  max={600}
+                  onChange={value =>
+                    setAutomationSettings(current =>
+                      current ? { ...current, agentTimeoutSeconds: value } : current,
+                    )
+                  }
+                />
+                <AutomationNumberRow
+                  label="搜索次数"
+                  value={automationSettings.maxSearches}
+                  min={1}
+                  max={3}
+                  onChange={value =>
+                    setAutomationSettings(current =>
+                      current ? { ...current, maxSearches: value } : current,
+                    )
+                  }
+                />
+                <AutomationNumberRow
+                  label="重试次数"
+                  value={automationSettings.maxAttempts}
+                  min={1}
+                  max={3}
+                  onChange={value =>
+                    setAutomationSettings(current =>
+                      current ? { ...current, maxAttempts: value } : current,
+                    )
+                  }
+                />
+              </div>
+            )}
+
+            {automationSettings && automationLoadPhase === "ready" && (
+              <div className="mt-4 flex items-center gap-3">
+                <button
+                  type="button"
+                  className="flex h-10 items-center gap-2 rounded-md bg-[#3978a8] px-4 text-sm font-medium text-white hover:bg-[#2f6d9c] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={automationSavePhase === "saving"}
+                  onClick={saveAutomationSettings}
+                >
+                  {automationSavePhase === "saving" ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : automationSavePhase === "saved" ? (
+                    <Check size={16} />
+                  ) : null}
+                  保存
+                </button>
+                {automationSavePhase === "saved" && (
+                  <span className="text-sm text-[#36775a]" role="status">
+                    已保存
+                  </span>
+                )}
+                {automationSavePhase === "error" && (
+                  <span className="text-sm text-[#8a3e24]" role="alert">
+                    {automationSaveError}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
 
           <div className="mt-8 border-t border-[#ddded8] pt-5">
             <div className="flex items-center gap-2">
@@ -388,5 +569,36 @@ function SettingRow({
         {value}
       </span>
     </div>
+  );
+}
+
+function AutomationNumberRow({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="flex min-h-14 items-center justify-between gap-5 border-t border-[#e3e3dd] px-4 py-3">
+      <span className="shrink-0 text-xs font-medium text-[#62656b]">{label}</span>
+      <input
+        className="h-9 w-44 rounded-md border border-[#d3d4ce] bg-white px-3 text-right text-sm outline-none focus:border-[#3978a8]"
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={event => onChange(Number(event.target.value))}
+      />
+    </label>
   );
 }

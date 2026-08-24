@@ -4,6 +4,7 @@ from typing import Any
 
 __all__ = [
     "AgentTaskManager",
+    "ArticleResearchTaskManager",
     "agent_run",
     "collect",
     "ingest",
@@ -19,6 +20,10 @@ def __getattr__(name: str) -> Any:
         from .agent_tasks import AgentTaskManager
 
         return AgentTaskManager
+    if name == "ArticleResearchTaskManager":
+        from .article_research_tasks import ArticleResearchTaskManager
+
+        return ArticleResearchTaskManager
     if name == "agent_run":
         from .agent_workflow import agent_run
 

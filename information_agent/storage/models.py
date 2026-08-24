@@ -187,6 +187,50 @@ class ReaderArticle:
     is_saved: bool = False
     snapshot_id: str | None = None
     content_hash: str | None = None
+    summary: str | None = None
+    summary_status: str = "pending"
+    summary_error: str | None = None
+    research_status: str = "none"
+    research_mode: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ArticleSummaryJob:
+    snapshot_id: str
+    article_id: str
+    title: str
+    content: str
+    content_hash: str
+    status: str
+    attempts: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReaderAutomationSettings:
+    enabled: bool
+    dwell_seconds: int
+    read_ratio: float
+    agent_timeout_seconds: int
+    max_searches: int
+    max_attempts: int
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ArticleResearchRun:
+    id: str
+    article_id: str
+    snapshot_id: str
+    topic: str
+    mode: str
+    status: str
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+    agent_request_id: str
+    analysis_run_id: str | None
+    config: dict[str, Any]
+    error: dict[str, Any] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,3 +291,4 @@ class ResearchRunSummary:
     snapshot_count: int
     selected_evidence_count: int
     collection_error_count: int
+    mode: str = "manual"

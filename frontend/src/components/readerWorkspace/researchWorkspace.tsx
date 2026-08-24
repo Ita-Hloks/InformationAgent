@@ -57,6 +57,7 @@ export function ResearchWorkspace({
   const [feeds, setFeeds] = useState(defaultFeeds);
   const [limit, setLimit] = useState(3);
   const [timeoutSeconds, setTimeoutSeconds] = useState(180);
+  const [runFilter, setRunFilter] = useState<"all" | ResearchRun["mode"]>("all");
 
   const selectedRun = useMemo(
     () => runs.find(run => run.id === selectedRunId) ?? null,
@@ -68,6 +69,10 @@ export function ResearchWorkspace({
   const agentActive = Boolean(agentTask && ["created", "running"].includes(agentTask.status));
   const canRunAgent = Boolean(activeRunId) && activeEvidenceCount > 0 && !agentActive;
   const selectedRunTitle = selectedRun?.title;
+  const visibleRuns = useMemo(
+    () => (runFilter === "all" ? runs : runs.filter(run => run.mode === runFilter)),
+    [runFilter, runs],
+  );
 
   useEffect(() => {
     if (!selectedRunTitle || ingestResult) return;
@@ -170,10 +175,32 @@ export function ResearchWorkspace({
         <div className="mt-6">
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-sm font-semibold">最近运行</h2>
-            <span className="text-xs text-[#777a80]">{runs.length}</span>
+            <span className="text-xs text-[#777a80]">{visibleRuns.length}</span>
+          </div>
+          <div className="mb-3 grid grid-cols-3 rounded-md border border-[#d5d6d0] bg-white p-0.5">
+            {(
+              [
+                ["all", "全部"],
+                ["auto", "自动"],
+                ["manual", "手动"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={`h-8 rounded text-xs font-medium ${
+                  runFilter === value
+                    ? "bg-[#3978a8] text-white"
+                    : "text-[#62656b] hover:bg-[#ecece7]"
+                }`}
+                onClick={() => setRunFilter(value)}
+              >
+                {label}
+              </button>
+            ))}
           </div>
           <div className="space-y-2">
-            {runs.map(run => (
+            {visibleRuns.map(run => (
               <button
                 key={run.id}
                 type="button"

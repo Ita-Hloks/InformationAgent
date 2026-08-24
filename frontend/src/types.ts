@@ -1,5 +1,10 @@
 export type LibraryView = "inbox" | "today" | "all" | "saved" | "research";
 
+export type SummaryStatus = "pending" | "running" | "completed" | "failed";
+export type ResearchStatus =
+  "none" | "queued" | "running" | "completed" | "partial" | "failed" | "cancelled";
+export type ResearchMode = "auto" | "manual";
+
 export type Feed = {
   id: string;
   url: string;
@@ -17,7 +22,12 @@ export type Article = {
   author: string;
   title: string;
   summary: string;
+  summaryStatus: SummaryStatus;
+  summaryError: string | null;
   publishedAt: string;
+  publishedAtIso: string | null;
+  researchStatus: ResearchStatus;
+  researchMode: ResearchMode | null;
   readingMinutes: number;
   category: string;
   imageUrl: string;
@@ -73,12 +83,55 @@ export type LogSettings = {
 export type ResearchRun = {
   id: string;
   title: string;
+  mode: ResearchMode;
   status: "collecting" | "completed" | "partial" | "failed";
   articleCount: number;
   feedCount: number;
   errorCount: number;
   startedAt: string;
   finishedAt?: string;
+};
+
+export type ReaderAutomationSettings = {
+  enabled: boolean;
+  dwellSeconds: number;
+  readRatio: number;
+  agentTimeoutSeconds: number;
+  maxSearches: number;
+  maxAttempts: number;
+  updatedAt: string;
+};
+
+export type ArticleResearchRunStatus =
+  "queued" | "running" | "completed" | "partial" | "failed" | "cancelled";
+
+export type ArticleResearchError = {
+  type: string;
+  message: string;
+};
+
+export type ArticleResearchRun = {
+  id: string;
+  articleId: string;
+  snapshotId: string;
+  topic: string;
+  mode: ResearchMode;
+  status: ArticleResearchRunStatus;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  requestId: string;
+  analysisRunId: string | null;
+  timeoutSeconds: number;
+  maxSearches: number;
+  maxAttempts: number;
+  error: ArticleResearchError | null;
+  agent: AgentTaskSnapshot | null;
+};
+
+export type ArticleResearchHistory = {
+  articleId: string;
+  runs: ArticleResearchRun[];
 };
 
 export type ResearchIngestResult = {

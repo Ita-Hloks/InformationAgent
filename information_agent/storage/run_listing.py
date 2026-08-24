@@ -15,11 +15,19 @@ class ResearchRunListingMixin:
 
     database_path: Path
 
-    def list_runs(self, *, limit: int, status: str | None = None) -> list[ResearchRunSummary]:
+    def list_runs(
+        self,
+        *,
+        limit: int,
+        status: str | None = None,
+        mode: str | None = None,
+    ) -> list[ResearchRunSummary]:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
         if status is not None and status not in RESEARCH_RUN_STATUSES:
             raise ValueError(f"unknown research run status: {status}")
+        if mode is not None and mode not in {"auto", "manual"}:
+            raise ValueError(f"unknown research run mode: {mode}")
 
         query = """
             SELECT runs.id AS run_id, runs.topic, runs.status,
@@ -28,14 +36,21 @@ class ResearchRunListingMixin:
                 COUNT(evidence.snapshot_id) AS snapshot_count,
                 COALESCE(SUM(CASE WHEN evidence.selected = 1 THEN 1 ELSE 0 END), 0)
                     AS selected_evidence_count,
-                json_array_length(runs.errors_json) AS collection_error_count
+                json_array_length(runs.errors_json) AS collection_error_count,
+                COALESCE(article_research.mode, 'manual') AS mode
             FROM research_runs AS runs
             LEFT JOIN run_evidence AS evidence ON evidence.run_id = runs.id
+            LEFT JOIN article_research_runs AS article_research
+                ON article_research.id = runs.id
         """
         parameters: list[object] = []
         if status is not None:
             query += " WHERE runs.status = ?"
             parameters.append(status)
+        if mode is not None:
+            query += " AND " if status is not None else " WHERE "
+            query += "COALESCE(article_research.mode, 'manual') = ?"
+            parameters.append(mode)
         query += """
             GROUP BY runs.id
             ORDER BY runs.created_at DESC, runs.id ASC
@@ -56,6 +71,7 @@ class ResearchRunListingMixin:
                 snapshot_count=int(row["snapshot_count"]),
                 selected_evidence_count=int(row["selected_evidence_count"]),
                 collection_error_count=int(row["collection_error_count"]),
+                mode=str(row["mode"]),
             )
             for row in rows
         ]

@@ -2,14 +2,21 @@ import type {
   Article,
   ArticleAnswer,
   ArticleAnswerHistory,
+  ArticleResearchHistory,
+  ArticleResearchRun,
   Feed,
   AgentTaskSnapshot,
   LLMSettings,
   LogSettings,
   ResearchIngestResult,
+  ReaderAutomationSettings,
+  ResearchMode,
   ResearchRun,
+  ResearchStatus,
   SearchLLMSettings,
+  SummaryStatus,
 } from "../types";
+import { formatArticleListDate } from "../utils/date";
 
 type FeedPayload = {
   id: string;
@@ -28,6 +35,11 @@ type ArticlePayload = {
   categories: string[];
   published_at: string | null;
   content: string;
+  summary: string | null;
+  summary_status: SummaryStatus;
+  summary_error: string | null;
+  research_status: ResearchStatus;
+  research_mode: ResearchMode | null;
   is_read?: boolean;
   is_saved?: boolean;
 };
@@ -83,6 +95,7 @@ type AgentTaskSnapshotPayload = AgentTaskSnapshot;
 type ResearchRunPayload = {
   run_id: string;
   topic: string;
+  mode: ResearchMode;
   status: ResearchRun["status"];
   started_at: string;
   finished_at?: string;
@@ -90,6 +103,38 @@ type ResearchRunPayload = {
   snapshot_count: number;
   selected_evidence_count: number;
   collection_error_count: number;
+};
+type ReaderAutomationSettingsPayload = {
+  enabled: boolean;
+  dwell_seconds: number;
+  read_ratio: number;
+  agent_timeout_seconds: number;
+  max_searches: number;
+  max_attempts: number;
+  updated_at: string;
+};
+type ReaderAutomationSettingsUpdatePayload = Omit<ReaderAutomationSettingsPayload, "updated_at">;
+type ArticleResearchRunPayload = {
+  run_id: string;
+  article_id: string;
+  snapshot_id: string;
+  topic: string;
+  mode: ResearchMode;
+  status: ArticleResearchRun["status"];
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  request_id: string;
+  analysis_run_id: string | null;
+  timeout_seconds: number;
+  max_searches: number;
+  max_attempts: number;
+  error: ArticleResearchRun["error"];
+  agent: AgentTaskSnapshot | null;
+};
+type ArticleResearchHistoryPayload = {
+  article_id: string;
+  runs: ArticleResearchRunPayload[];
 };
 
 export type ArticleStateUpdate = {
@@ -121,6 +166,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(detail);
   }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
@@ -149,18 +195,39 @@ export async function addFeed(input: { url: string; title?: string }): Promise<F
   );
 }
 
+export async function removeFeed(feedId: string): Promise<void> {
+  await request<void>(`/api/feeds/${encodeURIComponent(feedId)}`, { method: "DELETE" });
+}
+
+export async function refreshFeed(feedId: string): Promise<Feed> {
+  return toFeed(
+    await request<FeedPayload>(`/api/feeds/${encodeURIComponent(feedId)}/refresh`, {
+      method: "POST",
+    }),
+  );
+}
+
 export async function getArticles(feedId?: string): Promise<Article[]> {
   const path = feedId ? `/api/articles?feed_id=${encodeURIComponent(feedId)}` : "/api/articles";
   const articles = await request<ArticlePayload[]>(path);
-  return articles.map(article => ({
+  return articles.map(toArticle);
+}
+
+function toArticle(article: ArticlePayload): Article {
+  return {
     id: article.id,
     feedId: article.feed_id,
     snapshotId: article.snapshot_id,
     source: "RSS",
     author: article.author ?? "未知作者",
     title: article.title,
-    summary: article.content.slice(0, 220),
-    publishedAt: article.published_at ?? "未标注时间",
+    summary: article.summary?.trim() ?? "",
+    summaryStatus: article.summary_status,
+    summaryError: article.summary_error,
+    publishedAt: formatArticleListDate(article.published_at),
+    publishedAtIso: article.published_at,
+    researchStatus: article.research_status,
+    researchMode: article.research_mode,
     readingMinutes: Math.max(1, Math.ceil(article.content.length / 400)),
     category: article.categories[0] ?? "未分类",
     imageUrl: "",
@@ -168,7 +235,107 @@ export async function getArticles(feedId?: string): Promise<Article[]> {
     starred: article.is_saved ?? false,
     body: article.content.split(/\n+/).filter(Boolean),
     sourceUrl: article.source_url,
-  }));
+  };
+}
+
+function toReaderAutomationSettings(
+  payload: ReaderAutomationSettingsPayload,
+): ReaderAutomationSettings {
+  return {
+    enabled: payload.enabled,
+    dwellSeconds: payload.dwell_seconds,
+    readRatio: payload.read_ratio,
+    agentTimeoutSeconds: payload.agent_timeout_seconds,
+    maxSearches: payload.max_searches,
+    maxAttempts: payload.max_attempts,
+    updatedAt: payload.updated_at,
+  };
+}
+
+function toArticleResearchRun(payload: ArticleResearchRunPayload): ArticleResearchRun {
+  return {
+    id: payload.run_id,
+    articleId: payload.article_id,
+    snapshotId: payload.snapshot_id,
+    topic: payload.topic,
+    mode: payload.mode,
+    status: payload.status,
+    createdAt: payload.created_at,
+    startedAt: payload.started_at,
+    finishedAt: payload.finished_at,
+    requestId: payload.request_id,
+    analysisRunId: payload.analysis_run_id,
+    timeoutSeconds: payload.timeout_seconds,
+    maxSearches: payload.max_searches,
+    maxAttempts: payload.max_attempts,
+    error: payload.error,
+    agent: payload.agent,
+  };
+}
+
+export async function getReaderAutomationSettings(): Promise<ReaderAutomationSettings> {
+  const payload = await request<ReaderAutomationSettingsPayload>("/api/settings/reader-automation");
+  return toReaderAutomationSettings(payload);
+}
+
+export async function updateReaderAutomationSettings(
+  settings: Omit<ReaderAutomationSettings, "updatedAt">,
+): Promise<ReaderAutomationSettings> {
+  const payload = await request<ReaderAutomationSettingsPayload>(
+    "/api/settings/reader-automation",
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        enabled: settings.enabled,
+        dwell_seconds: settings.dwellSeconds,
+        read_ratio: settings.readRatio,
+        agent_timeout_seconds: settings.agentTimeoutSeconds,
+        max_searches: settings.maxSearches,
+        max_attempts: settings.maxAttempts,
+      } satisfies ReaderAutomationSettingsUpdatePayload),
+    },
+  );
+  return toReaderAutomationSettings(payload);
+}
+
+export async function retryArticleSummary(articleId: string): Promise<Article> {
+  const payload = await request<ArticlePayload>(
+    `/api/articles/${encodeURIComponent(articleId)}/summary/retry`,
+    { method: "POST" },
+  );
+  return toArticle(payload);
+}
+
+export async function getArticleResearch(
+  articleId: string,
+  options: { mode?: ResearchMode; limit?: number; signal?: AbortSignal } = {},
+): Promise<ArticleResearchHistory> {
+  const query = new URLSearchParams();
+  if (options.mode) query.set("mode", options.mode);
+  if (options.limit !== undefined) query.set("limit", String(options.limit));
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const payload = await request<ArticleResearchHistoryPayload>(
+    `/api/articles/${encodeURIComponent(articleId)}/research${suffix}`,
+    { signal: options.signal },
+  );
+  return {
+    articleId: payload.article_id,
+    runs: payload.runs.map(toArticleResearchRun),
+  };
+}
+
+export async function runArticleResearch(
+  articleId: string,
+  input: { mode: ResearchMode; requestId?: string },
+): Promise<ArticleResearchRun> {
+  const payload = await request<ArticleResearchRunPayload>(
+    `/api/articles/${encodeURIComponent(articleId)}/research`,
+    {
+      method: "POST",
+      body: JSON.stringify({ mode: input.mode, request_id: input.requestId }),
+    },
+  );
+  return toArticleResearchRun(payload);
 }
 
 export async function updateArticleStates(
@@ -375,6 +542,7 @@ function toResearchRun(run: ResearchRunPayload): ResearchRun {
   return {
     id: run.run_id,
     title: run.topic,
+    mode: run.mode,
     status: run.status,
     articleCount: run.selected_evidence_count,
     feedCount: run.feed_count,
