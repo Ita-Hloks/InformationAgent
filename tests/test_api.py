@@ -780,9 +780,7 @@ def test_article_ask_api_hides_runtime_error_details(tmp_path: Path) -> None:
         def answer(self, _article, _question: str, *, request_id: str) -> str:
             raise RuntimeError("数据库连接失败：底层异常")
 
-    response = TestClient(
-        create_app(service, article_assistant=_BrokenAssistant())
-    ).post(
+    response = TestClient(create_app(service, article_assistant=_BrokenAssistant())).post(
         f"/api/articles/{article_id}/ask",
         json={"question": "文章说了什么？", "request_id": "api-answer-runtime-error"},
     )
