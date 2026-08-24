@@ -239,7 +239,7 @@ export function AppSidebar({
               >
                 <button
                   type="button"
-                  className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                  className="sidebar-feed-select flex min-w-0 flex-1 items-center gap-2.5 text-left"
                   aria-label={collapsed ? feed.name : undefined}
                   title={collapsed ? feed.name : undefined}
                   onClick={() => selectFeed(feed.id)}

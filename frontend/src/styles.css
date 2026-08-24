@@ -168,6 +168,13 @@ textarea:focus-visible {
     flex-shrink: 0;
   }
 
+  .sidebar-layout.is-collapsed .sidebar-feed-select {
+    flex: 0 0 40px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+  }
+
   .sidebar-layout:not(.is-collapsed) .sidebar-compact-item {
     transition-delay: 0ms;
   }
