@@ -1,4 +1,17 @@
-import { CheckCheck, Menu, Search, SlidersHorizontal, Star } from "lucide-react";
+import {
+  CheckCheck,
+  CheckCircle2,
+  CircleAlert,
+  CircleStop,
+  Clock3,
+  Loader2,
+  Menu,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+  Star,
+  TriangleAlert,
+} from "lucide-react";
 
 import type { Article } from "../../types";
 
@@ -13,6 +26,8 @@ type ArticleListProps = {
   onToggleSaved: (articleId: string) => void;
   onMarkAllRead: () => void;
   onOpenSidebar: () => void;
+  onRefreshFeed: (() => void) | null;
+  refreshingFeed: boolean;
 };
 
 export function ArticleList({
@@ -26,6 +41,8 @@ export function ArticleList({
   onToggleSaved,
   onMarkAllRead,
   onOpenSidebar,
+  onRefreshFeed,
+  refreshingFeed,
 }: ArticleListProps) {
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col border-r border-[var(--reader-workspace-border)] bg-[var(--reader-workspace-surface)]">
@@ -43,6 +60,18 @@ export function ArticleList({
           <h1 className="min-w-0 flex-1 truncate text-[15px] font-semibold text-[#252629]">
             {title}
           </h1>
+          {onRefreshFeed && (
+            <button
+              type="button"
+              className="grid size-8 shrink-0 place-items-center rounded-md text-[#676a70] hover:bg-[var(--reader-workspace-hover)] hover:text-[#202124] disabled:cursor-wait disabled:opacity-60"
+              aria-label={`刷新 ${title}`}
+              title={`刷新 ${title}`}
+              disabled={refreshingFeed}
+              onClick={onRefreshFeed}
+            >
+              <RefreshCw size={16} className={refreshingFeed ? "animate-spin" : undefined} />
+            </button>
+          )}
           <span className="text-xs tabular-nums text-[#85878c]">{articles.length}</span>
           <button
             type="button"
@@ -63,11 +92,11 @@ export function ArticleList({
           </button>
         </div>
 
-        <label className="mt-2 flex h-9 items-center gap-2 rounded-md border border-[#d8d8d2] bg-white px-2.5 text-[#7a7d82] focus-within:border-[#bcbdb8]">
+        <label className="article-search-field mt-2 flex h-9 items-center gap-2 rounded-md border border-[#d8d8d2] bg-white px-2.5 text-[#7a7d82]">
           <Search size={15} />
           <span className="sr-only">搜索文章</span>
           <input
-            className="min-w-0 flex-1 bg-transparent text-sm text-[#252629] outline-none placeholder:text-[#9a9c9f]"
+            className="article-search-input min-w-0 flex-1 bg-transparent text-sm text-[#252629] outline-none placeholder:text-[#9a9c9f]"
             type="search"
             placeholder="搜索标题、来源或主题"
             value={searchQuery}
@@ -117,6 +146,7 @@ export function ArticleList({
                       <span className="truncate font-medium text-[#55585e]">{article.source}</span>
                       <span>·</span>
                       <span className="shrink-0">{article.publishedAt}</span>
+                      <ResearchStatusIcon article={article} />
                     </span>
                     <strong
                       className={`mt-1.5 block text-[14px] leading-[1.4] tracking-[0] ${
@@ -127,9 +157,18 @@ export function ArticleList({
                     >
                       {article.title}
                     </strong>
-                    <span className="mt-1.5 line-clamp-2 block text-xs leading-[1.55] text-[#77797e]">
-                      {article.summary}
-                    </span>
+                    {article.summary && (
+                      <span className="article-summary-clamp mt-1.5 text-xs leading-[1.55] text-[#77797e]">
+                        {article.summary}
+                      </span>
+                    )}
+                    {!article.summary &&
+                      (article.summaryStatus === "pending" ||
+                        article.summaryStatus === "running") && (
+                        <span className="mt-1.5 block text-xs leading-[1.55] text-[#96989c]">
+                          摘要生成中
+                        </span>
+                      )}
                     <span className="mt-2 flex items-center gap-2 text-[10px] text-[#999b9e]">
                       <span className="rounded border border-[#deded9] px-1.5 py-0.5">
                         {article.category}
@@ -164,5 +203,31 @@ export function ArticleList({
         )}
       </div>
     </section>
+  );
+}
+
+function ResearchStatusIcon({ article }: { article: Article }) {
+  if (article.researchStatus === "none") return null;
+
+  const status = {
+    queued: { label: "研究排队中", icon: Clock3, className: "text-[#b28b3c]" },
+    running: { label: "研究运行中", icon: Loader2, className: "animate-spin text-[#3978a8]" },
+    completed: { label: "研究已完成", icon: CheckCircle2, className: "text-[#36775a]" },
+    partial: { label: "研究部分完成", icon: CircleAlert, className: "text-[#b28b3c]" },
+    failed: { label: "研究失败", icon: TriangleAlert, className: "text-[#b85c4c]" },
+    cancelled: { label: "研究已取消", icon: CircleStop, className: "text-[#85878c]" },
+  }[article.researchStatus];
+  if (!status) return null;
+
+  const Icon = status.icon;
+  const modeLabel = article.researchMode === "auto" ? "自动" : "手动";
+  return (
+    <span
+      className="ml-auto grid size-4 shrink-0 place-items-center"
+      title={`${modeLabel}${status.label}`}
+      aria-label={`${modeLabel}${status.label}`}
+    >
+      <Icon size={13} className={status.className} />
+    </span>
   );
 }

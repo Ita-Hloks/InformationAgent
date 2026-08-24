@@ -137,6 +137,7 @@ def test_list_runs_cli_arguments_and_payload(
         "snapshot_count",
         "selected_evidence_count",
         "collection_error_count",
+        "mode",
     }
 
     database_path = tmp_path / "runs.db"

@@ -43,6 +43,22 @@ textarea {
   outline: none;
 }
 
+.article-search-field:focus-within {
+  border-color: #ef8354;
+  box-shadow: 0 0 0 1px #ef8354;
+}
+
+.article-search-input:focus-visible {
+  outline: none;
+}
+
+.article-summary-clamp {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 button {
   cursor: pointer;
 }
@@ -79,6 +95,7 @@ textarea:focus-visible {
     overflow: hidden;
     opacity: 1;
     transform: translate3d(0, 0, 0);
+    white-space: nowrap;
     transition:
       max-width 240ms cubic-bezier(0.22, 1, 0.36, 1),
       opacity 120ms ease,
@@ -110,6 +127,7 @@ textarea:focus-visible {
     overflow: hidden;
     opacity: 1;
     transform: translate3d(0, 0, 0);
+    white-space: nowrap;
     transition:
       max-width 240ms cubic-bezier(0.22, 1, 0.36, 1),
       opacity 120ms ease,
@@ -150,6 +168,13 @@ textarea:focus-visible {
     flex-shrink: 0;
   }
 
+  .sidebar-layout.is-collapsed .sidebar-feed-select {
+    flex: 0 0 40px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+  }
+
   .sidebar-layout:not(.is-collapsed) .sidebar-compact-item {
     transition-delay: 0ms;
   }
@@ -187,10 +212,8 @@ textarea:focus-visible {
     right: calc(50% - 12px);
   }
 
-  .sidebar-layout.is-collapsed .sidebar-research-action {
-    opacity: 0;
-    pointer-events: none;
-    visibility: hidden;
+  .sidebar-layout.is-collapsed .sidebar-feed-action {
+    display: none;
   }
 
   .sidebar-meta {

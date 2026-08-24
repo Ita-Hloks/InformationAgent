@@ -92,6 +92,10 @@ class ReaderService:
     def list_subscriptions(self) -> list[FeedSubscription]:
         return self.store.list_subscriptions()
 
+    def unsubscribe(self, feed_id: str) -> None:
+        if not self.store.delete_subscription(feed_id):
+            raise FeedNotFoundError(f"不存在的订阅：{feed_id}")
+
     def list_articles(
         self,
         *,
@@ -112,6 +116,10 @@ class ReaderService:
         if article is None:
             raise ArticleNotFoundError(f"不存在的文章：{article_id}")
         return article
+
+    def delete_article(self, article_id: str) -> None:
+        if not self.store.delete_reader_article(article_id):
+            raise ArticleNotFoundError(f"不存在的文章：{article_id}")
 
     def update_article_states(
         self,

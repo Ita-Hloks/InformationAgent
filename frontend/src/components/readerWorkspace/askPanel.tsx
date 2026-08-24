@@ -19,7 +19,7 @@ type AskPanelProps = {
 
 type AnswerPhase = "idle" | "loading" | "success" | "error";
 
-const suggestions = ["总结核心观点", "列出待验证断言", "这对产品团队意味着什么？"];
+const suggestions = ["总结核心观点", "找出关键事实", "这对产品团队意味着什么？"];
 
 export function AskPanel({ article, open, onClose }: AskPanelProps) {
   const questionInputRef = useRef<HTMLTextAreaElement>(null);

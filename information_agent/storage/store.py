@@ -42,6 +42,7 @@ from .models import (
     ResearchRunNotReadyError,
 )
 from .reader_answers import ReaderAnswerPersistenceMixin
+from .reader_automation import ReaderAutomationPersistenceMixin, _summary_error_message
 from .run_listing import ResearchRunListingMixin
 
 _OPINION_STATUS_REASONS = {
@@ -72,6 +73,7 @@ class SQLiteCollectionStore(
     AnalysisPersistenceMixin,
     ReaderAnswerPersistenceMixin,
     ResearchRunListingMixin,
+    ReaderAutomationPersistenceMixin,
 ):
     """保存粗处理文章快照与运行内证据关系。"""
 
@@ -212,15 +214,21 @@ class SQLiteCollectionStore(
                 SELECT subscriptions.feed_id, feeds.feed_url, subscriptions.title,
                        subscriptions.site_url, subscriptions.subscribed_at,
                        subscriptions.last_refreshed_at, subscriptions.last_error,
-                       COUNT(feed_entries.article_id) AS article_count,
-                       COUNT(feed_entries.article_id)
-                         - COUNT(CASE WHEN states.is_read = 1 THEN feed_entries.article_id END)
+                       COUNT(CASE WHEN deleted.article_id IS NULL
+                                  THEN feed_entries.article_id END) AS article_count,
+                       COUNT(CASE WHEN deleted.article_id IS NULL
+                                  THEN feed_entries.article_id END)
+                         - COUNT(CASE WHEN deleted.article_id IS NULL
+                                           AND states.is_read = 1
+                                      THEN feed_entries.article_id END)
                          AS unread_count
                 FROM feed_subscriptions AS subscriptions
                 JOIN feeds ON feeds.id = subscriptions.feed_id
                 LEFT JOIN feed_entries ON feed_entries.feed_id = subscriptions.feed_id
                 LEFT JOIN reader_article_states AS states
                     ON states.article_id = feed_entries.article_id
+                LEFT JOIN reader_deleted_articles AS deleted
+                    ON deleted.article_id = feed_entries.article_id
                 GROUP BY subscriptions.feed_id
                 ORDER BY subscriptions.subscribed_at, subscriptions.feed_id
                 """
@@ -234,15 +242,21 @@ class SQLiteCollectionStore(
                 SELECT subscriptions.feed_id, feeds.feed_url, subscriptions.title,
                        subscriptions.site_url, subscriptions.subscribed_at,
                        subscriptions.last_refreshed_at, subscriptions.last_error,
-                       COUNT(feed_entries.article_id) AS article_count,
-                       COUNT(feed_entries.article_id)
-                         - COUNT(CASE WHEN states.is_read = 1 THEN feed_entries.article_id END)
+                       COUNT(CASE WHEN deleted.article_id IS NULL
+                                  THEN feed_entries.article_id END) AS article_count,
+                       COUNT(CASE WHEN deleted.article_id IS NULL
+                                  THEN feed_entries.article_id END)
+                         - COUNT(CASE WHEN deleted.article_id IS NULL
+                                           AND states.is_read = 1
+                                      THEN feed_entries.article_id END)
                          AS unread_count
                 FROM feed_subscriptions AS subscriptions
                 JOIN feeds ON feeds.id = subscriptions.feed_id
                 LEFT JOIN feed_entries ON feed_entries.feed_id = subscriptions.feed_id
                 LEFT JOIN reader_article_states AS states
                     ON states.article_id = feed_entries.article_id
+                LEFT JOIN reader_deleted_articles AS deleted
+                    ON deleted.article_id = feed_entries.article_id
                 WHERE subscriptions.feed_id = ?
                 GROUP BY subscriptions.feed_id
                 """,
@@ -257,6 +271,38 @@ class SQLiteCollectionStore(
                 (str(error), feed_id),
             )
 
+    def delete_subscription(self, feed_id: str) -> bool:
+        with self._connect() as connection:
+            deleted = connection.execute(
+                "DELETE FROM feed_subscriptions WHERE feed_id = ?",
+                (feed_id,),
+            )
+        return deleted.rowcount == 1
+
+    def delete_reader_article(self, article_id: str) -> bool:
+        with self._connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT 1
+                FROM feed_entries AS entries
+                JOIN feed_subscriptions AS subscriptions
+                    ON subscriptions.feed_id = entries.feed_id
+                WHERE entries.article_id = ?
+                LIMIT 1
+                """,
+                (article_id,),
+            ).fetchone()
+            if existing is None:
+                return False
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO reader_deleted_articles (article_id, deleted_at)
+                VALUES (?, ?)
+                """,
+                (article_id, _format_datetime(project_now())),
+            )
+        return True
+
     def list_reader_articles(
         self,
         *,
@@ -268,7 +314,17 @@ class SQLiteCollectionStore(
         if feed_id is not None:
             query = """
                 SELECT entries.feed_id, snapshots.id AS snapshot_id, snapshots.content_hash,
-                       snapshots.payload_json,
+                       snapshots.payload_json, summaries.summary,
+                       summaries.status AS summary_status,
+                       summaries.error_json AS summary_error,
+                       COALESCE((SELECT research.status FROM article_research_runs AS research
+                                 WHERE research.article_id = entries.article_id
+                                 ORDER BY research.created_at DESC, research.rowid DESC LIMIT 1),
+                                'none') AS research_status,
+                       (SELECT research.mode FROM article_research_runs AS research
+                        WHERE research.article_id = entries.article_id
+                        ORDER BY research.created_at DESC, research.rowid DESC LIMIT 1
+                       ) AS research_mode,
                        COALESCE(states.is_read, 0) AS is_read,
                        COALESCE(states.is_saved, 0) AS is_saved
                 FROM feed_entries AS entries
@@ -276,9 +332,15 @@ class SQLiteCollectionStore(
                     ON subscriptions.feed_id = entries.feed_id
                 JOIN article_snapshots AS snapshots
                     ON snapshots.article_id = entries.article_id
+                LEFT JOIN article_summaries AS summaries
+                    ON summaries.snapshot_id = snapshots.id
                 LEFT JOIN reader_article_states AS states
                     ON states.article_id = entries.article_id
                 WHERE entries.feed_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM reader_deleted_articles AS deleted
+                      WHERE deleted.article_id = entries.article_id
+                  )
                   AND snapshots.id = (
                       SELECT latest.id FROM article_snapshots AS latest
                       WHERE latest.article_id = entries.article_id
@@ -292,7 +354,17 @@ class SQLiteCollectionStore(
         else:
             query = """
                 SELECT entries.feed_id, snapshots.id AS snapshot_id, snapshots.content_hash,
-                       snapshots.payload_json,
+                       snapshots.payload_json, summaries.summary,
+                       summaries.status AS summary_status,
+                       summaries.error_json AS summary_error,
+                       COALESCE((SELECT research.status FROM article_research_runs AS research
+                                 WHERE research.article_id = entries.article_id
+                                 ORDER BY research.created_at DESC, research.rowid DESC LIMIT 1),
+                                'none') AS research_status,
+                       (SELECT research.mode FROM article_research_runs AS research
+                        WHERE research.article_id = entries.article_id
+                        ORDER BY research.created_at DESC, research.rowid DESC LIMIT 1
+                       ) AS research_mode,
                        COALESCE(states.is_read, 0) AS is_read,
                        COALESCE(states.is_saved, 0) AS is_saved
                 FROM feed_entries AS entries
@@ -300,6 +372,8 @@ class SQLiteCollectionStore(
                     ON subscriptions.feed_id = entries.feed_id
                 JOIN article_snapshots AS snapshots
                     ON snapshots.article_id = entries.article_id
+                LEFT JOIN article_summaries AS summaries
+                    ON summaries.snapshot_id = snapshots.id
                 LEFT JOIN reader_article_states AS states
                     ON states.article_id = entries.article_id
                 WHERE snapshots.id = (
@@ -307,7 +381,11 @@ class SQLiteCollectionStore(
                     WHERE latest.article_id = entries.article_id
                     ORDER BY latest.collected_at DESC, latest.created_at DESC
                     LIMIT 1
-                )
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM reader_deleted_articles AS deleted
+                      WHERE deleted.article_id = entries.article_id
+                  )
                 ORDER BY snapshots.collected_at DESC, entries.entry_key
                 LIMIT ? OFFSET ?
                 """
@@ -322,6 +400,11 @@ class SQLiteCollectionStore(
                 is_saved=bool(row["is_saved"]),
                 snapshot_id=str(row["snapshot_id"]),
                 content_hash=str(row["content_hash"]),
+                summary=_optional_text(row["summary"]),
+                summary_status=str(row["summary_status"] or "pending"),
+                summary_error=_summary_error_message(row["summary_error"]),
+                research_status=str(row["research_status"] or "none"),
+                research_mode=_optional_text(row["research_mode"]),
             )
             for row in rows
         ]
@@ -331,7 +414,17 @@ class SQLiteCollectionStore(
             row = connection.execute(
                 """
                 SELECT entries.feed_id, snapshots.id AS snapshot_id, snapshots.content_hash,
-                       snapshots.payload_json,
+                       snapshots.payload_json, summaries.summary,
+                       summaries.status AS summary_status,
+                       summaries.error_json AS summary_error,
+                       COALESCE((SELECT research.status FROM article_research_runs AS research
+                                 WHERE research.article_id = entries.article_id
+                                 ORDER BY research.created_at DESC, research.rowid DESC LIMIT 1),
+                                'none') AS research_status,
+                       (SELECT research.mode FROM article_research_runs AS research
+                        WHERE research.article_id = entries.article_id
+                        ORDER BY research.created_at DESC, research.rowid DESC LIMIT 1
+                       ) AS research_mode,
                        COALESCE(states.is_read, 0) AS is_read,
                        COALESCE(states.is_saved, 0) AS is_saved
                 FROM feed_entries AS entries
@@ -339,9 +432,15 @@ class SQLiteCollectionStore(
                     ON subscriptions.feed_id = entries.feed_id
                 JOIN article_snapshots AS snapshots
                     ON snapshots.article_id = entries.article_id
+                LEFT JOIN article_summaries AS summaries
+                    ON summaries.snapshot_id = snapshots.id
                 LEFT JOIN reader_article_states AS states
                     ON states.article_id = entries.article_id
                 WHERE entries.article_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM reader_deleted_articles AS deleted
+                      WHERE deleted.article_id = entries.article_id
+                  )
                 ORDER BY snapshots.collected_at DESC, snapshots.created_at DESC
                 LIMIT 1
                 """,
@@ -356,6 +455,11 @@ class SQLiteCollectionStore(
             is_saved=bool(row["is_saved"]),
             snapshot_id=str(row["snapshot_id"]),
             content_hash=str(row["content_hash"]),
+            summary=_optional_text(row["summary"]),
+            summary_status=str(row["summary_status"] or "pending"),
+            summary_error=_summary_error_message(row["summary_error"]),
+            research_status=str(row["research_status"] or "none"),
+            research_mode=_optional_text(row["research_mode"]),
         )
 
     def update_reader_article_states(
@@ -380,6 +484,10 @@ class SQLiteCollectionStore(
                 JOIN feed_subscriptions AS subscriptions
                     ON subscriptions.feed_id = entries.feed_id
                 WHERE entries.article_id IN ({placeholders})
+                  AND NOT EXISTS (
+                      SELECT 1 FROM reader_deleted_articles AS deleted
+                      WHERE deleted.article_id = entries.article_id
+                  )
                 """,
                 unique_ids,
             ).fetchall()
@@ -1251,6 +1359,20 @@ class SQLiteCollectionStore(
             (article.article_id, content_hash),
         ).fetchone()
         if existing is not None:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO article_summaries (
+                    snapshot_id, content_hash, status, summary, error_json,
+                    attempts, created_at, updated_at, finished_at
+                ) VALUES (?, ?, 'pending', NULL, NULL, 0, ?, ?, NULL)
+                """,
+                (
+                    existing["id"],
+                    content_hash,
+                    _format_datetime(project_now()),
+                    _format_datetime(project_now()),
+                ),
+            )
             return str(existing["id"])
 
         created_at = _format_datetime(project_now())
@@ -1275,6 +1397,20 @@ class SQLiteCollectionStore(
                 content_hash,
                 json.dumps(_article_payload(article), ensure_ascii=False, sort_keys=True),
                 _format_datetime(article.collected_at),
+                created_at,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO article_summaries (
+                snapshot_id, content_hash, status, summary, error_json,
+                attempts, created_at, updated_at, finished_at
+            ) VALUES (?, ?, 'pending', NULL, NULL, 0, ?, ?, NULL)
+            """,
+            (
+                snapshot_id,
+                content_hash,
+                created_at,
                 created_at,
             ),
         )
@@ -1344,6 +1480,11 @@ class SQLiteCollectionStore(
     def _migrate(connection: sqlite3.Connection) -> None:
         connection.executescript(
             """
+            CREATE TABLE IF NOT EXISTS information_agent_migrations (
+                migration_id TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS research_runs (
                 id TEXT PRIMARY KEY,
                 topic TEXT NOT NULL,
@@ -1370,6 +1511,56 @@ class SQLiteCollectionStore(
                 collected_at TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 UNIQUE(article_id, content_hash)
+            );
+
+            CREATE TABLE IF NOT EXISTS article_summaries (
+                snapshot_id TEXT PRIMARY KEY REFERENCES article_snapshots(id) ON DELETE CASCADE,
+                content_hash TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN ('pending', 'running', 'completed', 'failed')
+                ),
+                summary TEXT,
+                error_json TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                finished_at TEXT,
+                CHECK (
+                    (status = 'completed' AND summary IS NOT NULL AND error_json IS NULL)
+                    OR
+                    (status IN ('pending', 'running') AND summary IS NULL)
+                    OR
+                    (status = 'failed' AND summary IS NULL AND error_json IS NOT NULL)
+                )
+            );
+
+            CREATE TABLE IF NOT EXISTS reader_automation_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+                dwell_seconds INTEGER NOT NULL CHECK (dwell_seconds > 0),
+                read_ratio REAL NOT NULL CHECK (read_ratio > 0 AND read_ratio <= 1),
+                agent_timeout_seconds INTEGER NOT NULL CHECK (agent_timeout_seconds > 0),
+                max_searches INTEGER NOT NULL CHECK (max_searches > 0),
+                max_attempts INTEGER NOT NULL CHECK (max_attempts > 0),
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS article_research_runs (
+                id TEXT PRIMARY KEY REFERENCES research_runs(id) ON DELETE CASCADE,
+                article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                snapshot_id TEXT NOT NULL REFERENCES article_snapshots(id) ON DELETE CASCADE,
+                topic TEXT NOT NULL,
+                mode TEXT NOT NULL CHECK (mode IN ('auto', 'manual')),
+                status TEXT NOT NULL CHECK (
+                    status IN ('queued', 'running', 'completed', 'partial', 'failed', 'cancelled')
+                ),
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                agent_request_id TEXT NOT NULL UNIQUE,
+                analysis_run_id TEXT,
+                config_json TEXT NOT NULL,
+                error_json TEXT
             );
 
             CREATE TABLE IF NOT EXISTS run_evidence (
@@ -1525,6 +1716,11 @@ class SQLiteCollectionStore(
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS reader_deleted_articles (
+                article_id TEXT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+                deleted_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS opinion_plans (
                 id TEXT PRIMARY KEY,
                 planning_run_id TEXT NOT NULL,
@@ -1663,6 +1859,8 @@ class SQLiteCollectionStore(
                 ON feed_entries(article_id);
             CREATE INDEX IF NOT EXISTS reader_article_states_updated_at_idx
                 ON reader_article_states(updated_at);
+            CREATE INDEX IF NOT EXISTS reader_deleted_articles_deleted_at_idx
+                ON reader_deleted_articles(deleted_at);
             CREATE INDEX IF NOT EXISTS opinion_plans_planning_run_id_idx
                 ON opinion_plans(planning_run_id);
             CREATE INDEX IF NOT EXISTS opinion_runs_article_id_idx
@@ -1683,7 +1881,38 @@ class SQLiteCollectionStore(
                 ON opinion_attempts(run_id, stage, attempt_no);
             CREATE INDEX IF NOT EXISTS article_answer_requests_article_idx
                 ON article_answer_requests(article_id, snapshot_id, status, created_at);
+            CREATE INDEX IF NOT EXISTS article_summaries_status_idx
+                ON article_summaries(status, updated_at);
+            CREATE INDEX IF NOT EXISTS article_research_runs_article_idx
+                ON article_research_runs(article_id, created_at DESC, id DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS article_research_runs_auto_snapshot_idx
+                ON article_research_runs(article_id, snapshot_id)
+                WHERE mode = 'auto';
             """
+        )
+        migration_id = "20260824_remove_article_snapshot_normalizer_version"
+        applied = connection.execute(
+            "SELECT 1 FROM information_agent_migrations WHERE migration_id = ?",
+            (migration_id,),
+        ).fetchone()
+        columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(article_snapshots)")
+        }
+        if applied is None and "normalizer_version" in columns:
+            connection.execute("ALTER TABLE article_snapshots DROP COLUMN normalizer_version")
+        if applied is None:
+            connection.execute(
+                "INSERT INTO information_agent_migrations (migration_id, applied_at) VALUES (?, ?)",
+                (migration_id, _format_datetime(project_now())),
+            )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO reader_automation_settings (
+                id, enabled, dwell_seconds, read_ratio, agent_timeout_seconds,
+                max_searches, max_attempts, updated_at
+            ) VALUES (1, 1, 15, 0.3333333333333333, 180, 3, 3, ?)
+            """,
+            (_format_datetime(project_now()),),
         )
 
 

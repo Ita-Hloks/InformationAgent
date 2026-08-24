@@ -1,5 +1,5 @@
 import { type FormEvent, useMemo, useRef, useState } from "react";
-import { Check, Plus, Rss, Search, X } from "lucide-react";
+import { Check, Plus, Rss, X } from "lucide-react";
 
 import { useOverlayDialog } from "../../hooks/useOverlayDialog";
 import type { Feed } from "../../types";
@@ -47,17 +47,13 @@ const recommendations: Feed[] = [
 ];
 
 export function AddFeedDialog({ open, feeds, onAddFeed, onClose }: AddFeedDialogProps) {
-  const searchInputRef = useRef<HTMLInputElement>(null);
-  const [query, setQuery] = useState("");
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [customUrl, setCustomUrl] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const addedIds = useMemo(() => new Set(feeds.map(feed => feed.id)), [feeds]);
-  const visibleRecommendations = recommendations.filter(feed =>
-    `${feed.name} ${feed.domain}`.toLowerCase().includes(query.trim().toLowerCase()),
-  );
 
-  useOverlayDialog(open, onClose, searchInputRef);
+  useOverlayDialog(open, onClose, closeButtonRef);
 
   const addCustomFeed = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -104,6 +100,7 @@ export function AddFeedDialog({ open, feeds, onAddFeed, onClose }: AddFeedDialog
           </div>
           <button
             type="button"
+            ref={closeButtonRef}
             className="grid size-8 place-items-center rounded-md text-[#6f7277] hover:bg-[var(--reader-workspace-hover)]"
             aria-label="关闭添加来源"
             title="关闭添加来源"
@@ -114,23 +111,10 @@ export function AddFeedDialog({ open, feeds, onAddFeed, onClose }: AddFeedDialog
         </header>
 
         <div className="p-4">
-          <label className="flex h-10 items-center gap-2 rounded-md border border-[#d7d7d1] bg-white px-3 focus-within:border-[#aaa9a2]">
-            <Search size={16} className="text-[#777a7f]" />
-            <span className="sr-only">搜索 RSS 来源</span>
-            <input
-              ref={searchInputRef}
-              type="search"
-              className="min-w-0 flex-1 bg-transparent text-sm text-[#28292c] outline-none placeholder:text-[#9b9c9f]"
-              placeholder="搜索名称或网站"
-              value={query}
-              onChange={event => setQuery(event.target.value)}
-            />
-          </label>
-
-          <div className="mt-5">
+          <div>
             <p className="text-[11px] font-semibold text-[#77797e]">推荐来源</p>
             <div className="mt-2 divide-y divide-[#e3e3de] border-y border-[#e3e3de]">
-              {visibleRecommendations.map(feed => {
+              {recommendations.map(feed => {
                 const added = addedIds.has(feed.id) || feeds.some(item => item.url === feed.url);
                 return (
                   <div key={feed.id} className="flex min-h-14 items-center gap-3 py-2">

@@ -6,11 +6,18 @@ import {
   addFeed as createFeed,
   createResearchAgentRequestId,
   createResearchRun,
+  deleteArticle,
   getArticles,
+  getArticleResearch,
+  getReaderAutomationSettings,
   getFeeds,
+  refreshFeed,
+  removeFeed,
   getResearchAgentStatus,
   getResearchRuns,
+  retryArticleSummary,
   runResearchAgent,
+  runArticleResearch,
   stopResearchAgent,
   type ArticleStateUpdate,
   updateArticleStates,
@@ -21,9 +28,12 @@ import type {
   AgentTaskSnapshot,
   Feed,
   LibraryView,
+  ArticleResearchRun,
+  ReaderAutomationSettings,
   ResearchIngestResult,
   ResearchRun,
 } from "../../types";
+import { isArticleToday } from "../../utils/date";
 import { AppSidebar } from "../appShell";
 import { AddFeedDialog } from "./addFeedDialog";
 import { ArticleList } from "./articleList";
@@ -54,6 +64,12 @@ export function ReaderWorkspacePage() {
   const [feeds, setFeeds] = useState<Feed[]>(initialFeeds);
   const [articles, setArticles] = useState(initialArticles);
   const [researchRuns, setResearchRuns] = useState<ResearchRun[]>([]);
+  const [automationSettings, setAutomationSettings] = useState<ReaderAutomationSettings | null>(
+    null,
+  );
+  const [articleResearchRuns, setArticleResearchRuns] = useState<ArticleResearchRun[]>([]);
+  const [articleResearchLoading, setArticleResearchLoading] = useState(false);
+  const [articleResearchError, setArticleResearchError] = useState<string | null>(null);
   const [selectedResearchRunId, setSelectedResearchRunId] = useState<string | null>(() =>
     searchParams.get("run_id"),
   );
@@ -77,6 +93,15 @@ export function ReaderWorkspacePage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [apiStatus, setApiStatus] = useState<ApiStatus>("connecting");
+  const [feedActionId, setFeedActionId] = useState<string | null>(null);
+  const [articleDeleteId, setArticleDeleteId] = useState<string | null>(null);
+  const [articleDeleteError, setArticleDeleteError] = useState<string | null>(null);
+  const [readingActivity, setReadingActivity] = useState({
+    key: null as string | null,
+    progress: 0,
+    visibleSeconds: 0,
+  });
+  const autoResearchAttempts = useRef(new Set<string>());
   const selectedFeedId = feedMatch?.params.feedId ?? null;
   const activeView = selectedFeedId ? "all" : viewFromPath(location.pathname);
 
@@ -110,25 +135,53 @@ export function ReaderWorkspacePage() {
     }
   };
 
+  const applyReaderData = useCallback(
+    (loadedFeeds: Feed[], loadedArticles: typeof initialArticles) => {
+      const nextArticles = bindArticleSources(loadedArticles, loadedFeeds);
+      setFeeds(loadedFeeds);
+      setArticles(nextArticles);
+      setReadIds(
+        new Set(nextArticles.filter(article => !article.unread).map(article => article.id)),
+      );
+      setSavedIds(
+        new Set(nextArticles.filter(article => article.starred).map(article => article.id)),
+      );
+    },
+    [],
+  );
+
+  const reloadReaderData = useCallback(async () => {
+    const [loadedFeeds, loadedArticles] = await Promise.all([getFeeds(), getArticles()]);
+    applyReaderData(loadedFeeds, loadedArticles);
+  }, [applyReaderData]);
+
+  const refreshArticles = useCallback(async () => {
+    applyReaderData(feeds, await getArticles());
+  }, [applyReaderData, feeds]);
+
   useEffect(() => {
-    void Promise.all([getFeeds(), getArticles(), getResearchRuns()])
-      .then(([loadedFeeds, loadedArticles, loadedResearchRuns]) => {
-        setFeeds(loadedFeeds);
-        const nextArticles = bindArticleSources(loadedArticles, loadedFeeds);
-        setArticles(nextArticles);
+    void Promise.all([reloadReaderData(), getResearchRuns(), getReaderAutomationSettings()])
+      .then(([, loadedResearchRuns, loadedAutomationSettings]) => {
         setResearchRuns(loadedResearchRuns);
-        setReadIds(
-          new Set(nextArticles.filter(article => !article.unread).map(article => article.id)),
-        );
-        setSavedIds(
-          new Set(nextArticles.filter(article => article.starred).map(article => article.id)),
-        );
+        setAutomationSettings(loadedAutomationSettings);
         setApiStatus("connected");
       })
       .catch(() => {
         setApiStatus("unavailable");
       });
-  }, []);
+  }, [reloadReaderData]);
+
+  const hasPendingSummaries = articles.some(article =>
+    ["pending", "running"].includes(article.summaryStatus),
+  );
+
+  useEffect(() => {
+    if (!hasPendingSummaries) return;
+    const timer = window.setInterval(() => {
+      void refreshArticles().catch(() => setApiStatus("unavailable"));
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [hasPendingSummaries, refreshArticles]);
 
   useEffect(() => {
     if (activeView !== "research") return;
@@ -221,7 +274,7 @@ export function ReaderWorkspacePage() {
         if (activeView === "inbox") {
           return !readIds.has(article.id) || article.id === articleParam;
         }
-        if (activeView === "today") return !["昨天", "周二"].includes(article.publishedAt);
+        if (activeView === "today") return isArticleToday(article.publishedAtIso);
         if (activeView === "saved") return savedIds.has(article.id);
         return true;
       })
@@ -237,11 +290,154 @@ export function ReaderWorkspacePage() {
   const selectedArticle =
     visibleArticles.find(article => article.id === articleParam) ?? visibleArticles[0] ?? null;
   const selectedArticleId = selectedArticle?.id ?? null;
+  const selectedSnapshotId = selectedArticle?.snapshotId ?? null;
+  const selectedArticleKey = selectedArticle
+    ? `${selectedArticle.id}:${selectedArticle.snapshotId}`
+    : null;
   const selectedFeed = feeds.find(feed => feed.id === selectedFeedId);
   const listTitle = selectedFeed?.name ?? viewTitles[activeView];
   const unreadTotal = articles.filter(article => !readIds.has(article.id)).length;
   const articleOpen = selectedArticleId !== null && articleParam === selectedArticleId;
   const routeState = location.state as RouteState | null;
+
+  useEffect(() => {
+    setReadingActivity({ key: selectedArticleKey, progress: 0, visibleSeconds: 0 });
+    setArticleResearchRuns([]);
+    setArticleResearchError(null);
+    setArticleDeleteError(null);
+  }, [selectedArticleKey]);
+
+  const syncArticleResearchStatus = useCallback((run: ArticleResearchRun) => {
+    setArticles(current =>
+      current.map(article =>
+        article.id === run.articleId
+          ? { ...article, researchStatus: run.status, researchMode: run.mode }
+          : article,
+      ),
+    );
+  }, []);
+
+  const loadArticleResearch = useCallback(async () => {
+    if (!selectedArticleId) return;
+    const history = await getArticleResearch(selectedArticleId);
+    setArticleResearchRuns(history.runs);
+    const automaticRun = history.runs.find(
+      run => run.mode === "auto" && run.snapshotId === selectedSnapshotId,
+    );
+    if (automaticRun && selectedArticleKey) {
+      autoResearchAttempts.current.add(selectedArticleKey);
+      syncArticleResearchStatus(automaticRun);
+    }
+  }, [selectedArticleId, selectedArticleKey, selectedSnapshotId, syncArticleResearchStatus]);
+
+  useEffect(() => {
+    if (!selectedArticleKey) return;
+    let active = true;
+    setArticleResearchLoading(true);
+    void loadArticleResearch()
+      .catch(error => {
+        if (active) {
+          setArticleResearchError(error instanceof Error ? error.message : "研究记录读取失败");
+        }
+      })
+      .finally(() => {
+        if (active) setArticleResearchLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [loadArticleResearch, selectedArticleKey]);
+
+  const latestArticleResearch = articleResearchRuns[0] ?? null;
+  const articleResearchActive = articleResearchRuns.some(run =>
+    ["queued", "running"].includes(run.status),
+  );
+
+  useEffect(() => {
+    if (!selectedArticleId || !articleResearchActive) return;
+    const timer = window.setInterval(() => {
+      void loadArticleResearch().catch(error => {
+        setArticleResearchError(error instanceof Error ? error.message : "研究记录读取失败");
+      });
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [articleResearchActive, loadArticleResearch, selectedArticleId]);
+
+  const runArticleResearchForSelected = useCallback(
+    async (mode: "auto" | "manual") => {
+      if (!selectedArticleId) return;
+      setArticleResearchError(null);
+      try {
+        const run = await runArticleResearch(selectedArticleId, { mode });
+        setArticleResearchRuns(current => [run, ...current.filter(item => item.id !== run.id)]);
+        syncArticleResearchStatus(run);
+        setApiStatus("connected");
+      } catch (error) {
+        setArticleResearchError(error instanceof Error ? error.message : "研究任务启动失败");
+        setApiStatus("unavailable");
+      }
+    },
+    [selectedArticleId, syncArticleResearchStatus],
+  );
+
+  useEffect(() => {
+    if (
+      !automationSettings?.enabled ||
+      !selectedArticleId ||
+      !selectedArticleKey ||
+      activeView === "research" ||
+      readingActivity.key !== selectedArticleKey ||
+      readingActivity.visibleSeconds < automationSettings.dwellSeconds ||
+      readingActivity.progress < automationSettings.readRatio ||
+      autoResearchAttempts.current.has(selectedArticleKey)
+    ) {
+      return;
+    }
+    autoResearchAttempts.current.add(selectedArticleKey);
+    void runArticleResearchForSelected("auto");
+  }, [
+    activeView,
+    automationSettings,
+    readingActivity,
+    runArticleResearchForSelected,
+    selectedArticleId,
+    selectedArticleKey,
+  ]);
+
+  const reportReaderProgress = useCallback(
+    (progress: number) => {
+      if (!selectedArticleKey) return;
+      setReadingActivity(current =>
+        current.key === selectedArticleKey ? { ...current, progress } : current,
+      );
+    },
+    [selectedArticleKey],
+  );
+
+  const reportVisibleSeconds = useCallback(
+    (visibleSeconds: number) => {
+      if (!selectedArticleKey) return;
+      setReadingActivity(current =>
+        current.key === selectedArticleKey ? { ...current, visibleSeconds } : current,
+      );
+    },
+    [selectedArticleKey],
+  );
+
+  const retrySelectedSummary = useCallback(async () => {
+    if (!selectedArticleId) return;
+    try {
+      const retriedArticle = await retryArticleSummary(selectedArticleId);
+      const nextArticle = bindArticleSources([retriedArticle], feeds)[0];
+      if (!nextArticle) return;
+      setArticles(current =>
+        current.map(article => (article.id === nextArticle.id ? nextArticle : article)),
+      );
+      setApiStatus("connected");
+    } catch {
+      setApiStatus("unavailable");
+    }
+  }, [feeds, selectedArticleId]);
 
   useEffect(() => {
     setSidebarOpen(false);
@@ -320,17 +516,65 @@ export function ReaderWorkspacePage() {
     void persistArticleStates(articleIds, { isRead: true });
   };
 
+  const deleteSelectedArticle = async () => {
+    if (!selectedArticleId || articleDeleteId !== null) return;
+    const articleId = selectedArticleId;
+    setArticleDeleteError(null);
+    setArticleDeleteId(articleId);
+    try {
+      await deleteArticle(articleId);
+      setArticles(current => current.filter(article => article.id !== articleId));
+      setReadIds(current => {
+        const next = new Set(current);
+        next.delete(articleId);
+        return next;
+      });
+      setSavedIds(current => {
+        const next = new Set(current);
+        next.delete(articleId);
+        return next;
+      });
+      setArticleResearchRuns([]);
+      setApiStatus("connected");
+      closeArticle();
+    } catch (error) {
+      setArticleDeleteError(error instanceof Error ? error.message : "文章删除失败，请重试");
+      setApiStatus("unavailable");
+    } finally {
+      setArticleDeleteId(null);
+    }
+  };
+
   const addFeed = async (input: { url: string; title?: string }) => {
-    const feed = await createFeed(input);
-    const [loadedFeeds, loadedArticles] = await Promise.all([getFeeds(), getArticles()]);
-    const nextArticles = bindArticleSources(loadedArticles, loadedFeeds);
-    setFeeds(loadedFeeds.some(item => item.id === feed.id) ? loadedFeeds : [...loadedFeeds, feed]);
-    setArticles(nextArticles);
-    setReadIds(new Set(nextArticles.filter(article => !article.unread).map(article => article.id)));
-    setSavedIds(
-      new Set(nextArticles.filter(article => article.starred).map(article => article.id)),
-    );
+    await createFeed(input);
+    await reloadReaderData();
     setApiStatus("connected");
+  };
+
+  const updateFeed = async (feedId: string) => {
+    if (feedActionId !== null) return;
+    setFeedActionId(feedId);
+    try {
+      await refreshFeed(feedId);
+      await reloadReaderData();
+      setApiStatus("connected");
+    } finally {
+      setFeedActionId(null);
+    }
+  };
+
+  const unsubscribeFeed = async (feedId: string) => {
+    const feed = feeds.find(item => item.id === feedId);
+    if (!feed || feedActionId !== null) return;
+    setFeedActionId(feedId);
+    try {
+      await removeFeed(feedId);
+      await reloadReaderData();
+      if (selectedFeedId === feedId) navigate("/");
+      setApiStatus("connected");
+    } finally {
+      setFeedActionId(null);
+    }
   };
 
   const refreshResearchRuns = useCallback(async () => {
@@ -488,6 +732,9 @@ export function ReaderWorkspacePage() {
           onSelectFeed={selectFeed}
           onSelectResearchRun={selectResearchRun}
           onAddFeed={() => openOverlay("add-feed")}
+          onUnsubscribe={feedId => {
+            void unsubscribeFeed(feedId).catch(() => setApiStatus("unavailable"));
+          }}
           settingsActive={location.pathname === "/settings"}
           onOpenSettings={() => {
             navigate("/settings");
@@ -528,6 +775,14 @@ export function ReaderWorkspacePage() {
                 onToggleSaved={toggleSaved}
                 onMarkAllRead={markAllRead}
                 onOpenSidebar={openSidebar}
+                onRefreshFeed={
+                  selectedFeedId
+                    ? () => {
+                        void updateFeed(selectedFeedId).catch(() => setApiStatus("unavailable"));
+                      }
+                    : null
+                }
+                refreshingFeed={selectedFeedId !== null && feedActionId === selectedFeedId}
               />
             </div>
 
@@ -547,6 +802,16 @@ export function ReaderWorkspacePage() {
                   }
                 }}
                 onAsk={() => openOverlay("ask")}
+                onDelete={() => void deleteSelectedArticle()}
+                deleting={selectedArticle ? articleDeleteId === selectedArticle.id : false}
+                deleteError={articleDeleteError}
+                onProgress={reportReaderProgress}
+                onVisibleSeconds={reportVisibleSeconds}
+                onTestResearch={() => void runArticleResearchForSelected("manual")}
+                onRetrySummary={() => void retrySelectedSummary()}
+                researchRun={latestArticleResearch}
+                researchLoading={articleResearchLoading}
+                researchError={articleResearchError}
               />
             </div>
           </>

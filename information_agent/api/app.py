@@ -18,10 +18,12 @@ from ..common import (
 )
 from ..opinion import BilibiliTargetError, OpinionAnalysisService, OpinionStatus
 from ..opinion.service import OpinionArticleNotFoundError, OpinionSnapshotMismatchError
-from ..orchestration import AgentTaskManager, agent_run, ingest
+from ..orchestration import AgentTaskManager, ArticleResearchTaskManager, agent_run, ingest
+from ..orchestration.summary_tasks import SummaryTaskManager
 from ..reader import (
     ArticleAssistant,
     ArticleNotFoundError,
+    ArticleSummaryAssistant,
     FeedNotFoundError,
     FeedUnavailableError,
     ReaderService,
@@ -42,6 +44,9 @@ from .models import (
     ArticleAnswerHistoryResponse,
     ArticleAnswerResponse,
     ArticleQuestionRequest,
+    ArticleResearchHistoryResponse,
+    ArticleResearchRequest,
+    ArticleResearchResponse,
     ArticleResponse,
     ArticleStateResponse,
     ArticleStateUpdate,
@@ -54,13 +59,17 @@ from .models import (
     LogSettingsResponse,
     OpinionRequest,
     OpinionResponse,
+    ReaderAutomationSettingsResponse,
+    ReaderAutomationSettingsUpdate,
     ResearchIngestRequest,
     ResearchRunsResponse,
     SearchLLMSettingsResponse,
     article_answer_response,
+    article_research_response,
     article_response,
     article_state_response,
     feed_response,
+    reader_automation_settings_response,
 )
 
 
@@ -68,18 +77,56 @@ def create_app(
     service: ReaderService | None = None,
     opinion_service: OpinionAnalysisService | None = None,
     article_assistant: ArticleAssistant | None = None,
+    summary_assistant: ArticleSummaryAssistant | None = None,
+    summary_task_manager: SummaryTaskManager | None = None,
+    article_research_task_manager: ArticleResearchTaskManager | None = None,
 ) -> FastAPI:
     load_dotenv()
     reader = service or ReaderService()
     opinion = opinion_service or OpinionAnalysisService(store=reader.store)
     assistant = article_assistant or ArticleAssistant()
     agent_tasks = AgentTaskManager(reader.store.database_path, runner=agent_run)
+    summary_tasks = summary_task_manager or SummaryTaskManager(
+        reader.store,
+        runner=(summary_assistant or ArticleSummaryAssistant()).summarize,
+    )
+    article_research_tasks = article_research_task_manager or ArticleResearchTaskManager(
+        reader.store.database_path,
+        store=reader.store,
+        agent_tasks=agent_tasks,
+    )
     try:
         cleanup_log_directory()
     except OSError:
         pass
     app = FastAPI(title="Information Agent API")
-    app.router.on_shutdown.append(agent_tasks.shutdown)
+
+    def shutdown_background_tasks() -> None:
+        summary_tasks.shutdown(wait=False)
+        article_research_tasks.shutdown()
+        agent_tasks.shutdown()
+
+    app.router.on_shutdown.append(shutdown_background_tasks)
+
+    def require_agent_settings() -> None:
+        main_settings = MainLLMConfig.from_env()
+        search_settings = public_status_from_env()
+        if not main_settings.available:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "main_llm_unavailable",
+                    "message": "主 LLM 配置不完整，无法运行 Agent",
+                },
+            )
+        if not search_settings["available"]:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "search_llm_unavailable",
+                    "message": "联网搜索配置不完整，无法运行 Agent",
+                },
+            )
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error(
@@ -102,6 +149,26 @@ def create_app(
     @app.get("/api/settings", response_model=LLMSettingsResponse)
     def get_settings() -> LLMSettingsResponse:
         return LLMSettingsResponse(**MainLLMConfig.from_env().to_public_status())
+
+    @app.get(
+        "/api/settings/reader-automation",
+        response_model=ReaderAutomationSettingsResponse,
+    )
+    def get_reader_automation_settings() -> ReaderAutomationSettingsResponse:
+        return reader_automation_settings_response(reader.store.get_reader_automation_settings())
+
+    @app.put(
+        "/api/settings/reader-automation",
+        response_model=ReaderAutomationSettingsResponse,
+    )
+    def update_reader_automation_settings(
+        request: ReaderAutomationSettingsUpdate,
+    ) -> ReaderAutomationSettingsResponse:
+        try:
+            settings = reader.store.update_reader_automation_settings(**request.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return reader_automation_settings_response(settings)
 
     @app.get("/api/settings/search", response_model=SearchLLMSettingsResponse)
     def get_search_settings() -> SearchLLMSettingsResponse:
@@ -157,20 +224,31 @@ def create_app(
     @app.post("/api/feeds", response_model=FeedResponse)
     def create_feed(request: FeedCreate) -> FeedResponse:
         try:
-            return feed_response(reader.subscribe(request.url, title=request.title))
+            subscription = reader.subscribe(request.url, title=request.title)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except FeedUnavailableError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        summary_tasks.wake()
+        return feed_response(subscription)
+
+    @app.delete("/api/feeds/{feed_id}", status_code=204)
+    def delete_feed(feed_id: str) -> None:
+        try:
+            reader.unsubscribe(feed_id)
+        except FeedNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/feeds/{feed_id}/refresh", response_model=FeedResponse)
     def refresh_feed(feed_id: str) -> FeedResponse:
         try:
-            return feed_response(reader.refresh(feed_id))
+            subscription = reader.refresh(feed_id)
         except FeedNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except FeedUnavailableError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        summary_tasks.wake()
+        return feed_response(subscription)
 
     @app.get("/api/articles", response_model=list[ArticleResponse])
     def list_articles(
@@ -183,6 +261,13 @@ def create_app(
         except FeedNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return [article_response(item) for item in articles]
+
+    @app.delete("/api/articles/{article_id}", status_code=204)
+    def delete_article(article_id: str) -> None:
+        try:
+            reader.delete_article(article_id)
+        except ArticleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.put("/api/articles/state", response_model=list[ArticleStateResponse])
     def update_article_states(request: ArticleStateUpdate) -> list[ArticleStateResponse]:
@@ -201,9 +286,25 @@ def create_app(
     @app.get("/api/articles/{article_id}", response_model=ArticleResponse)
     def get_article(article_id: str) -> ArticleResponse:
         try:
-            return article_response(reader.get_article(article_id))
+            article = reader.get_article(article_id)
         except ArticleNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if article.snapshot_id is not None:
+            summary_tasks.submit(article.article.article_id, article.snapshot_id)
+        return article_response(article)
+
+    @app.post(
+        "/api/articles/{article_id}/summary/retry",
+        response_model=ArticleResponse,
+    )
+    def retry_article_summary(article_id: str) -> ArticleResponse:
+        try:
+            reader.get_article(article_id)
+            summary_tasks.retry(article_id)
+            article = reader.get_article(article_id)
+        except (ArticleNotFoundError, KeyError) as exc:
+            raise HTTPException(status_code=404, detail=f"不存在的文章：{article_id}") from exc
+        return article_response(article)
 
     @app.post("/api/articles/{article_id}/ask", response_model=ArticleAnswerResponse)
     def ask_article(
@@ -237,10 +338,7 @@ def create_app(
             reader.store.fail_article_answer(request_id)
             raise HTTPException(
                 status_code=503,
-                detail={
-                    "code": "llm_unavailable",
-                    "message": "模型服务暂时不可用，请稍后重试",
-                },
+                detail={"code": "llm_unavailable", "message": str(exc)},
             ) from exc
         except (ValueError, TypeError, KeyError) as exc:
             reader.store.fail_article_answer(request_id)
@@ -356,6 +454,71 @@ def create_app(
                 detail={"code": "article_not_found", "message": str(exc)},
             ) from exc
 
+    @app.get(
+        "/api/articles/{article_id}/research",
+        response_model=ArticleResearchHistoryResponse,
+    )
+    def list_article_research(
+        article_id: str,
+        mode: str | None = Query(default=None, pattern="^(auto|manual)$"),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> ArticleResearchHistoryResponse:
+        try:
+            reader.get_article(article_id)
+            runs = reader.store.list_article_research_runs(
+                article_id,
+                mode=mode,
+                limit=limit,
+            )
+        except ArticleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return ArticleResearchHistoryResponse(
+            article_id=article_id,
+            runs=[
+                article_research_response(
+                    run,
+                    agent=article_research_tasks.agent_snapshot(run),
+                )
+                for run in runs
+            ],
+        )
+
+    @app.post(
+        "/api/articles/{article_id}/research",
+        response_model=ArticleResearchResponse,
+    )
+    def run_article_research(
+        article_id: str,
+        request: ArticleResearchRequest,
+    ) -> ArticleResearchResponse:
+        try:
+            article = reader.get_article(article_id)
+        except ArticleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        settings = reader.store.get_reader_automation_settings()
+        if request.mode == "auto" and not settings.enabled:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "reader_automation_disabled",
+                    "message": "阅读触发研究未启用",
+                },
+            )
+        require_agent_settings()
+        try:
+            run = article_research_tasks.submit(
+                article,
+                mode=request.mode,
+                settings=settings,
+                request_id=request.request_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return article_research_response(
+            run,
+            agent=article_research_tasks.agent_snapshot(run),
+        )
+
     @app.get("/api/articles/{article_id}/opinion", response_model=OpinionResponse)
     def get_opinion_status(article_id: str) -> OpinionResponse:
         try:
@@ -417,8 +580,11 @@ def create_app(
             default=None,
             pattern="^(collecting|completed|partial|failed)$",
         ),
+        mode: str | None = Query(default=None, pattern="^(auto|manual)$"),
     ) -> dict[str, list[dict[str, Any]]]:
-        return research_run_summaries_to_payload(reader.store.list_runs(limit=limit, status=status))
+        return research_run_summaries_to_payload(
+            reader.store.list_runs(limit=limit, status=status, mode=mode)
+        )
 
     @app.post("/api/research/ingest")
     def ingest_research(request: ResearchIngestRequest) -> dict[str, Any]:
@@ -433,13 +599,8 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "research_ingest_failed",
-                    "message": "采集入库失败，请稍后重试",
-                },
-            ) from exc
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        summary_tasks.wake()
         return persisted_collection_to_payload(result)
 
     @app.post("/api/research/runs/{run_id}/agent")
@@ -453,24 +614,7 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ResearchRunNotReadyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        main_settings = MainLLMConfig.from_env()
-        search_settings = public_status_from_env()
-        if not main_settings.available:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "main_llm_unavailable",
-                    "message": "主 LLM 配置不完整，无法运行 Agent",
-                },
-            )
-        if not search_settings["available"]:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "search_llm_unavailable",
-                    "message": "联网搜索配置不完整，无法运行 Agent",
-                },
-            )
+        require_agent_settings()
         try:
             snapshot = agent_tasks.submit(
                 run_id,

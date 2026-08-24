@@ -233,6 +233,7 @@ def _research_run_summary_to_payload(run: ResearchRunSummary) -> dict[str, Any]:
         "snapshot_count": run.snapshot_count,
         "selected_evidence_count": run.selected_evidence_count,
         "collection_error_count": run.collection_error_count,
+        "mode": run.mode,
     }
     if run.finished_at is not None:
         payload["finished_at"] = format_json_datetime(run.finished_at)
