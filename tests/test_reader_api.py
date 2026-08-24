@@ -163,6 +163,34 @@ def test_feed_unsubscribe_preserves_data_and_allows_resubscribe(tmp_path: Path) 
     assert missing.status_code == 404
 
 
+def test_article_delete_hides_article_and_preserves_source_data(tmp_path: Path) -> None:
+    client, store, _, _ = _app(tmp_path)
+    article_id = _create_article(client)
+
+    deleted = client.delete(f"/api/articles/{article_id}")
+
+    assert deleted.status_code == 204
+    assert client.get("/api/articles").json() == []
+    assert client.get(f"/api/articles/{article_id}").status_code == 404
+    feed = client.get("/api/feeds").json()[0]
+    assert feed["article_count"] == 0
+    assert feed["unread_count"] == 0
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM articles").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM article_snapshots").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM feed_entries").fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM reader_deleted_articles WHERE article_id = ?",
+                (article_id,),
+            ).fetchone()[0]
+            == 1
+        )
+
+    assert client.delete(f"/api/articles/{article_id}").status_code == 204
+    assert client.delete("/api/articles/missing").status_code == 404
+
+
 def test_feed_refresh_updates_entries_and_preserves_not_modified_articles(tmp_path: Path) -> None:
     feed_url = "https://example.com/rss.xml"
     first_entry = RawFeedEntry(

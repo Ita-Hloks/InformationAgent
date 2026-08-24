@@ -117,6 +117,10 @@ class ReaderService:
             raise ArticleNotFoundError(f"不存在的文章：{article_id}")
         return article
 
+    def delete_article(self, article_id: str) -> None:
+        if not self.store.delete_reader_article(article_id):
+            raise ArticleNotFoundError(f"不存在的文章：{article_id}")
+
     def update_article_states(
         self,
         article_ids: list[str],

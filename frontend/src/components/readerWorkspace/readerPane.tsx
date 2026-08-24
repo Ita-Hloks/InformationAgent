@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   Bot,
@@ -6,9 +6,10 @@ import {
   ChevronDown,
   ExternalLink,
   FileText,
-  MoreHorizontal,
+  Loader2,
   Share2,
   Star,
+  Trash2,
 } from "lucide-react";
 
 import type { Article } from "../../types";
@@ -23,6 +24,9 @@ type ReaderPaneProps = {
   onToggleSaved: () => void;
   onMarkRead: () => void;
   onAsk: () => void;
+  onDelete: () => void;
+  deleting?: boolean;
+  deleteError?: string | null;
   onProgress?: (progress: number) => void;
   onVisibleSeconds?: (seconds: number) => void;
   onTestResearch?: () => void;
@@ -40,6 +44,9 @@ export function ReaderPane({
   onToggleSaved,
   onMarkRead,
   onAsk,
+  onDelete,
+  deleting = false,
+  deleteError = null,
   onProgress,
   onVisibleSeconds,
   onTestResearch,
@@ -50,6 +57,11 @@ export function ReaderPane({
 }: ReaderPaneProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const articleKey = article ? `${article.id}:${article.snapshotId}` : null;
+  const [deleteConfirming, setDeleteConfirming] = useState(false);
+
+  useEffect(() => {
+    setDeleteConfirming(false);
+  }, [articleKey]);
 
   useEffect(() => {
     if (!articleKey || !onVisibleSeconds) return;
@@ -166,14 +178,37 @@ export function ReaderPane({
           </button>
           <button
             type="button"
-            className="grid size-9 place-items-center rounded-md text-[#696c72] hover:bg-[var(--reader-workspace-hover)]"
-            aria-label="更多文章操作"
-            title="更多文章操作"
+            className={`article-delete-action flex h-9 items-center justify-center overflow-hidden rounded-md text-xs font-medium transition-[width,padding,color,background-color] duration-200 disabled:cursor-wait disabled:opacity-70 ${
+              deleteConfirming
+                ? "gap-1.5 bg-[#fbe9e4] px-2.5 text-[#b7523c] hover:bg-[#f8dfd8]"
+                : "w-9 text-[#696c72] hover:bg-[var(--reader-workspace-hover)]"
+            }`}
+            aria-label={deleteConfirming ? "确认删除文章" : "删除文章"}
+            title={deleteConfirming ? "确认删除文章" : "删除文章"}
+            disabled={deleting}
+            onClick={() => {
+              if (deleteConfirming) onDelete();
+              else setDeleteConfirming(true);
+            }}
           >
-            <MoreHorizontal size={18} />
+            {deleting ? (
+              <Loader2 size={17} className="shrink-0 animate-spin" />
+            ) : (
+              <Trash2 size={17} className="shrink-0" />
+            )}
+            {deleteConfirming && !deleting && <span className="whitespace-nowrap">确认删除</span>}
           </button>
         </div>
       </header>
+
+      {deleteError && (
+        <p
+          className="shrink-0 border-b border-[#efc6ba] bg-[#fff5f1] px-4 py-2 text-xs text-[#a64a35]"
+          role="alert"
+        >
+          {deleteError}
+        </p>
+      )}
 
       <div ref={scrollContainerRef} className="workspace-scroll min-h-0 flex-1 overflow-y-auto">
         <article className="mx-auto w-full max-w-[760px] px-6 pt-10 pb-20 sm:px-10 sm:pt-14">

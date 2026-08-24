@@ -6,6 +6,7 @@ import {
   addFeed as createFeed,
   createResearchAgentRequestId,
   createResearchRun,
+  deleteArticle,
   getArticles,
   getArticleResearch,
   getReaderAutomationSettings,
@@ -93,6 +94,8 @@ export function ReaderWorkspacePage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [apiStatus, setApiStatus] = useState<ApiStatus>("connecting");
   const [feedActionId, setFeedActionId] = useState<string | null>(null);
+  const [articleDeleteId, setArticleDeleteId] = useState<string | null>(null);
+  const [articleDeleteError, setArticleDeleteError] = useState<string | null>(null);
   const [readingActivity, setReadingActivity] = useState({
     key: null as string | null,
     progress: 0,
@@ -301,6 +304,7 @@ export function ReaderWorkspacePage() {
     setReadingActivity({ key: selectedArticleKey, progress: 0, visibleSeconds: 0 });
     setArticleResearchRuns([]);
     setArticleResearchError(null);
+    setArticleDeleteError(null);
   }, [selectedArticleKey]);
 
   const syncArticleResearchStatus = useCallback((run: ArticleResearchRun) => {
@@ -512,6 +516,35 @@ export function ReaderWorkspacePage() {
     void persistArticleStates(articleIds, { isRead: true });
   };
 
+  const deleteSelectedArticle = async () => {
+    if (!selectedArticleId || articleDeleteId !== null) return;
+    const articleId = selectedArticleId;
+    setArticleDeleteError(null);
+    setArticleDeleteId(articleId);
+    try {
+      await deleteArticle(articleId);
+      setArticles(current => current.filter(article => article.id !== articleId));
+      setReadIds(current => {
+        const next = new Set(current);
+        next.delete(articleId);
+        return next;
+      });
+      setSavedIds(current => {
+        const next = new Set(current);
+        next.delete(articleId);
+        return next;
+      });
+      setArticleResearchRuns([]);
+      setApiStatus("connected");
+      closeArticle();
+    } catch (error) {
+      setArticleDeleteError(error instanceof Error ? error.message : "文章删除失败，请重试");
+      setApiStatus("unavailable");
+    } finally {
+      setArticleDeleteId(null);
+    }
+  };
+
   const addFeed = async (input: { url: string; title?: string }) => {
     await createFeed(input);
     await reloadReaderData();
@@ -532,7 +565,7 @@ export function ReaderWorkspacePage() {
 
   const unsubscribeFeed = async (feedId: string) => {
     const feed = feeds.find(item => item.id === feedId);
-    if (!feed || feedActionId !== null || !window.confirm(`取消订阅“${feed.name}”？`)) return;
+    if (!feed || feedActionId !== null) return;
     setFeedActionId(feedId);
     try {
       await removeFeed(feedId);
@@ -699,9 +732,6 @@ export function ReaderWorkspacePage() {
           onSelectFeed={selectFeed}
           onSelectResearchRun={selectResearchRun}
           onAddFeed={() => openOverlay("add-feed")}
-          onRefreshFeed={feedId => {
-            void updateFeed(feedId).catch(() => setApiStatus("unavailable"));
-          }}
           onUnsubscribe={feedId => {
             void unsubscribeFeed(feedId).catch(() => setApiStatus("unavailable"));
           }}
@@ -745,6 +775,14 @@ export function ReaderWorkspacePage() {
                 onToggleSaved={toggleSaved}
                 onMarkAllRead={markAllRead}
                 onOpenSidebar={openSidebar}
+                onRefreshFeed={
+                  selectedFeedId
+                    ? () => {
+                        void updateFeed(selectedFeedId).catch(() => setApiStatus("unavailable"));
+                      }
+                    : null
+                }
+                refreshingFeed={selectedFeedId !== null && feedActionId === selectedFeedId}
               />
             </div>
 
@@ -764,6 +802,9 @@ export function ReaderWorkspacePage() {
                   }
                 }}
                 onAsk={() => openOverlay("ask")}
+                onDelete={() => void deleteSelectedArticle()}
+                deleting={selectedArticle ? articleDeleteId === selectedArticle.id : false}
+                deleteError={articleDeleteError}
                 onProgress={reportReaderProgress}
                 onVisibleSeconds={reportVisibleSeconds}
                 onTestResearch={() => void runArticleResearchForSelected("manual")}

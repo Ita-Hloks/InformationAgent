@@ -1,5 +1,5 @@
+import { useState } from "react";
 import {
-  Archive,
   Bookmark,
   ChevronDown,
   CircleUserRound,
@@ -10,7 +10,6 @@ import {
   PanelLeftOpen,
   Plus,
   Rss,
-  RefreshCw,
   Settings,
   Sun,
   Trash2,
@@ -35,7 +34,6 @@ type AppSidebarProps = {
   onSelectFeed: (feedId: string) => void;
   onSelectResearchRun: (runId: string) => void;
   onAddFeed: () => void;
-  onRefreshFeed: (feedId: string) => void;
   onUnsubscribe: (feedId: string) => void;
   settingsActive: boolean;
   onOpenSettings: () => void;
@@ -64,11 +62,12 @@ export function AppSidebar({
   onSelectFeed,
   onSelectResearchRun,
   onAddFeed,
-  onRefreshFeed,
   onUnsubscribe,
   settingsActive,
   onOpenSettings,
 }: AppSidebarProps) {
+  const [confirmingFeedId, setConfirmingFeedId] = useState<string | null>(null);
+
   const selectView = (view: LibraryView) => {
     onSelectView(view);
     onClose();
@@ -83,6 +82,16 @@ export function AppSidebar({
     onSelectResearchRun(runId);
     onClose();
   };
+
+  const requestUnsubscribe = (feedId: string) => {
+    if (confirmingFeedId === feedId) {
+      setConfirmingFeedId(null);
+      onUnsubscribe(feedId);
+      return;
+    }
+    setConfirmingFeedId(feedId);
+  };
+
   const sidebarToggleLabel = collapsed ? "展开侧边栏" : "收起侧边栏";
 
   return (
@@ -157,15 +166,6 @@ export function AppSidebar({
         <div className="mt-6">
           <div className="sidebar-section-tools mb-1.5 flex items-center justify-between px-2.5">
             <span className="sidebar-label text-[11px] font-medium text-[#72767e]">研究运行</span>
-            <button
-              type="button"
-              className="sidebar-section-action sidebar-research-action grid size-6 place-items-center rounded text-[#777b82] hover:bg-white/8 hover:text-white"
-              aria-label="新建研究运行"
-              title="新建研究运行"
-              onClick={() => selectView("research")}
-            >
-              <Plus size={14} />
-            </button>
           </div>
           <button
             type="button"
@@ -239,7 +239,7 @@ export function AppSidebar({
               >
                 <button
                   type="button"
-                  className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                  className="sidebar-feed-select flex min-w-0 flex-1 items-center gap-2.5 text-left"
                   aria-label={collapsed ? feed.name : undefined}
                   title={collapsed ? feed.name : undefined}
                   onClick={() => selectFeed(feed.id)}
@@ -259,21 +259,27 @@ export function AppSidebar({
                 </button>
                 <button
                   type="button"
-                  className="sidebar-feed-action grid size-6 shrink-0 place-items-center rounded text-[#777b82] hover:bg-white/10 hover:text-white"
-                  aria-label={`刷新 ${feed.name}`}
-                  title={`刷新 ${feed.name}`}
-                  onClick={() => onRefreshFeed(feed.id)}
+                  className={`sidebar-feed-action shrink-0 rounded text-xs transition-[width,padding,color,background-color] duration-200 disabled:cursor-wait ${
+                    confirmingFeedId === feed.id
+                      ? "flex h-7 items-center gap-1.5 bg-[#fbe9e4] px-2 text-[#b7523c] hover:bg-[#f8dfd8]"
+                      : "grid size-6 place-items-center text-[#777b82] hover:bg-white/10 hover:text-white"
+                  }`}
+                  aria-label={
+                    confirmingFeedId === feed.id
+                      ? `确认取消订阅 ${feed.name}`
+                      : `取消订阅 ${feed.name}`
+                  }
+                  title={
+                    confirmingFeedId === feed.id
+                      ? `确认取消订阅 ${feed.name}`
+                      : `取消订阅 ${feed.name}`
+                  }
+                  onClick={() => requestUnsubscribe(feed.id)}
                 >
-                  <RefreshCw size={14} />
-                </button>
-                <button
-                  type="button"
-                  className="sidebar-feed-action grid size-6 shrink-0 place-items-center rounded text-[#777b82] hover:bg-white/10 hover:text-white"
-                  aria-label={`取消订阅 ${feed.name}`}
-                  title={`取消订阅 ${feed.name}`}
-                  onClick={() => onUnsubscribe(feed.id)}
-                >
-                  <Trash2 size={14} />
+                  <Trash2 size={14} className="shrink-0" />
+                  {confirmingFeedId === feed.id && (
+                    <span className="whitespace-nowrap">确认取消订阅</span>
+                  )}
                 </button>
               </div>
             ))}
@@ -289,16 +295,6 @@ export function AppSidebar({
             <span className="sidebar-label">查找并添加来源</span>
           </button>
         </div>
-
-        <button
-          type="button"
-          className="sidebar-compact-item mt-6 flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm text-[#8f949c] hover:bg-white/6 hover:text-white"
-          aria-label={collapsed ? "已归档" : undefined}
-          title={collapsed ? "已归档" : undefined}
-        >
-          <Archive size={16} strokeWidth={1.8} />
-          <span className="sidebar-label">已归档</span>
-        </button>
       </div>
 
       <div className="sidebar-footer shrink-0 border-t border-white/8 p-2.5">

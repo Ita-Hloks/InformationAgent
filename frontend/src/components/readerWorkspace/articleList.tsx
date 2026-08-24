@@ -6,6 +6,7 @@ import {
   Clock3,
   Loader2,
   Menu,
+  RefreshCw,
   Search,
   SlidersHorizontal,
   Star,
@@ -25,6 +26,8 @@ type ArticleListProps = {
   onToggleSaved: (articleId: string) => void;
   onMarkAllRead: () => void;
   onOpenSidebar: () => void;
+  onRefreshFeed: (() => void) | null;
+  refreshingFeed: boolean;
 };
 
 export function ArticleList({
@@ -38,6 +41,8 @@ export function ArticleList({
   onToggleSaved,
   onMarkAllRead,
   onOpenSidebar,
+  onRefreshFeed,
+  refreshingFeed,
 }: ArticleListProps) {
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col border-r border-[var(--reader-workspace-border)] bg-[var(--reader-workspace-surface)]">
@@ -55,6 +60,18 @@ export function ArticleList({
           <h1 className="min-w-0 flex-1 truncate text-[15px] font-semibold text-[#252629]">
             {title}
           </h1>
+          {onRefreshFeed && (
+            <button
+              type="button"
+              className="grid size-8 shrink-0 place-items-center rounded-md text-[#676a70] hover:bg-[var(--reader-workspace-hover)] hover:text-[#202124] disabled:cursor-wait disabled:opacity-60"
+              aria-label={`刷新 ${title}`}
+              title={`刷新 ${title}`}
+              disabled={refreshingFeed}
+              onClick={onRefreshFeed}
+            >
+              <RefreshCw size={16} className={refreshingFeed ? "animate-spin" : undefined} />
+            </button>
+          )}
           <span className="text-xs tabular-nums text-[#85878c]">{articles.length}</span>
           <button
             type="button"

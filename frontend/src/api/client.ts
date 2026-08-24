@@ -213,6 +213,10 @@ export async function getArticles(feedId?: string): Promise<Article[]> {
   return articles.map(toArticle);
 }
 
+export async function deleteArticle(articleId: string): Promise<void> {
+  await request<void>(`/api/articles/${encodeURIComponent(articleId)}`, { method: "DELETE" });
+}
+
 function toArticle(article: ArticlePayload): Article {
   return {
     id: article.id,

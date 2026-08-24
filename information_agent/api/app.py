@@ -262,6 +262,13 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return [article_response(item) for item in articles]
 
+    @app.delete("/api/articles/{article_id}", status_code=204)
+    def delete_article(article_id: str) -> None:
+        try:
+            reader.delete_article(article_id)
+        except ArticleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.put("/api/articles/state", response_model=list[ArticleStateResponse])
     def update_article_states(request: ArticleStateUpdate) -> list[ArticleStateResponse]:
         try:
