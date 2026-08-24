@@ -6,6 +6,7 @@ import {
   addFeed as createFeed,
   createResearchAgentRequestId,
   createResearchRun,
+  deleteArticle,
   getArticles,
   getArticleResearch,
   getReaderAutomationSettings,
@@ -93,6 +94,8 @@ export function ReaderWorkspacePage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [apiStatus, setApiStatus] = useState<ApiStatus>("connecting");
   const [feedActionId, setFeedActionId] = useState<string | null>(null);
+  const [articleDeleteId, setArticleDeleteId] = useState<string | null>(null);
+  const [articleDeleteError, setArticleDeleteError] = useState<string | null>(null);
   const [readingActivity, setReadingActivity] = useState({
     key: null as string | null,
     progress: 0,
@@ -301,6 +304,7 @@ export function ReaderWorkspacePage() {
     setReadingActivity({ key: selectedArticleKey, progress: 0, visibleSeconds: 0 });
     setArticleResearchRuns([]);
     setArticleResearchError(null);
+    setArticleDeleteError(null);
   }, [selectedArticleKey]);
 
   const syncArticleResearchStatus = useCallback((run: ArticleResearchRun) => {
@@ -510,6 +514,35 @@ export function ReaderWorkspacePage() {
       return next;
     });
     void persistArticleStates(articleIds, { isRead: true });
+  };
+
+  const deleteSelectedArticle = async () => {
+    if (!selectedArticleId || articleDeleteId !== null) return;
+    const articleId = selectedArticleId;
+    setArticleDeleteError(null);
+    setArticleDeleteId(articleId);
+    try {
+      await deleteArticle(articleId);
+      setArticles(current => current.filter(article => article.id !== articleId));
+      setReadIds(current => {
+        const next = new Set(current);
+        next.delete(articleId);
+        return next;
+      });
+      setSavedIds(current => {
+        const next = new Set(current);
+        next.delete(articleId);
+        return next;
+      });
+      setArticleResearchRuns([]);
+      setApiStatus("connected");
+      closeArticle();
+    } catch (error) {
+      setArticleDeleteError(error instanceof Error ? error.message : "文章删除失败，请重试");
+      setApiStatus("unavailable");
+    } finally {
+      setArticleDeleteId(null);
+    }
   };
 
   const addFeed = async (input: { url: string; title?: string }) => {
@@ -764,6 +797,9 @@ export function ReaderWorkspacePage() {
                   }
                 }}
                 onAsk={() => openOverlay("ask")}
+                onDelete={() => void deleteSelectedArticle()}
+                deleting={selectedArticle ? articleDeleteId === selectedArticle.id : false}
+                deleteError={articleDeleteError}
                 onProgress={reportReaderProgress}
                 onVisibleSeconds={reportVisibleSeconds}
                 onTestResearch={() => void runArticleResearchForSelected("manual")}

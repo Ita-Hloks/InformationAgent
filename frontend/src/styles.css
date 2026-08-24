@@ -203,12 +203,6 @@ textarea:focus-visible {
     right: calc(50% - 12px);
   }
 
-  .sidebar-layout.is-collapsed .sidebar-research-action {
-    opacity: 0;
-    pointer-events: none;
-    visibility: hidden;
-  }
-
   .sidebar-layout.is-collapsed .sidebar-feed-action {
     display: none;
   }

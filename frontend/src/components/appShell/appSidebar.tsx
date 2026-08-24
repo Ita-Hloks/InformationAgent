@@ -1,5 +1,4 @@
 import {
-  Archive,
   Bookmark,
   ChevronDown,
   CircleUserRound,
@@ -157,15 +156,6 @@ export function AppSidebar({
         <div className="mt-6">
           <div className="sidebar-section-tools mb-1.5 flex items-center justify-between px-2.5">
             <span className="sidebar-label text-[11px] font-medium text-[#72767e]">研究运行</span>
-            <button
-              type="button"
-              className="sidebar-section-action sidebar-research-action grid size-6 place-items-center rounded text-[#777b82] hover:bg-white/8 hover:text-white"
-              aria-label="新建研究运行"
-              title="新建研究运行"
-              onClick={() => selectView("research")}
-            >
-              <Plus size={14} />
-            </button>
           </div>
           <button
             type="button"
@@ -289,16 +279,6 @@ export function AppSidebar({
             <span className="sidebar-label">查找并添加来源</span>
           </button>
         </div>
-
-        <button
-          type="button"
-          className="sidebar-compact-item mt-6 flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm text-[#8f949c] hover:bg-white/6 hover:text-white"
-          aria-label={collapsed ? "已归档" : undefined}
-          title={collapsed ? "已归档" : undefined}
-        >
-          <Archive size={16} strokeWidth={1.8} />
-          <span className="sidebar-label">已归档</span>
-        </button>
       </div>
 
       <div className="sidebar-footer shrink-0 border-t border-white/8 p-2.5">

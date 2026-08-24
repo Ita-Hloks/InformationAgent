@@ -214,15 +214,21 @@ class SQLiteCollectionStore(
                 SELECT subscriptions.feed_id, feeds.feed_url, subscriptions.title,
                        subscriptions.site_url, subscriptions.subscribed_at,
                        subscriptions.last_refreshed_at, subscriptions.last_error,
-                       COUNT(feed_entries.article_id) AS article_count,
-                       COUNT(feed_entries.article_id)
-                         - COUNT(CASE WHEN states.is_read = 1 THEN feed_entries.article_id END)
+                       COUNT(CASE WHEN deleted.article_id IS NULL
+                                  THEN feed_entries.article_id END) AS article_count,
+                       COUNT(CASE WHEN deleted.article_id IS NULL
+                                  THEN feed_entries.article_id END)
+                         - COUNT(CASE WHEN deleted.article_id IS NULL
+                                           AND states.is_read = 1
+                                      THEN feed_entries.article_id END)
                          AS unread_count
                 FROM feed_subscriptions AS subscriptions
                 JOIN feeds ON feeds.id = subscriptions.feed_id
                 LEFT JOIN feed_entries ON feed_entries.feed_id = subscriptions.feed_id
                 LEFT JOIN reader_article_states AS states
                     ON states.article_id = feed_entries.article_id
+                LEFT JOIN reader_deleted_articles AS deleted
+                    ON deleted.article_id = feed_entries.article_id
                 GROUP BY subscriptions.feed_id
                 ORDER BY subscriptions.subscribed_at, subscriptions.feed_id
                 """
@@ -236,15 +242,21 @@ class SQLiteCollectionStore(
                 SELECT subscriptions.feed_id, feeds.feed_url, subscriptions.title,
                        subscriptions.site_url, subscriptions.subscribed_at,
                        subscriptions.last_refreshed_at, subscriptions.last_error,
-                       COUNT(feed_entries.article_id) AS article_count,
-                       COUNT(feed_entries.article_id)
-                         - COUNT(CASE WHEN states.is_read = 1 THEN feed_entries.article_id END)
+                       COUNT(CASE WHEN deleted.article_id IS NULL
+                                  THEN feed_entries.article_id END) AS article_count,
+                       COUNT(CASE WHEN deleted.article_id IS NULL
+                                  THEN feed_entries.article_id END)
+                         - COUNT(CASE WHEN deleted.article_id IS NULL
+                                           AND states.is_read = 1
+                                      THEN feed_entries.article_id END)
                          AS unread_count
                 FROM feed_subscriptions AS subscriptions
                 JOIN feeds ON feeds.id = subscriptions.feed_id
                 LEFT JOIN feed_entries ON feed_entries.feed_id = subscriptions.feed_id
                 LEFT JOIN reader_article_states AS states
                     ON states.article_id = feed_entries.article_id
+                LEFT JOIN reader_deleted_articles AS deleted
+                    ON deleted.article_id = feed_entries.article_id
                 WHERE subscriptions.feed_id = ?
                 GROUP BY subscriptions.feed_id
                 """,
@@ -266,6 +278,30 @@ class SQLiteCollectionStore(
                 (feed_id,),
             )
         return deleted.rowcount == 1
+
+    def delete_reader_article(self, article_id: str) -> bool:
+        with self._connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT 1
+                FROM feed_entries AS entries
+                JOIN feed_subscriptions AS subscriptions
+                    ON subscriptions.feed_id = entries.feed_id
+                WHERE entries.article_id = ?
+                LIMIT 1
+                """,
+                (article_id,),
+            ).fetchone()
+            if existing is None:
+                return False
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO reader_deleted_articles (article_id, deleted_at)
+                VALUES (?, ?)
+                """,
+                (article_id, _format_datetime(project_now())),
+            )
+        return True
 
     def list_reader_articles(
         self,
@@ -301,6 +337,10 @@ class SQLiteCollectionStore(
                 LEFT JOIN reader_article_states AS states
                     ON states.article_id = entries.article_id
                 WHERE entries.feed_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM reader_deleted_articles AS deleted
+                      WHERE deleted.article_id = entries.article_id
+                  )
                   AND snapshots.id = (
                       SELECT latest.id FROM article_snapshots AS latest
                       WHERE latest.article_id = entries.article_id
@@ -341,7 +381,11 @@ class SQLiteCollectionStore(
                     WHERE latest.article_id = entries.article_id
                     ORDER BY latest.collected_at DESC, latest.created_at DESC
                     LIMIT 1
-                )
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM reader_deleted_articles AS deleted
+                      WHERE deleted.article_id = entries.article_id
+                  )
                 ORDER BY snapshots.collected_at DESC, entries.entry_key
                 LIMIT ? OFFSET ?
                 """
@@ -393,6 +437,10 @@ class SQLiteCollectionStore(
                 LEFT JOIN reader_article_states AS states
                     ON states.article_id = entries.article_id
                 WHERE entries.article_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM reader_deleted_articles AS deleted
+                      WHERE deleted.article_id = entries.article_id
+                  )
                 ORDER BY snapshots.collected_at DESC, snapshots.created_at DESC
                 LIMIT 1
                 """,
@@ -436,6 +484,10 @@ class SQLiteCollectionStore(
                 JOIN feed_subscriptions AS subscriptions
                     ON subscriptions.feed_id = entries.feed_id
                 WHERE entries.article_id IN ({placeholders})
+                  AND NOT EXISTS (
+                      SELECT 1 FROM reader_deleted_articles AS deleted
+                      WHERE deleted.article_id = entries.article_id
+                  )
                 """,
                 unique_ids,
             ).fetchall()
@@ -1664,6 +1716,11 @@ class SQLiteCollectionStore(
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS reader_deleted_articles (
+                article_id TEXT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+                deleted_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS opinion_plans (
                 id TEXT PRIMARY KEY,
                 planning_run_id TEXT NOT NULL,
@@ -1802,6 +1859,8 @@ class SQLiteCollectionStore(
                 ON feed_entries(article_id);
             CREATE INDEX IF NOT EXISTS reader_article_states_updated_at_idx
                 ON reader_article_states(updated_at);
+            CREATE INDEX IF NOT EXISTS reader_deleted_articles_deleted_at_idx
+                ON reader_deleted_articles(deleted_at);
             CREATE INDEX IF NOT EXISTS opinion_plans_planning_run_id_idx
                 ON opinion_plans(planning_run_id);
             CREATE INDEX IF NOT EXISTS opinion_runs_article_id_idx
