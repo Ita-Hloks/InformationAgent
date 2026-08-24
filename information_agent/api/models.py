@@ -4,7 +4,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ..storage import FeedSubscription, ReaderArticle, ReaderArticleAnswer, ReaderArticleState
+from ..storage import (
+    ArticleResearchRun,
+    FeedSubscription,
+    ReaderArticle,
+    ReaderArticleAnswer,
+    ReaderArticleState,
+    ReaderAutomationSettings,
+)
 
 
 class FeedCreate(BaseModel):
@@ -54,8 +61,47 @@ class ArticleResponse(BaseModel):
     published_at: str | None
     collected_at: str
     content: str
+    summary: str | None
+    summary_status: Literal["pending", "running", "completed", "failed"]
+    summary_error: str | None
+    research_status: Literal[
+        "none", "queued", "running", "completed", "partial", "failed", "cancelled"
+    ]
+    research_mode: Literal["auto", "manual"] | None
     is_read: bool
     is_saved: bool
+
+
+class ReaderAutomationSettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    enabled: bool
+    dwell_seconds: int = Field(ge=1, le=3600)
+    read_ratio: float = Field(gt=0, le=1)
+    agent_timeout_seconds: int = Field(ge=1, le=600)
+    max_searches: int = Field(ge=1, le=3)
+    max_attempts: int = Field(ge=1, le=3)
+
+
+class ReaderAutomationSettingsResponse(ReaderAutomationSettingsUpdate):
+    updated_at: str
+
+
+class ArticleResearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    mode: Literal["auto", "manual"]
+    request_id: str | None = Field(default=None, max_length=200)
+
+    @field_validator("request_id")
+    @classmethod
+    def normalize_request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("request_id 不能为空")
+        return normalized
 
 
 class ArticleQuestionRequest(BaseModel):
@@ -282,8 +328,49 @@ class AgentTaskSnapshotResponse(BaseModel):
     report: dict[str, Any] | None
 
 
+class ArticleResearchResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    article_id: str
+    snapshot_id: str
+    topic: str
+    mode: Literal["auto", "manual"]
+    status: Literal["queued", "running", "completed", "partial", "failed", "cancelled"]
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+    request_id: str
+    analysis_run_id: str | None
+    timeout_seconds: int
+    max_searches: int
+    max_attempts: int
+    error: dict[str, Any] | None
+    agent: AgentTaskSnapshotResponse | None
+
+
+class ArticleResearchHistoryResponse(BaseModel):
+    article_id: str
+    runs: list[ArticleResearchResponse]
+
+
+class ResearchRunResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    topic: str
+    status: Literal["collecting", "completed", "partial", "failed"]
+    mode: Literal["auto", "manual"]
+    started_at: str
+    finished_at: str | None = None
+    feed_count: int
+    snapshot_count: int
+    selected_evidence_count: int
+    collection_error_count: int
+
+
 class ResearchRunsResponse(BaseModel):
-    runs: list[dict[str, Any]]
+    runs: list[ResearchRunResponse]
 
 
 def feed_response(subscription: FeedSubscription) -> FeedResponse:
@@ -317,6 +404,11 @@ def article_response(reader_article: ReaderArticle) -> ArticleResponse:
         published_at=article.published_at.isoformat() if article.published_at else None,
         collected_at=article.collected_at.isoformat(),
         content=article.content,
+        summary=reader_article.summary,
+        summary_status=reader_article.summary_status,  # type: ignore[arg-type]
+        summary_error=reader_article.summary_error,
+        research_status=reader_article.research_status,  # type: ignore[arg-type]
+        research_mode=reader_article.research_mode,  # type: ignore[arg-type]
         is_read=reader_article.is_read,
         is_saved=reader_article.is_saved,
     )
@@ -330,6 +422,45 @@ def article_state_response(state: ReaderArticleState) -> ArticleStateResponse:
         read_at=state.read_at,
         saved_at=state.saved_at,
         updated_at=state.updated_at,
+    )
+
+
+def reader_automation_settings_response(
+    settings: ReaderAutomationSettings,
+) -> ReaderAutomationSettingsResponse:
+    return ReaderAutomationSettingsResponse(
+        enabled=settings.enabled,
+        dwell_seconds=settings.dwell_seconds,
+        read_ratio=settings.read_ratio,
+        agent_timeout_seconds=settings.agent_timeout_seconds,
+        max_searches=settings.max_searches,
+        max_attempts=settings.max_attempts,
+        updated_at=settings.updated_at,
+    )
+
+
+def article_research_response(
+    run: ArticleResearchRun,
+    *,
+    agent: dict[str, Any] | None = None,
+) -> ArticleResearchResponse:
+    return ArticleResearchResponse(
+        run_id=run.id,
+        article_id=run.article_id,
+        snapshot_id=run.snapshot_id,
+        topic=run.topic,
+        mode=run.mode,  # type: ignore[arg-type]
+        status=run.status,  # type: ignore[arg-type]
+        created_at=run.created_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        request_id=run.agent_request_id,
+        analysis_run_id=run.analysis_run_id,
+        timeout_seconds=int(run.config["timeout_seconds"]),
+        max_searches=int(run.config["max_steps"]),
+        max_attempts=int(run.config["max_attempts"]),
+        error=run.error,
+        agent=AgentTaskSnapshotResponse(**agent) if agent is not None else None,
     )
 
 

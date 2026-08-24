@@ -43,6 +43,22 @@ textarea {
   outline: none;
 }
 
+.article-search-field:focus-within {
+  border-color: #ef8354;
+  box-shadow: 0 0 0 1px #ef8354;
+}
+
+.article-search-input:focus-visible {
+  outline: none;
+}
+
+.article-summary-clamp {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 button {
   cursor: pointer;
 }

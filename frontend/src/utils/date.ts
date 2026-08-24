@@ -21,6 +21,11 @@ function formatChineseDate(date: Date, includeYear: boolean): string {
   return `${year}${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
+export function isArticleToday(isoDate: string | null, now = new Date()): boolean {
+  const date = parseDate(isoDate);
+  return date !== null && startOfDay(date).getTime() === startOfDay(now).getTime();
+}
+
 export function formatArticleListDate(isoDate: string | null, now = new Date()): string {
   const date = parseDate(isoDate);
   if (!date) return "未标注时间";
