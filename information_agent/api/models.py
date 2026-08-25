@@ -51,6 +51,7 @@ class ArticleResponse(BaseModel):
     feed_id: str
     snapshot_id: str
     source_url: str
+    image_url: str | None
     feed_url: str | None
     site_url: str | None
     title: str
@@ -336,6 +337,7 @@ def article_response(reader_article: ReaderArticle) -> ArticleResponse:
         feed_id=reader_article.feed_id,
         snapshot_id=reader_article.snapshot_id,
         source_url=article.source_url,
+        image_url=article.image_url,
         feed_url=article.feed_url,
         site_url=article.site_url,
         title=article.title,

@@ -24,6 +24,7 @@ class RawFeedEntry:
     entry_id: str | None = None
     updated_at: str | datetime | None = None
     collected_at: datetime = field(default_factory=project_now)
+    image_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

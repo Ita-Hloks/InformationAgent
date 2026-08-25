@@ -81,6 +81,7 @@ def normalize_evidence(
                 published_at=parse_published_at(item.published_at),
                 collected_at=parse_published_at(item.collected_at) or item.collected_at,
                 processing_warnings=tuple(processing_warnings),
+                image_url=normalize_url(item.image_url) if item.image_url else None,
             )
         )
     return normalized
