@@ -122,9 +122,31 @@ type ArticleResearchHistoryPayload = {
   runs: ArticleResearchRunPayload[];
 };
 
+type ApiErrorDetail = {
+  code?: unknown;
+  message?: unknown;
+};
+
 export type ArticleStateUpdate = {
   isRead?: boolean;
   isSaved?: boolean;
+};
+
+const SAFE_ERROR_MESSAGES: Record<string, string> = {
+  confirmation_required: "请先确认后再执行操作",
+  env_open_failed: "无法打开项目 .env 文件，请确认文件存在并已安装默认编辑器",
+  invalid_request: "请求参数不符合约定，请检查后重试",
+  llm_unavailable: "模型服务暂时不可用，请稍后重试",
+  assistant_failed: "文章问答失败，请稍后重试",
+  research_ingest_failed: "采集入库失败，请稍后重试",
+  research_agent_failed: "Agent 运行失败，请稍后重试",
+  main_llm_unavailable: "主模型配置未完成，请先补全环境变量",
+  search_llm_unavailable: "搜索模型配置未完成，请先补全环境变量",
+  agent_not_found: "不存在的 Agent 运行，请刷新后重试",
+  article_not_found: "文章不存在，请刷新后重试",
+  answer_not_found: "问答记录不存在，请刷新后重试",
+  request_id_conflict: "请求已存在或已被占用，请稍后重试",
+  storage_failed: "数据读取失败，请稍后重试",
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -133,19 +155,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
   if (!response.ok) {
-    let detail = `请求失败（${response.status}）`;
+    let detail = defaultErrorMessage(response.status);
     try {
       const payload = (await response.json()) as { detail?: unknown };
-      if (typeof payload.detail === "string") {
-        detail = payload.detail;
-      } else if (
-        payload.detail !== null &&
-        typeof payload.detail === "object" &&
-        "message" in payload.detail &&
-        typeof payload.detail.message === "string"
-      ) {
-        detail = payload.detail.message;
-      }
+      detail = formatApiErrorMessage(response.status, payload.detail);
     } catch {
       // Preserve the status when the server did not return JSON.
     }
@@ -153,6 +166,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+function defaultErrorMessage(status: number): string {
+  if (status === 504) return "请求超时，请稍后重试";
+  if (status === 502 || status === 503) return "服务暂时不可用，请稍后重试";
+  if (status >= 500) return "服务暂时不可用，请稍后重试";
+  return `请求失败（${status}）`;
+}
+
+function formatApiErrorMessage(status: number, detail: unknown): string {
+  if (detail && typeof detail === "object") {
+    const error = detail as ApiErrorDetail;
+    if (typeof error.code === "string" && SAFE_ERROR_MESSAGES[error.code]) {
+      return SAFE_ERROR_MESSAGES[error.code];
+    }
+    if (typeof error.message === "string") {
+      if (status >= 500) return defaultErrorMessage(status);
+      return error.message;
+    }
+  }
+  if (typeof detail === "string") {
+    return status >= 500 ? defaultErrorMessage(status) : detail;
+  }
+  return defaultErrorMessage(status);
 }
 
 function toFeed(feed: FeedPayload): Feed {

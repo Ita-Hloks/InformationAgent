@@ -486,3 +486,27 @@ def test_legacy_topic_research_routes_are_removed(tmp_path: Path) -> None:
     assert client.post("/api/research/runs/run-id/agent", json={}).status_code == 404
     assert client.get("/api/research/runs/run-id/agent/status").status_code == 404
     assert client.post("/api/research/runs/run-id/agent/stop", json={}).status_code == 404
+
+
+def test_article_ask_api_hides_runtime_error_details(tmp_path: Path) -> None:
+    service = ReaderService(tmp_path / "api.db", fetcher=_fetcher)
+    service.subscribe("https://example.com/rss.xml")
+    article_id = service.list_articles()[0].article.article_id
+
+    class _BrokenAssistant:
+        def answer(self, _article, _question: str, *, request_id: str) -> str:
+            raise RuntimeError("数据库连接失败：底层异常")
+
+    response = TestClient(create_app(service, article_assistant=_BrokenAssistant())).post(
+        f"/api/articles/{article_id}/ask",
+        json={"question": "文章说了什么？", "request_id": "api-answer-runtime-error"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "code": "llm_unavailable",
+            "message": "模型服务暂时不可用，请稍后重试",
+        }
+    }
+    assert "数据库连接失败" not in response.text

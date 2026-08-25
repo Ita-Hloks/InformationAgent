@@ -331,7 +331,10 @@ def create_app(
             reader.store.fail_article_answer(request_id)
             raise HTTPException(
                 status_code=503,
-                detail={"code": "llm_unavailable", "message": str(exc)},
+                detail={
+                    "code": "llm_unavailable",
+                    "message": "模型服务暂时不可用，请稍后重试",
+                },
             ) from exc
         except (ValueError, TypeError, KeyError) as exc:
             reader.store.fail_article_answer(request_id)
