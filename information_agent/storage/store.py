@@ -169,7 +169,6 @@ class SQLiteCollectionStore(
     ) -> FeedSubscription:
         state = self.feed_state(feed_url)
         new_entries = self.new_feed_entries(state, entries)
-        articles_by_url = {article.source_url: article for article in articles}
         observed_at = _format_datetime(project_now())
         observation = FeedObservation(
             state=state,
@@ -180,10 +179,7 @@ class SQLiteCollectionStore(
         )
         with self._connect() as connection:
             article_ids_by_url: dict[str, str] = {}
-            for entry in new_entries:
-                article = articles_by_url.get(entry.source_url)
-                if article is None:
-                    continue
+            for article in articles:
                 self._upsert_snapshot(connection, article)
                 article_ids_by_url[article.source_url] = article.article_id
             self._record_feed_observation(connection, observation, article_ids_by_url)
@@ -1351,12 +1347,21 @@ class SQLiteCollectionStore(
         content_hash = _content_hash(article)
         existing = connection.execute(
             """
-            SELECT id FROM article_snapshots
+            SELECT id, payload_json FROM article_snapshots
             WHERE article_id = ? AND content_hash = ?
             """,
             (article.article_id, content_hash),
         ).fetchone()
         if existing is not None:
+            existing_payload = json.loads(existing["payload_json"])
+            if article.image_url and existing_payload.get("image_url") != article.image_url:
+                connection.execute(
+                    "UPDATE article_snapshots SET payload_json = ? WHERE id = ?",
+                    (
+                        json.dumps(_article_payload(article), ensure_ascii=False, sort_keys=True),
+                        existing["id"],
+                    ),
+                )
             connection.execute(
                 """
                 INSERT OR IGNORE INTO article_summaries (
@@ -2268,4 +2273,5 @@ def _article_from_payload(payload: dict[str, object]) -> NormalizedArticle:
         published_at=_parse_datetime(payload.get("published_at")),
         collected_at=_required_datetime(payload["collected_at"]),
         processing_warnings=tuple(str(item) for item in payload["processing_warnings"]),
+        image_url=_optional_text(payload.get("image_url")),
     )

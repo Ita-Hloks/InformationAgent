@@ -25,3 +25,4 @@ class NormalizedArticle:
     published_at: datetime | None
     collected_at: datetime
     processing_warnings: tuple[str, ...] = field(default_factory=tuple)
+    image_url: str | None = None

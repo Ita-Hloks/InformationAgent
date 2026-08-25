@@ -16,6 +16,7 @@ import trafilatura
 from ..common import normalize_url
 from ..contracts import ContentType
 from ._http import content_length_exceeds_limit
+from .images import extract_image_url_from_html
 from .models import RawFeedEntry
 
 MAX_PAGE_BYTES = 2 * 1024 * 1024
@@ -74,6 +75,76 @@ def fetch_article(
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("timeout must be a positive finite number")
 
+    page = _fetch_page_html(article_url, timeout)
+    if page is None:
+        return None
+
+    _, html = page
+    text = _extract_text(html)
+    if text is None or len(text) < MIN_CONTENT_CHARS:
+        return None
+    return text
+
+
+def fetch_article_image(
+    article_url: str,
+    *,
+    timeout: float = 15,
+) -> str | None:
+    page = _fetch_page_html(article_url, timeout)
+    if page is None:
+        return None
+    normalized_url, html = page
+    return extract_image_url_from_html(html, normalized_url)
+
+
+def augment_images(
+    items: list[RawFeedEntry],
+    *,
+    timeout: float = 15,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+) -> list[RawFeedEntry]:
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be a positive finite number")
+    if max_workers <= 0:
+        raise ValueError("max_workers must be positive")
+
+    to_fetch: list[tuple[int, RawFeedEntry]] = []
+    results: dict[int, RawFeedEntry] = {}
+    for i, item in enumerate(items):
+        if item.image_url:
+            results[i] = item
+        else:
+            to_fetch.append((i, item))
+
+    if not to_fetch:
+        return items
+
+    worker_count = min(max_workers, len(to_fetch))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map = {
+            executor.submit(fetch_article_image, item.source_url, timeout=timeout): i
+            for i, item in to_fetch
+        }
+        for future in as_completed(future_map):
+            i = future_map[future]
+            image_url = future.result()
+            results[i] = replace(items[i], image_url=image_url) if image_url else items[i]
+
+    return [results[i] for i in range(len(items))]
+
+
+def _augment_item(item: RawFeedEntry, timeout: float) -> RawFeedEntry:
+    content = fetch_article(item.source_url, timeout=timeout)
+    if content is None:
+        return item
+    return replace(item, content=content, content_type=ContentType.RSS_CONTENT)
+
+
+def _fetch_page_html(article_url: str, timeout: float) -> tuple[str, str] | None:
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be a positive finite number")
+
     normalized_url = normalize_url(article_url)
     if normalized_url is None:
         return None
@@ -108,23 +179,10 @@ def fetch_article(
             continue
         try:
             html = payload.decode(encoding)
-            break
+            return normalized_url, html
         except (UnicodeDecodeError, LookupError):
             continue
-    else:
-        return None
-
-    text = _extract_text(html)
-    if text is None or len(text) < MIN_CONTENT_CHARS:
-        return None
-    return text
-
-
-def _augment_item(item: RawFeedEntry, timeout: float) -> RawFeedEntry:
-    content = fetch_article(item.source_url, timeout=timeout)
-    if content is None:
-        return item
-    return replace(item, content=content, content_type=ContentType.RSS_CONTENT)
+    return None
 
 
 def augment_evidence(

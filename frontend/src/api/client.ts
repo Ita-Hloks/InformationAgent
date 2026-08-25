@@ -28,6 +28,7 @@ type ArticlePayload = {
   feed_id: string;
   snapshot_id: string;
   source_url: string;
+  image_url: string | null;
   title: string;
   author: string | null;
   categories: string[];
@@ -256,7 +257,7 @@ function toArticle(article: ArticlePayload): Article {
     researchMode: article.research_mode,
     readingMinutes: Math.max(1, Math.ceil(article.content.length / 400)),
     category: article.categories[0] ?? "未分类",
-    imageUrl: "",
+    imageUrl: article.image_url ?? "",
     unread: !(article.is_read ?? false),
     starred: article.is_saved ?? false,
     body: article.content.split(/\n+/).filter(Boolean),

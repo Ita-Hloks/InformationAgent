@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Mapping
 from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError
@@ -13,6 +14,7 @@ import feedparser
 from ..common import normalize_url
 from ..contracts import ContentType
 from ._http import content_length_exceeds_limit
+from .images import extract_image_url_from_html, resolve_image_url
 from .models import FeedFetchResult, RawFeedEntry
 
 MAX_FEED_BYTES = 5 * 1024 * 1024
@@ -225,6 +227,7 @@ def _parse_feed(payload: bytes, normalized_feed_url: str) -> list[RawFeedEntry]:
                 published_at=entry.get("published") or entry.get("updated"),
                 entry_id=_entry_id(entry),
                 updated_at=entry.get("updated"),
+                image_url=_entry_image_url(entry, source_url),
             )
         )
     return items
@@ -238,6 +241,74 @@ def _entry_content(entry: dict[str, Any]) -> tuple[str, ContentType]:
             return content, ContentType.RSS_CONTENT
     summary = _plain_text(str(entry.get("summary") or entry.get("description") or ""))
     return summary, ContentType.RSS_SUMMARY
+
+
+def _entry_image_url(entry: Mapping[str, Any], base_url: str) -> str | None:
+    for candidate in _structured_image_candidates(entry):
+        image_url = resolve_image_url(candidate, base_url)
+        if image_url is not None:
+            return image_url
+
+    for block in _entry_html_blocks(entry):
+        image_url = extract_image_url_from_html(block, base_url)
+        if image_url is not None:
+            return image_url
+    return None
+
+
+def _structured_image_candidates(entry: Mapping[str, Any]):
+    for field in ("media_content", "media_thumbnail"):
+        values = entry.get(field) or []
+        if isinstance(values, Mapping):
+            values = [values]
+        for value in values:
+            if not isinstance(value, Mapping) or not _is_image_media(value):
+                continue
+            candidate = value.get("url") or value.get("href")
+            if isinstance(candidate, str):
+                yield candidate
+
+    image = entry.get("image")
+    if isinstance(image, Mapping):
+        candidate = image.get("url") or image.get("href") or image.get("link")
+        if isinstance(candidate, str):
+            yield candidate
+
+    for field in ("enclosures", "links"):
+        values = entry.get(field) or []
+        if isinstance(values, Mapping):
+            values = [values]
+        for value in values:
+            if not isinstance(value, Mapping):
+                continue
+            if field == "links" and str(value.get("rel") or "").casefold() != "enclosure":
+                continue
+            if not _is_image_media(value):
+                continue
+            candidate = value.get("href") or value.get("url")
+            if isinstance(candidate, str):
+                yield candidate
+
+
+def _is_image_media(value: Mapping[str, Any]) -> bool:
+    medium = str(value.get("medium") or "").casefold()
+    media_type = str(value.get("type") or "").casefold()
+    if medium and medium != "image":
+        return False
+    if media_type and not media_type.startswith("image/"):
+        return False
+    return True
+
+
+def _entry_html_blocks(entry: Mapping[str, Any]):
+    for field in ("content", "summary", "description"):
+        value = entry.get(field)
+        values = value if field == "content" and isinstance(value, list) else [value]
+        for block in values:
+            if isinstance(block, Mapping):
+                block = block.get("value")
+            if isinstance(block, str) and block:
+                yield block
 
 
 def _entry_categories(entry: dict[str, Any]) -> list[str]:

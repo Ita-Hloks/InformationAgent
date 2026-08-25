@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from ..collection import FeedFetchResult, fetch_feed_with_cache
+from ..collection import FeedFetchResult, augment_images, fetch_feed_with_cache
 from ..common import normalize_url
 from ..normalization import normalize_evidence
 from ..storage import (
@@ -17,6 +18,24 @@ from ..storage import (
 )
 
 FeedFetcher = Callable[..., FeedFetchResult]
+
+
+def _fetch_reader_feed(
+    feed_url: str,
+    timeout: float,
+    *,
+    etag: str | None = None,
+    last_modified: str | None = None,
+) -> FeedFetchResult:
+    result = fetch_feed_with_cache(
+        feed_url,
+        timeout,
+        etag=etag,
+        last_modified=last_modified,
+    )
+    if result.not_modified or not result.entries:
+        return result
+    return replace(result, entries=augment_images(result.entries, timeout=timeout))
 
 
 class FeedNotFoundError(LookupError):
@@ -37,7 +56,7 @@ class ReaderService:
         database_path: str | Path | None = None,
         *,
         feed_timeout_seconds: float = 15,
-        fetcher: FeedFetcher = fetch_feed_with_cache,
+        fetcher: FeedFetcher = _fetch_reader_feed,
     ) -> None:
         if not math.isfinite(feed_timeout_seconds) or feed_timeout_seconds <= 0:
             raise ValueError("feed_timeout_seconds must be a finite positive number")
