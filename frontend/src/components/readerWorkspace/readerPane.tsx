@@ -7,6 +7,7 @@ import {
   ExternalLink,
   FileText,
   Loader2,
+  RefreshCw,
   Share2,
   Star,
   Square,
@@ -253,15 +254,22 @@ export function ReaderPane({
             <p className="mt-4 text-[15px] leading-7 text-[#96989c]">摘要生成中</p>
           )}
           {article.summaryStatus === "failed" && (
-            <div className="mt-4 flex flex-wrap items-center gap-2 text-[15px] leading-7 text-[#96989c]">
-              <span>摘要生成失败</span>
+            <div
+              className="mt-4 flex items-start gap-3 rounded-md border border-[#e3a39a] bg-[#fff5f2] px-3 py-2.5 text-sm leading-6 text-[#a33f31]"
+              role="alert"
+            >
+              <p className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+                {article.summaryError ?? "摘要生成失败"}
+              </p>
               {onRetrySummary && (
                 <button
                   type="button"
-                  className="rounded-md border border-[var(--reader-workspace-border)] bg-white px-2.5 py-1 text-xs font-medium text-[#56585d] hover:bg-[var(--reader-workspace-raised)]"
+                  className="grid size-8 shrink-0 place-items-center rounded-md text-[#8f493d] hover:bg-[#fbe2dc]"
+                  aria-label="重试摘要"
+                  title="重试摘要"
                   onClick={onRetrySummary}
                 >
-                  重试摘要
+                  <RefreshCw size={16} />
                 </button>
               )}
             </div>
