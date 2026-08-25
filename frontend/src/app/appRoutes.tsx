@@ -12,7 +12,7 @@ export function AppRoutes() {
         <Route element={<WorkspaceRoute />} path="today" />
         <Route element={<WorkspaceRoute />} path="all" />
         <Route element={<WorkspaceRoute />} path="saved" />
-        <Route element={<WorkspaceRoute />} path="research" />
+        <Route element={<Navigate replace to="/inbox" />} path="research" />
         <Route element={<WorkspaceRoute />} path="feeds/:feedId" />
         <Route element={<SettingsPage />} path="settings" />
         <Route element={<Navigate replace to="/inbox" />} path="*" />

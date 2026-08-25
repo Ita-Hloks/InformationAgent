@@ -35,6 +35,14 @@ class AgentTasks(Protocol):
         request_id: str | None = None,
     ) -> dict[str, Any] | None: ...
 
+    def stop_and_wait(
+        self,
+        research_run_id: str,
+        *,
+        request_id: str | None = None,
+        timeout: float = 2.0,
+    ) -> dict[str, Any] | None: ...
+
     def shutdown(self) -> None: ...
 
 
@@ -56,6 +64,7 @@ class ArticleResearchTaskManager:
         self._manual_queue: deque[str] = deque()
         self._auto_queue: deque[str] = deque()
         self._queued_ids: set[str] = set()
+        self._stop_requested_ids: set[str] = set()
         self._closed = False
         self._store.recover_running_article_research_runs()
         for run in reversed(self._store.list_article_research_runs(limit=200)):
@@ -103,6 +112,50 @@ class ArticleResearchTaskManager:
             return None
         return self._agent_tasks.get(run.id, request_id=run.agent_request_id)
 
+    def stop(self, run_id: str) -> ArticleResearchRun | None:
+        """停止队列或 Agent 中的文章研究，并把停止请求持久化为 cancelled。"""
+        with self._condition:
+            run = self._store.get_article_research_run(run_id)
+            if run is None:
+                return None
+            if run.status not in {"queued", "running"}:
+                raise ValueError("该文章研究运行已结束，无法停止")
+            self._stop_requested_ids.add(run_id)
+            if run.status == "queued":
+                self._remove_from_queue(run_id)
+                stopped = self._store.update_article_research_run(
+                    run_id,
+                    status="cancelled",
+                    error=_stop_error(),
+                    expected_status="queued",
+                )
+                self._stop_requested_ids.discard(run_id)
+                return stopped
+
+        agent_snapshot: dict[str, Any] | None = None
+        try:
+            agent_snapshot = self._agent_tasks.stop_and_wait(
+                run_id,
+                request_id=run.agent_request_id,
+                timeout=2.0,
+            )
+        finally:
+            with self._condition:
+                current = self._store.get_article_research_run(run_id)
+                agent_still_active = isinstance(agent_snapshot, dict) and agent_snapshot.get(
+                    "status"
+                ) in {"created", "running"}
+                if current is not None and current.status == "running" and not agent_still_active:
+                    current = self._store.update_article_research_run(
+                        run_id,
+                        status="cancelled",
+                        error=_stop_error(),
+                        expected_status="running",
+                    )
+                if not agent_still_active:
+                    self._stop_requested_ids.discard(run_id)
+        return current
+
     def _enqueue(self, run: ArticleResearchRun) -> None:
         with self._condition:
             if run.id in self._queued_ids or self._closed:
@@ -111,6 +164,11 @@ class ArticleResearchTaskManager:
             queue.append(run.id)
             self._queued_ids.add(run.id)
             self._condition.notify()
+
+    def _remove_from_queue(self, run_id: str) -> None:
+        self._manual_queue = deque(item for item in self._manual_queue if item != run_id)
+        self._auto_queue = deque(item for item in self._auto_queue if item != run_id)
+        self._queued_ids.discard(run_id)
 
     def _work_loop(self) -> None:
         while True:
@@ -126,38 +184,100 @@ class ArticleResearchTaskManager:
             self._run_one(run_id)
 
     def _run_one(self, run_id: str) -> None:
-        run = self._store.get_article_research_run(run_id)
-        if run is None or run.status != "queued":
-            return
-        self._store.update_article_research_run(run_id, status="running")
-        try:
-            started = self._agent_tasks.submit(
-                run.id,
-                request_id=run.agent_request_id,
-                timeout_seconds=float(run.config["timeout_seconds"]),
-                max_steps=int(run.config["max_steps"]),
-                max_attempts=int(run.config["max_attempts"]),
-            )
-            analysis_run_id = started.get("analysis_run_id")
-            if isinstance(analysis_run_id, str):
+        with self._condition:
+            run = self._store.get_article_research_run(run_id)
+            if run is None or run.status != "queued":
+                self._stop_requested_ids.discard(run_id)
+                return
+            if run_id in self._stop_requested_ids:
                 self._store.update_article_research_run(
                     run_id,
-                    status="running",
-                    analysis_run_id=analysis_run_id,
+                    status="cancelled",
+                    error=_stop_error(),
+                    expected_status="queued",
                 )
+                self._stop_requested_ids.discard(run_id)
+                return
+            run = self._store.update_article_research_run(
+                run_id,
+                status="running",
+                expected_status="queued",
+            )
+            if run.status != "running":
+                self._stop_requested_ids.discard(run_id)
+                return
+
+        with self._condition:
+            if run_id in self._stop_requested_ids:
+                self._store.update_article_research_run(
+                    run_id,
+                    status="cancelled",
+                    error=_stop_error(),
+                    expected_status="running",
+                )
+                self._stop_requested_ids.discard(run_id)
+                return
+        try:
+            with self._condition:
+                if run_id in self._stop_requested_ids:
+                    self._store.update_article_research_run(
+                        run_id,
+                        status="cancelled",
+                        error=_stop_error(),
+                        expected_status="running",
+                    )
+                    self._stop_requested_ids.discard(run_id)
+                    return
+                started = self._agent_tasks.submit(
+                    run.id,
+                    request_id=run.agent_request_id,
+                    timeout_seconds=float(run.config["timeout_seconds"]),
+                    max_steps=int(run.config["max_steps"]),
+                    max_attempts=int(run.config["max_attempts"]),
+                )
+                analysis_run_id = started.get("analysis_run_id")
+                if isinstance(analysis_run_id, str):
+                    self._store.update_article_research_run(
+                        run_id,
+                        status="running",
+                        analysis_run_id=analysis_run_id,
+                        expected_status="running",
+                    )
             finished = self._agent_tasks.wait(run.agent_request_id)
         except Exception as exc:
-            self._store.update_article_research_run(run_id, status="failed", error=exc)
+            with self._condition:
+                cancelled = run_id in self._stop_requested_ids
+                self._store.update_article_research_run(
+                    run_id,
+                    status="cancelled" if cancelled else "failed",
+                    error=_stop_error() if cancelled else exc,
+                    expected_status="running",
+                )
+                self._stop_requested_ids.discard(run_id)
             return
 
         analysis_run_id = finished.get("analysis_run_id")
-        terminal_status = _article_status(str(finished.get("status") or "failed"))
-        self._store.update_article_research_run(
-            run_id,
-            status=terminal_status,
-            analysis_run_id=analysis_run_id if isinstance(analysis_run_id, str) else None,
-            error=finished.get("error") if terminal_status == "failed" else None,
-        )
+        with self._condition:
+            cancelled = run_id in self._stop_requested_ids
+            terminal_status = (
+                "cancelled"
+                if cancelled
+                else _article_status(str(finished.get("status") or "failed"))
+            )
+            self._store.update_article_research_run(
+                run_id,
+                status=terminal_status,
+                analysis_run_id=analysis_run_id if isinstance(analysis_run_id, str) else None,
+                error=(
+                    _stop_error()
+                    if cancelled
+                    else finished.get("error")
+                    if terminal_status == "failed"
+                    else None
+                ),
+                expected_status="running",
+            )
+            self._stop_requested_ids.discard(run_id)
 
 
 def _article_status(agent_status: str) -> str:
@@ -168,3 +288,10 @@ def _article_status(agent_status: str) -> str:
     if agent_status == "failed":
         return "failed"
     return "partial"
+
+
+def _stop_error() -> dict[str, str]:
+    return {
+        "type": "ArticleResearchStopped",
+        "message": "用户请求停止文章研究",
+    }

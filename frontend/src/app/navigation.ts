@@ -5,7 +5,6 @@ export const viewPaths: Record<LibraryView, string> = {
   today: "/today",
   all: "/all",
   saved: "/saved",
-  research: "/research",
 };
 
 export const viewTitles: Record<LibraryView, string> = {
@@ -13,7 +12,6 @@ export const viewTitles: Record<LibraryView, string> = {
   today: "今天",
   all: "全部文章",
   saved: "已收藏",
-  research: "研究资料",
 };
 
 export function viewFromPath(pathname: string): LibraryView {

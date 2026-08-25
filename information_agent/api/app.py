@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Any
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -18,7 +17,7 @@ from ..common import (
 )
 from ..opinion import BilibiliTargetError, OpinionAnalysisService, OpinionStatus
 from ..opinion.service import OpinionArticleNotFoundError, OpinionSnapshotMismatchError
-from ..orchestration import AgentTaskManager, ArticleResearchTaskManager, agent_run, ingest
+from ..orchestration import AgentTaskManager, ArticleResearchTaskManager, agent_run
 from ..orchestration.summary_tasks import SummaryTaskManager
 from ..reader import (
     ArticleAssistant,
@@ -31,15 +30,10 @@ from ..reader import (
 from ..search import public_status_from_env
 from ..serialization import (
     opinion_report_to_payload,
-    persisted_collection_to_payload,
-    research_run_summaries_to_payload,
 )
 from ..settings import EnvFileOpenError, MainLLMConfig, open_project_env_file
-from ..storage import ResearchRunNotFoundError, ResearchRunNotReadyError
+from ..storage import ArticleResearchRun
 from .models import (
-    AgentRunRequest,
-    AgentStopRequest,
-    AgentTaskSnapshotResponse,
     ArticleAnswerClearResponse,
     ArticleAnswerHistoryResponse,
     ArticleAnswerResponse,
@@ -61,10 +55,9 @@ from .models import (
     OpinionResponse,
     ReaderAutomationSettingsResponse,
     ReaderAutomationSettingsUpdate,
-    ResearchIngestRequest,
-    ResearchRunsResponse,
     SearchLLMSettingsResponse,
     article_answer_response,
+    article_research_metadata_response,
     article_research_response,
     article_response,
     article_state_response,
@@ -477,13 +470,47 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return ArticleResearchHistoryResponse(
             article_id=article_id,
-            runs=[
-                article_research_response(
-                    run,
-                    agent=article_research_tasks.agent_snapshot(run),
-                )
-                for run in runs
-            ],
+            runs=[article_research_metadata_response(run) for run in runs],
+        )
+
+    def article_research_run_for_article(
+        article_id: str,
+        run_id: str,
+    ) -> ArticleResearchRun:
+        try:
+            reader.get_article(article_id)
+        except ArticleNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "article_not_found", "message": str(exc)},
+            ) from exc
+        run = reader.store.get_article_research_run(run_id)
+        if (
+            run is None
+            or run.article_id != article_id
+            or not reader.store.article_snapshot_belongs_to_article(article_id, run.snapshot_id)
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "article_research_not_found",
+                    "message": "指定文章下不存在该研究运行",
+                },
+            )
+        return run
+
+    @app.get(
+        "/api/articles/{article_id}/research/{run_id}",
+        response_model=ArticleResearchResponse,
+    )
+    def get_article_research(
+        article_id: str,
+        run_id: str,
+    ) -> ArticleResearchResponse:
+        run = article_research_run_for_article(article_id, run_id)
+        return article_research_response(
+            run,
+            agent=article_research_tasks.agent_snapshot(run),
         )
 
     @app.post(
@@ -520,6 +547,43 @@ def create_app(
         return article_research_response(
             run,
             agent=article_research_tasks.agent_snapshot(run),
+        )
+
+    @app.post(
+        "/api/articles/{article_id}/research/{run_id}/stop",
+        response_model=ArticleResearchResponse,
+    )
+    def stop_article_research(
+        article_id: str,
+        run_id: str,
+    ) -> ArticleResearchResponse:
+        run = article_research_run_for_article(article_id, run_id)
+        if run.status not in {"queued", "running"}:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "article_research_not_active",
+                    "message": "该文章研究运行已结束，无法停止",
+                },
+            )
+        try:
+            stopped = article_research_tasks.stop(run.id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "article_research_stop_conflict", "message": str(exc)},
+            ) from exc
+        if stopped is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "article_research_not_found",
+                    "message": "指定文章下不存在该研究运行",
+                },
+            )
+        return article_research_response(
+            stopped,
+            agent=article_research_tasks.agent_snapshot(stopped),
         )
 
     @app.get("/api/articles/{article_id}/opinion", response_model=OpinionResponse)
@@ -575,114 +639,5 @@ def create_app(
                 status_code=500,
                 detail={"code": "storage_failed", "message": "舆情运行收尾失败"},
             ) from exc
-
-    @app.get("/api/research/runs", response_model=ResearchRunsResponse)
-    def list_research_runs(
-        limit: int = Query(default=20, ge=1, le=100),
-        status: str | None = Query(
-            default=None,
-            pattern="^(collecting|completed|partial|failed)$",
-        ),
-        mode: str | None = Query(default=None, pattern="^(auto|manual)$"),
-    ) -> dict[str, list[dict[str, Any]]]:
-        return research_run_summaries_to_payload(
-            reader.store.list_runs(limit=limit, status=status, mode=mode)
-        )
-
-    @app.post("/api/research/ingest")
-    def ingest_research(request: ResearchIngestRequest) -> dict[str, Any]:
-        try:
-            result = ingest(
-                request.topic,
-                request.feeds,
-                database_path=reader.store.database_path,
-                timeout_seconds=request.timeout_seconds,
-                limit=request.limit,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "code": "research_ingest_failed",
-                    "message": "采集入库失败，请稍后重试",
-                },
-            ) from exc
-        summary_tasks.wake()
-        return persisted_collection_to_payload(result)
-
-    @app.post("/api/research/runs/{run_id}/agent")
-    def run_research_agent(
-        run_id: str,
-        request: AgentRunRequest,
-    ) -> AgentTaskSnapshotResponse:
-        try:
-            reader.store.load_planning_input(run_id)
-        except ResearchRunNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ResearchRunNotReadyError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        require_agent_settings()
-        try:
-            snapshot = agent_tasks.submit(
-                run_id,
-                request_id=request.request_id or uuid4().hex,
-                timeout_seconds=request.timeout_seconds,
-                max_steps=request.max_steps,
-                max_attempts=request.max_attempts,
-            )
-        except ResearchRunNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ResearchRunNotReadyError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return AgentTaskSnapshotResponse(**snapshot)
-
-    @app.get(
-        "/api/research/runs/{run_id}/agent/status",
-        response_model=AgentTaskSnapshotResponse,
-    )
-    def get_research_agent_status(
-        run_id: str,
-        request_id: str | None = Query(default=None, max_length=200),
-    ) -> AgentTaskSnapshotResponse:
-        try:
-            snapshot = agent_tasks.get(run_id, request_id=request_id)
-        except ResearchRunNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if snapshot is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "agent_not_found", "message": "不存在的 Agent 运行"},
-            )
-        return AgentTaskSnapshotResponse(**snapshot)
-
-    @app.post(
-        "/api/research/runs/{run_id}/agent/stop",
-        response_model=AgentTaskSnapshotResponse,
-    )
-    def stop_research_agent(
-        run_id: str,
-        request: AgentStopRequest | None = None,
-    ) -> AgentTaskSnapshotResponse:
-        try:
-            snapshot = agent_tasks.stop_and_wait(
-                run_id,
-                request_id=request.request_id if request else None,
-            )
-        except ResearchRunNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if snapshot is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "agent_not_found", "message": "不存在的 Agent 运行"},
-            )
-        return AgentTaskSnapshotResponse(**snapshot)
 
     return app

@@ -1,9 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Bookmark,
   ChevronDown,
   CircleUserRound,
-  FlaskConical,
   Inbox,
   Library,
   PanelLeftClose,
@@ -16,12 +15,12 @@ import {
   X,
 } from "lucide-react";
 
-import type { Feed, LibraryView, ResearchRun } from "../../types";
+import type { Feed, LibraryView } from "../../types";
+import { useClickOutside } from "../../hooks/useClickOutside";
 
 type AppSidebarProps = {
   activeView: LibraryView;
   feeds: Feed[];
-  researchRuns: ResearchRun[];
   selectedFeedId: string | null;
   unreadTotal: number;
   apiStatus: "connecting" | "connected" | "unavailable";
@@ -32,7 +31,6 @@ type AppSidebarProps = {
   onExpand: () => void;
   onSelectView: (view: LibraryView) => void;
   onSelectFeed: (feedId: string) => void;
-  onSelectResearchRun: (runId: string) => void;
   onAddFeed: () => void;
   onUnsubscribe: (feedId: string) => void;
   settingsActive: boolean;
@@ -49,7 +47,6 @@ const mainNavigation = [
 export function AppSidebar({
   activeView,
   feeds,
-  researchRuns,
   selectedFeedId,
   unreadTotal,
   apiStatus,
@@ -60,13 +57,19 @@ export function AppSidebar({
   onExpand,
   onSelectView,
   onSelectFeed,
-  onSelectResearchRun,
   onAddFeed,
   onUnsubscribe,
   settingsActive,
   onOpenSettings,
 }: AppSidebarProps) {
   const [confirmingFeedId, setConfirmingFeedId] = useState<string | null>(null);
+  const confirmingFeedActionRef = useRef<HTMLButtonElement>(null);
+
+  useClickOutside(
+    confirmingFeedActionRef,
+    () => setConfirmingFeedId(null),
+    confirmingFeedId !== null,
+  );
 
   const selectView = (view: LibraryView) => {
     onSelectView(view);
@@ -75,11 +78,6 @@ export function AppSidebar({
 
   const selectFeed = (feedId: string) => {
     onSelectFeed(feedId);
-    onClose();
-  };
-
-  const selectResearchRun = (runId: string) => {
-    onSelectResearchRun(runId);
     onClose();
   };
 
@@ -165,50 +163,6 @@ export function AppSidebar({
 
         <div className="mt-6">
           <div className="sidebar-section-tools mb-1.5 flex items-center justify-between px-2.5">
-            <span className="sidebar-label text-[11px] font-medium text-[#72767e]">研究运行</span>
-          </div>
-          <button
-            type="button"
-            className={`sidebar-compact-item flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm ${
-              !settingsActive && activeView === "research"
-                ? "bg-white/9 text-white"
-                : "text-[#aeb1b7] hover:bg-white/6 hover:text-white"
-            }`}
-            aria-label={collapsed ? "研究记录" : undefined}
-            title={collapsed ? "研究记录" : undefined}
-            onClick={() => selectView("research")}
-          >
-            <FlaskConical size={16} strokeWidth={1.8} />
-            <span className="sidebar-label flex-1 text-left">研究记录</span>
-            <span className="sidebar-meta text-xs text-[#777c84]">{researchRuns.length}</span>
-          </button>
-          {researchRuns.map(run => (
-            <button
-              key={run.id}
-              type="button"
-              className="sidebar-secondary-item group flex h-8 w-full items-center gap-2 rounded-md py-1 pr-2 pl-8 text-left text-xs text-[#858a92] hover:bg-white/6 hover:text-[#d7d8da]"
-              aria-hidden={collapsed}
-              tabIndex={collapsed ? -1 : 0}
-              onClick={() => selectResearchRun(run.id)}
-            >
-              <span
-                className={`size-1.5 shrink-0 rounded-full ${
-                  run.status === "completed"
-                    ? "bg-[#63b68d]"
-                    : run.status === "collecting"
-                      ? "bg-[#ef8354]"
-                      : run.status === "failed"
-                        ? "bg-[#b85c4c]"
-                        : "bg-[#c4a460]"
-                }`}
-              />
-              <span className="min-w-0 flex-1 truncate">{run.title}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="mt-6">
-          <div className="sidebar-section-tools mb-1.5 flex items-center justify-between px-2.5">
             <button
               type="button"
               className="sidebar-label flex items-center gap-1 text-[11px] font-medium text-[#72767e]"
@@ -259,10 +213,11 @@ export function AppSidebar({
                 </button>
                 <button
                   type="button"
-                  className={`sidebar-feed-action shrink-0 rounded text-xs transition-[width,padding,color,background-color] duration-200 disabled:cursor-wait ${
+                  ref={confirmingFeedId === feed.id ? confirmingFeedActionRef : undefined}
+                  className={`sidebar-feed-action flex h-7 shrink-0 items-center justify-center gap-1.5 overflow-hidden rounded text-xs transition-[width,padding,color,background-color] duration-200 disabled:cursor-wait ${
                     confirmingFeedId === feed.id
-                      ? "flex h-7 items-center gap-1.5 bg-[#fbe9e4] px-2 text-[#b7523c] hover:bg-[#f8dfd8]"
-                      : "grid size-6 place-items-center text-[#777b82] hover:bg-white/10 hover:text-white"
+                      ? "w-[120px] bg-[#fbe9e4] px-2 text-[#b7523c] hover:bg-[#f8dfd8]"
+                      : "w-6 px-0 text-[#777b82] hover:bg-white/10 hover:text-white"
                   }`}
                   aria-label={
                     confirmingFeedId === feed.id

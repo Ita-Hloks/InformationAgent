@@ -12,11 +12,9 @@ from dotenv import load_dotenv
 from .common.call_log import get_log_directory
 from .common.llm import DEFAULT_LLM_TIMEOUT_SECONDS
 from .serialization import (
-    agent_report_to_payload,
     collection_report_to_payload,
     planning_report_to_payload,
     report_to_payload,
-    research_run_summaries_to_payload,
     search_answer_to_payload,
     search_report_to_payload,
 )
@@ -28,15 +26,6 @@ def build_parser() -> argparse.ArgumentParser:
     collect_parser = commands.add_parser("collect", help="采集、规范化并用 LLM 语义筛选")
     _add_common_arguments(
         collect_parser,
-        limit_help="最多输出的文章数",
-        default_timeout=DEFAULT_LLM_TIMEOUT_SECONDS,
-    )
-    ingest_parser = commands.add_parser(
-        "ingest",
-        help="采集、规范化、用 LLM 语义筛选并写入数据库",
-    )
-    _add_common_arguments(
-        ingest_parser,
         limit_help="最多输出的文章数",
         default_timeout=DEFAULT_LLM_TIMEOUT_SECONDS,
     )
@@ -52,48 +41,6 @@ def build_parser() -> argparse.ArgumentParser:
         limit_help="最多检查的文章数（上限 5）",
         default_limit=5,
         default_timeout=DEFAULT_LLM_TIMEOUT_SECONDS,
-    )
-    plan_run_parser = commands.add_parser(
-        "plan-run",
-        help="从数据库已选证据生成并保存搜索计划",
-    )
-    plan_run_parser.add_argument("run_id", help="ingest 命令返回的研究运行 ID")
-    plan_run_parser.add_argument(
-        "--timeout", type=float, default=DEFAULT_LLM_TIMEOUT_SECONDS, help="规划时限（秒）"
-    )
-    list_runs_parser = commands.add_parser(
-        "list-runs", help="List recent persisted research runs without modifying the database"
-    )
-    list_runs_parser.add_argument(
-        "--limit",
-        type=_research_run_limit,
-        default=20,
-        help="Maximum number of runs to return (1-100; default: 20)",
-    )
-    list_runs_parser.add_argument(
-        "--status",
-        choices=("collecting", "completed", "partial", "failed"),
-        help="Return only runs with this status",
-    )
-    agent_run_parser = commands.add_parser(
-        "agent-run",
-        help="从数据库证据运行受限搜索 Agent",
-    )
-    agent_run_parser.add_argument("run_id", help="ingest 命令返回的研究运行 ID")
-    agent_run_parser.add_argument(
-        "--timeout", type=float, default=DEFAULT_LLM_TIMEOUT_SECONDS, help="Agent 总时限（秒）"
-    )
-    agent_run_parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=3,
-        help="最大搜索动作数；达到后仍保留一次 finish 决策",
-    )
-    agent_run_parser.add_argument(
-        "--max-attempts",
-        type=int,
-        default=3,
-        help="模型或搜索工具单步最大尝试次数",
     )
     search_parser = commands.add_parser("search", help="采集、生成问题并联网回答")
     _add_common_arguments(
@@ -130,12 +77,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     for command_parser in (
         collect_parser,
-        ingest_parser,
         analyze_parser,
         plan_parser,
-        plan_run_parser,
-        list_runs_parser,
-        agent_run_parser,
         search_parser,
         opinion_run_parser,
         opinion_status_parser,
@@ -162,16 +105,6 @@ def _add_common_arguments(
     parser.add_argument("--limit", type=int, default=default_limit, help=limit_help)
 
 
-def _research_run_limit(value: str) -> int:
-    try:
-        limit = int(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("limit must be an integer between 1 and 100") from error
-    if not 1 <= limit <= 100:
-        raise argparse.ArgumentTypeError("limit must be between 1 and 100")
-    return limit
-
-
 def _opinion_limit(value: str) -> int:
     try:
         limit = int(value)
@@ -190,13 +123,6 @@ def main() -> None:
         load_dotenv()
         report = collect(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
         payload = collection_report_to_payload(report)
-    elif args.command == "ingest":
-        from .orchestration import ingest
-        from .serialization import persisted_collection_to_payload
-
-        load_dotenv()
-        result = ingest(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
-        payload = persisted_collection_to_payload(result)
     elif args.command == "analyze":
         from .orchestration import run
 
@@ -209,31 +135,6 @@ def main() -> None:
         load_dotenv()
         report = plan(args.topic, args.feeds, timeout_seconds=args.timeout, limit=args.limit)
         payload = planning_report_to_payload(report)
-    elif args.command == "plan-run":
-        from .orchestration import plan_run
-        from .serialization import persisted_planning_to_payload
-
-        load_dotenv()
-        result = plan_run(args.run_id, timeout_seconds=args.timeout)
-        payload = persisted_planning_to_payload(result)
-    elif args.command == "list-runs":
-        from .storage import SQLiteCollectionStore, default_database_path
-
-        runs = SQLiteCollectionStore(default_database_path()).list_runs(
-            limit=args.limit, status=args.status
-        )
-        payload = research_run_summaries_to_payload(runs)
-    elif args.command == "agent-run":
-        from .orchestration import agent_run
-
-        load_dotenv()
-        report = agent_run(
-            args.run_id,
-            timeout_seconds=args.timeout,
-            max_steps=args.max_steps,
-            max_attempts=args.max_attempts,
-        )
-        payload = agent_report_to_payload(report)
     elif args.command == "search":
         from .orchestration import search
 

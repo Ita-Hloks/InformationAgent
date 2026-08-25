@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -19,9 +18,8 @@ from information_agent.agent import (
     parse_agent_decision,
 )
 from information_agent.agent import decider as agent_decider
-from information_agent.cli import main
 from information_agent.collection import RawFeedEntry
-from information_agent.contracts import RunStatus
+from information_agent.contracts import CollectionReport, RunStatus
 from information_agent.investigation import (
     SEARCH_PLAN_CONTRACT,
     QuestionKind,
@@ -31,7 +29,6 @@ from information_agent.investigation import (
 from information_agent.investigation import planner as investigation_planner
 from information_agent.orchestration.agent_tasks import AgentTaskManager
 from information_agent.orchestration.agent_workflow import agent_run
-from information_agent.orchestration.ingestion import ingest
 from information_agent.search import SearchAnswer, SearchAnswerStatus, SearchSource
 from information_agent.selection import SelectedEvidence
 from information_agent.storage import (
@@ -167,13 +164,15 @@ class RecordingAnswerer:
 
 def _ingested_run(tmp_path: Path):
     database_path = tmp_path / "information-agent.db"
-    collection = ingest(
-        "AI 芯片",
-        ["feed"],
-        database_path=database_path,
-        collector=_collector,
+    store = SQLiteCollectionStore(database_path)
+    evidence = ingest_evidence()
+    run_id = store.start_run("AI 芯片", ["feed"])
+    store.complete_run(
+        run_id,
+        CollectionReport("AI 芯片", RunStatus.COMPLETED, evidence, []),
+        [evidence[0].article],
     )
-    return database_path, collection.run_id
+    return database_path, run_id
 
 
 def test_parse_agent_finish_requires_explicit_citation() -> None:
@@ -857,64 +856,3 @@ def test_agent_task_exposes_persistence_failure_without_masking_agent_error(
     )
     assert persisted is not None
     assert persisted.status is AnalysisRunStatus.CREATED
-
-
-def test_agent_run_cli_uses_separate_command(monkeypatch, capsys) -> None:
-    report = AgentReport(
-        run_id="run-123",
-        topic="AI",
-        status=RunStatus.COMPLETED,
-        articles=[],
-        plans=[],
-        answers=[],
-        final_answer="无需继续搜索。",
-        evidence_ids=(1,),
-        uncertainties=(),
-        steps=1,
-        stop_reason=AgentStopReason.FINISHED,
-        citations=(ConclusionCitation("无需继续搜索。", (1,), ()),),
-    )
-
-    def fake_agent_run(
-        run_id: str,
-        *,
-        timeout_seconds: float,
-        max_steps: int,
-        max_attempts: int,
-    ) -> AgentReport:
-        assert run_id == "run-123"
-        assert timeout_seconds == 12
-        assert max_steps == 2
-        assert max_attempts == 3
-        return report
-
-    monkeypatch.setattr(
-        "information_agent.orchestration.agent_workflow.agent_run",
-        fake_agent_run,
-    )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "information-agent",
-            "agent-run",
-            "run-123",
-            "--timeout",
-            "12",
-            "--max-steps",
-            "2",
-            "--max-attempts",
-            "3",
-        ],
-    )
-
-    main()
-
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["run_id"] == "run-123"
-    assert payload["status"] == "completed"
-    assert payload["stop_reason"] == "finished"
-    assert payload["final_answer"] == "无需继续搜索。"
-    assert payload["citations"] == [
-        {"claim": "无需继续搜索。", "evidence_ids": [1], "source_urls": []}
-    ]

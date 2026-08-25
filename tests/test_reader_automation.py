@@ -104,10 +104,28 @@ def test_auto_article_research_is_idempotent_but_manual_runs_keep_history(
 
     first = service.store.create_article_research_run(article, mode="auto", config=config)
     repeated = service.store.create_article_research_run(article, mode="auto", config=config)
+    manual_while_active = service.store.create_article_research_run(
+        article, mode="manual", config=config
+    )
+    service.store.update_article_research_run(
+        first.id,
+        status="completed",
+        expected_status="queued",
+    )
     manual_one = service.store.create_article_research_run(article, mode="manual", config=config)
+    manual_while_active_again = service.store.create_article_research_run(
+        article, mode="manual", config=config
+    )
+    service.store.update_article_research_run(
+        manual_one.id,
+        status="completed",
+        expected_status="queued",
+    )
     manual_two = service.store.create_article_research_run(article, mode="manual", config=config)
 
     assert repeated.id == first.id
+    assert manual_while_active.id == first.id
+    assert manual_while_active_again.id == manual_one.id
     assert first.topic == "核验《自动研究文章》中会显著影响读者判断的事实主张"
     assert manual_one.id != manual_two.id
     history = service.store.list_article_research_runs(article.article.article_id)
@@ -141,6 +159,20 @@ class _BlockingAgentTasks:
             self.finished.set()
         return {"analysis_run_id": f"analysis-{run_id}", "status": "completed"}
 
+    def stop_and_wait(
+        self,
+        research_run_id: str,
+        *,
+        request_id: str | None = None,
+        timeout: float = 2.0,
+    ) -> dict[str, object]:
+        self.release_first.set()
+        return {
+            "analysis_run_id": f"analysis-{research_run_id}",
+            "request_id": request_id,
+            "status": "cancelled",
+        }
+
     def shutdown(self) -> None:
         return None
 
@@ -165,3 +197,29 @@ def test_manual_article_research_precedes_queued_auto_work(tmp_path: Path) -> No
     assert agent_tasks.finished.wait(timeout=2)
     manager.shutdown()
     assert agent_tasks.calls == [first.id, manual.id, queued_auto.id]
+
+
+def test_article_research_stop_cancels_queued_and_running_runs(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    articles = service.list_articles()
+    settings = service.store.get_reader_automation_settings()
+    agent_tasks = _BlockingAgentTasks()
+    manager = ArticleResearchTaskManager(
+        service.store.database_path,
+        store=service.store,
+        agent_tasks=agent_tasks,
+    )
+
+    running = manager.submit(articles[0], mode="auto", settings=settings)
+    assert agent_tasks.first_started.wait(timeout=2)
+    queued = manager.submit(articles[1], mode="manual", settings=settings)
+
+    stopped_queued = manager.stop(queued.id)
+    assert stopped_queued is not None
+    assert stopped_queued.status == "cancelled"
+
+    stopped_running = manager.stop(running.id)
+    assert stopped_running is not None
+    assert stopped_running.status == "cancelled"
+    manager.shutdown()
+    assert agent_tasks.calls == [running.id]

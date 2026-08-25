@@ -43,7 +43,6 @@ from .models import (
 )
 from .reader_answers import ReaderAnswerPersistenceMixin
 from .reader_automation import ReaderAutomationPersistenceMixin, _summary_error_message
-from .run_listing import ResearchRunListingMixin
 
 _OPINION_STATUS_REASONS = {
     "completed": {"completed", "no_controversy_points", "sample_empty"},
@@ -72,7 +71,6 @@ def default_database_path() -> Path:
 class SQLiteCollectionStore(
     AnalysisPersistenceMixin,
     ReaderAnswerPersistenceMixin,
-    ResearchRunListingMixin,
     ReaderAutomationPersistenceMixin,
 ):
     """保存粗处理文章快照与运行内证据关系。"""
@@ -1888,6 +1886,9 @@ class SQLiteCollectionStore(
             CREATE UNIQUE INDEX IF NOT EXISTS article_research_runs_auto_snapshot_idx
                 ON article_research_runs(article_id, snapshot_id)
                 WHERE mode = 'auto';
+            CREATE UNIQUE INDEX IF NOT EXISTS article_research_runs_active_snapshot_idx
+                ON article_research_runs(article_id, snapshot_id)
+                WHERE status IN ('queued', 'running');
             """
         )
         migration_id = "20260824_remove_article_snapshot_normalizer_version"

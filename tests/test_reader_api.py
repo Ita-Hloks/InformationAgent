@@ -91,6 +91,20 @@ class _FakeResearchManager:
     def agent_snapshot(self, _run: ArticleResearchRun) -> None:
         return None
 
+    def stop(self, run_id: str) -> ArticleResearchRun | None:
+        run = self.store.get_article_research_run(run_id)
+        if run is None:
+            return None
+        return self.store.update_article_research_run(
+            run_id,
+            status="cancelled",
+            error={
+                "type": "ArticleResearchStopped",
+                "message": "用户请求停止文章研究",
+            },
+            expected_status=run.status,
+        )
+
     def shutdown(self) -> None:
         self.shutdown_calls += 1
 
@@ -358,7 +372,7 @@ def test_summary_retry_api_requeues_failed_snapshot_and_checks_missing_article(
     assert missing.status_code == 404
 
 
-def test_article_research_api_is_idempotent_for_auto_and_replayable_for_manual(
+def test_article_research_api_deduplicates_active_runs_and_replays_manual_history(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -380,17 +394,34 @@ def test_article_research_api_is_idempotent_for_auto_and_replayable_for_manual(
 
     auto_one = client.post(f"/api/articles/{article_id}/research", json={"mode": "auto"})
     auto_two = client.post(f"/api/articles/{article_id}/research", json={"mode": "auto"})
-    manual_one = client.post(f"/api/articles/{article_id}/research", json={"mode": "manual"})
-    manual_two = client.post(f"/api/articles/{article_id}/research", json={"mode": "manual"})
+    manual_while_active = client.post(
+        f"/api/articles/{article_id}/research", json={"mode": "manual"}
+    )
 
-    assert [response.status_code for response in (auto_one, auto_two, manual_one, manual_two)] == [
-        200,
+    assert [response.status_code for response in (auto_one, auto_two, manual_while_active)] == [
         200,
         200,
         200,
     ]
     assert auto_one.json()["run_id"] == auto_two.json()["run_id"]
-    assert manual_one.json()["run_id"] != manual_two.json()["run_id"]
+    assert manual_while_active.json()["run_id"] == auto_one.json()["run_id"]
+    store.update_article_research_run(
+        auto_one.json()["run_id"], status="completed", expected_status="queued"
+    )
+
+    manual_one = client.post(f"/api/articles/{article_id}/research", json={"mode": "manual"})
+    manual_while_active_again = client.post(
+        f"/api/articles/{article_id}/research", json={"mode": "manual"}
+    )
+    assert manual_one.status_code == 200
+    assert manual_while_active_again.status_code == 200
+    assert manual_while_active_again.json()["run_id"] == manual_one.json()["run_id"]
+    store.update_article_research_run(
+        manual_one.json()["run_id"], status="completed", expected_status="queued"
+    )
+    manual_two = client.post(f"/api/articles/{article_id}/research", json={"mode": "manual"})
+    assert manual_two.status_code == 200
+    assert manual_two.json()["run_id"] != manual_one.json()["run_id"]
     assert research.submitted[0]["config"] == {
         "timeout_seconds": 240,
         "max_steps": 3,
@@ -405,23 +436,35 @@ def test_article_research_api_is_idempotent_for_auto_and_replayable_for_manual(
     assert len(manual_history.json()["runs"]) == 2
     assert all(item["mode"] == "auto" for item in auto_history.json()["runs"])
     assert all(item["mode"] == "manual" for item in manual_history.json()["runs"])
-
-    unified = client.get("/api/research/runs", params={"mode": "auto"})
-    assert unified.status_code == 200
-    assert unified.json()["runs"]
-    assert all(item["mode"] == "auto" for item in unified.json()["runs"])
+    assert all("agent" not in item for item in auto_history.json()["runs"])
 
     invalid = client.post(f"/api/articles/{article_id}/research", json={"mode": "other"})
     assert invalid.status_code == 422
     assert invalid.json()["detail"]["code"] == "invalid_request"
 
-    normal_run_id = store.start_run("普通研究工作台", [])
-    manual_runs = client.get("/api/research/runs", params={"mode": "manual"})
-    assert manual_runs.status_code == 200
-    assert any(
-        item["run_id"] == normal_run_id and item["mode"] == "manual"
-        for item in manual_runs.json()["runs"]
-    )
+
+def test_article_research_detail_and_stop_are_scoped_to_article(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _, _, _ = _app(tmp_path, monkeypatch=monkeypatch)
+    article_id = _create_article(client)
+    created = client.post(f"/api/articles/{article_id}/research", json={"mode": "manual"})
+    run_id = created.json()["run_id"]
+
+    detail = client.get(f"/api/articles/{article_id}/research/{run_id}")
+    assert detail.status_code == 200
+    assert detail.json()["run_id"] == run_id
+    assert detail.json()["agent"] is None
+
+    stopped = client.post(f"/api/articles/{article_id}/research/{run_id}/stop")
+    assert stopped.status_code == 200
+    assert stopped.json()["status"] == "cancelled"
+
+    missing_run = client.get(f"/api/articles/{article_id}/research/missing")
+    assert missing_run.status_code == 404
+    wrong_article = client.get(f"/api/articles/missing/research/{run_id}")
+    assert wrong_article.status_code == 404
 
 
 def test_create_app_shuts_down_injected_background_managers(tmp_path: Path) -> None:

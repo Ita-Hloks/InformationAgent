@@ -4,42 +4,28 @@ import { useLocation, useMatch, useNavigate, useOutlet, useSearchParams } from "
 import { feedPath, viewFromPath, viewPaths, viewTitles } from "../../app/navigation";
 import {
   addFeed as createFeed,
-  createResearchAgentRequestId,
-  createResearchRun,
   deleteArticle,
   getArticles,
   getArticleResearch,
+  getArticleResearchRun,
   getReaderAutomationSettings,
   getFeeds,
   refreshFeed,
   removeFeed,
-  getResearchAgentStatus,
-  getResearchRuns,
   retryArticleSummary,
-  runResearchAgent,
   runArticleResearch,
-  stopResearchAgent,
+  stopArticleResearch,
   type ArticleStateUpdate,
   updateArticleStates,
 } from "../../api/client";
 import { initialArticles, initialFeeds } from "../../data/localState";
-import type {
-  AgentReport,
-  AgentTaskSnapshot,
-  Feed,
-  LibraryView,
-  ArticleResearchRun,
-  ReaderAutomationSettings,
-  ResearchIngestResult,
-  ResearchRun,
-} from "../../types";
+import type { Feed, LibraryView, ArticleResearchRun, ReaderAutomationSettings } from "../../types";
 import { isArticleToday } from "../../utils/date";
 import { AppSidebar } from "../appShell";
 import { AddFeedDialog } from "./addFeedDialog";
 import { ArticleList } from "./articleList";
 import { AskPanel } from "./askPanel";
 import { ReaderPane } from "./readerPane";
-import { ResearchWorkspace } from "./researchWorkspace";
 
 type OverlayName = "add-feed" | "ask";
 type RouteState = {
@@ -63,26 +49,16 @@ export function ReaderWorkspacePage() {
   const [searchParams] = useSearchParams();
   const [feeds, setFeeds] = useState<Feed[]>(initialFeeds);
   const [articles, setArticles] = useState(initialArticles);
-  const [researchRuns, setResearchRuns] = useState<ResearchRun[]>([]);
   const [automationSettings, setAutomationSettings] = useState<ReaderAutomationSettings | null>(
     null,
   );
   const [articleResearchRuns, setArticleResearchRuns] = useState<ArticleResearchRun[]>([]);
+  const [selectedArticleResearchId, setSelectedArticleResearchId] = useState<string | null>(null);
+  const [articleResearchDetail, setArticleResearchDetail] = useState<ArticleResearchRun | null>(
+    null,
+  );
   const [articleResearchLoading, setArticleResearchLoading] = useState(false);
   const [articleResearchError, setArticleResearchError] = useState<string | null>(null);
-  const [selectedResearchRunId, setSelectedResearchRunId] = useState<string | null>(() =>
-    searchParams.get("run_id"),
-  );
-  const [ingestResult, setIngestResult] = useState<ResearchIngestResult | null>(null);
-  const [agentReport, setAgentReport] = useState<AgentReport | null>(null);
-  const [agentTask, setAgentTask] = useState<AgentTaskSnapshot | null>(null);
-  const [researchPhase, setResearchPhase] = useState<"idle" | "ingesting" | "running-agent">(
-    "idle",
-  );
-  const [researchError, setResearchError] = useState<string | null>(null);
-  const agentReportRequestId = useRef(0);
-  const agentTaskRequestId = useRef<string | null>(null);
-  const [agentPollKey, setAgentPollKey] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [savedIds, setSavedIds] = useState(
     () => new Set(initialArticles.filter(article => article.starred).map(article => article.id)),
@@ -160,9 +136,8 @@ export function ReaderWorkspacePage() {
   }, [applyReaderData, feeds]);
 
   useEffect(() => {
-    void Promise.all([reloadReaderData(), getResearchRuns(), getReaderAutomationSettings()])
-      .then(([, loadedResearchRuns, loadedAutomationSettings]) => {
-        setResearchRuns(loadedResearchRuns);
+    void Promise.all([reloadReaderData(), getReaderAutomationSettings()])
+      .then(([, loadedAutomationSettings]) => {
         setAutomationSettings(loadedAutomationSettings);
         setApiStatus("connected");
       })
@@ -182,69 +157,6 @@ export function ReaderWorkspacePage() {
     }, 2000);
     return () => window.clearInterval(timer);
   }, [hasPendingSummaries, refreshArticles]);
-
-  useEffect(() => {
-    if (activeView !== "research") return;
-    const urlRunId = searchParams.get("run_id");
-    if (urlRunId && urlRunId !== selectedResearchRunId) {
-      setSelectedResearchRunId(urlRunId);
-      return;
-    }
-    if (activeView === "research" && !urlRunId && researchRuns[0]) {
-      setSelectedResearchRunId(researchRuns[0].id);
-      navigate(`/research?run_id=${encodeURIComponent(researchRuns[0].id)}`, { replace: true });
-    }
-  }, [activeView, navigate, researchRuns, searchParams, selectedResearchRunId]);
-
-  useEffect(() => {
-    if (activeView !== "research" || !selectedResearchRunId) {
-      setAgentTask(null);
-      setAgentReport(null);
-      return;
-    }
-    const requestId = ++agentReportRequestId.current;
-    const controller = new AbortController();
-    let timer: number | null = null;
-    setAgentReport(null);
-    const poll = async () => {
-      try {
-        const task = await getResearchAgentStatus(
-          selectedResearchRunId,
-          agentTaskRequestId.current,
-          controller.signal,
-        );
-        if (controller.signal.aborted || agentReportRequestId.current !== requestId) return;
-        setAgentTask(task);
-        setAgentReport(task.report);
-        const active = ["created", "running"].includes(task.status);
-        setResearchPhase(active ? "running-agent" : "idle");
-        if (active) timer = window.setTimeout(() => void poll(), 500);
-      } catch (error) {
-        if (controller.signal.aborted || agentReportRequestId.current !== requestId) return;
-        setAgentTask(null);
-        setAgentReport(null);
-        if (!(error instanceof Error && error.message === "不存在的 Agent 运行")) {
-          setResearchError(error instanceof Error ? error.message : "Agent 状态读取失败");
-        }
-      }
-    };
-    void poll();
-    return () => {
-      controller.abort();
-      if (timer !== null) window.clearTimeout(timer);
-    };
-  }, [activeView, agentPollKey, selectedResearchRunId]);
-
-  useEffect(() => {
-    if (
-      activeView !== "research" ||
-      !selectedResearchRunId ||
-      searchParams.get("run_id") === selectedResearchRunId
-    ) {
-      return;
-    }
-    navigate(`/research?run_id=${encodeURIComponent(selectedResearchRunId)}`, { replace: true });
-  }, [activeView, navigate, searchParams, selectedResearchRunId]);
 
   const articleParam = searchParams.get("article");
   const dialogParam = searchParams.get("dialog");
@@ -303,6 +215,8 @@ export function ReaderWorkspacePage() {
   useEffect(() => {
     setReadingActivity({ key: selectedArticleKey, progress: 0, visibleSeconds: 0 });
     setArticleResearchRuns([]);
+    setSelectedArticleResearchId(null);
+    setArticleResearchDetail(null);
     setArticleResearchError(null);
     setArticleDeleteError(null);
   }, [selectedArticleKey]);
@@ -310,33 +224,47 @@ export function ReaderWorkspacePage() {
   const syncArticleResearchStatus = useCallback((run: ArticleResearchRun) => {
     setArticles(current =>
       current.map(article =>
-        article.id === run.articleId
+        article.id === run.articleId && article.snapshotId === run.snapshotId
           ? { ...article, researchStatus: run.status, researchMode: run.mode }
           : article,
       ),
     );
   }, []);
 
-  const loadArticleResearch = useCallback(async () => {
-    if (!selectedArticleId) return;
-    const history = await getArticleResearch(selectedArticleId);
-    setArticleResearchRuns(history.runs);
-    const automaticRun = history.runs.find(
-      run => run.mode === "auto" && run.snapshotId === selectedSnapshotId,
-    );
-    if (automaticRun && selectedArticleKey) {
-      autoResearchAttempts.current.add(selectedArticleKey);
-      syncArticleResearchStatus(automaticRun);
-    }
-  }, [selectedArticleId, selectedArticleKey, selectedSnapshotId, syncArticleResearchStatus]);
+  const loadArticleResearch = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!selectedArticleId) return;
+      const history = await getArticleResearch(selectedArticleId, { signal });
+      if (signal?.aborted) return history;
+      setArticleResearchRuns(history.runs);
+      const automaticRun = history.runs.find(
+        run => run.mode === "auto" && run.snapshotId === selectedSnapshotId,
+      );
+      if (automaticRun && selectedArticleKey) {
+        autoResearchAttempts.current.add(selectedArticleKey);
+        syncArticleResearchStatus(automaticRun);
+      }
+      return history;
+    },
+    [selectedArticleId, selectedArticleKey, selectedSnapshotId, syncArticleResearchStatus],
+  );
 
   useEffect(() => {
-    if (!selectedArticleKey) return;
+    if (!selectedArticleKey || !selectedArticleId) {
+      setArticleResearchLoading(false);
+      return;
+    }
+    const controller = new AbortController();
     let active = true;
     setArticleResearchLoading(true);
-    void loadArticleResearch()
+    void loadArticleResearch(controller.signal)
+      .then(history => {
+        if (!active || !history) return;
+        const latestCurrentRun = history.runs.find(run => run.snapshotId === selectedSnapshotId);
+        setSelectedArticleResearchId(latestCurrentRun?.id ?? null);
+      })
       .catch(error => {
-        if (active) {
+        if (active && !(error instanceof DOMException && error.name === "AbortError")) {
           setArticleResearchError(error instanceof Error ? error.message : "研究记录读取失败");
         }
       })
@@ -345,13 +273,57 @@ export function ReaderWorkspacePage() {
       });
     return () => {
       active = false;
+      controller.abort();
     };
-  }, [loadArticleResearch, selectedArticleKey]);
+  }, [loadArticleResearch, selectedArticleId, selectedArticleKey, selectedSnapshotId]);
 
-  const latestArticleResearch = articleResearchRuns[0] ?? null;
-  const articleResearchActive = articleResearchRuns.some(run =>
+  const currentArticleResearchRuns = articleResearchRuns.filter(
+    run => run.snapshotId === selectedSnapshotId,
+  );
+  const selectedArticleResearch =
+    articleResearchRuns.find(run => run.id === selectedArticleResearchId) ?? null;
+  const articleResearchActive = currentArticleResearchRuns.some(run =>
     ["queued", "running"].includes(run.status),
   );
+  const selectedResearchActive = Boolean(
+    selectedArticleResearch && ["queued", "running"].includes(selectedArticleResearch.status),
+  );
+
+  const loadArticleResearchDetail = useCallback(
+    async (runId: string, signal?: AbortSignal) => {
+      if (!selectedArticleId) return;
+      const detail = await getArticleResearchRun(selectedArticleId, runId, signal);
+      if (signal?.aborted) return;
+      setArticleResearchDetail(detail);
+      syncArticleResearchStatus(detail);
+    },
+    [selectedArticleId, syncArticleResearchStatus],
+  );
+
+  useEffect(() => {
+    if (!selectedArticleId || !selectedArticleResearchId) {
+      setArticleResearchDetail(null);
+      setArticleResearchLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    let active = true;
+    setArticleResearchLoading(true);
+    void loadArticleResearchDetail(selectedArticleResearchId, controller.signal)
+      .catch(error => {
+        if (active && !(error instanceof DOMException && error.name === "AbortError")) {
+          setArticleResearchDetail(null);
+          setArticleResearchError(error instanceof Error ? error.message : "研究详情读取失败");
+        }
+      })
+      .finally(() => {
+        if (active) setArticleResearchLoading(false);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [loadArticleResearchDetail, selectedArticleId, selectedArticleResearchId]);
 
   useEffect(() => {
     if (!selectedArticleId || !articleResearchActive) return;
@@ -363,13 +335,37 @@ export function ReaderWorkspacePage() {
     return () => window.clearInterval(timer);
   }, [articleResearchActive, loadArticleResearch, selectedArticleId]);
 
+  useEffect(() => {
+    if (!selectedArticleId || !selectedArticleResearchId || !selectedResearchActive) return;
+    const timer = window.setInterval(() => {
+      void loadArticleResearchDetail(selectedArticleResearchId).catch(error => {
+        setArticleResearchError(error instanceof Error ? error.message : "研究详情读取失败");
+      });
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [
+    loadArticleResearchDetail,
+    selectedArticleId,
+    selectedArticleResearchId,
+    selectedResearchActive,
+  ]);
+
   const runArticleResearchForSelected = useCallback(
     async (mode: "auto" | "manual") => {
       if (!selectedArticleId) return;
+      if (articleResearchActive) {
+        const activeRun = currentArticleResearchRuns.find(run =>
+          ["queued", "running"].includes(run.status),
+        );
+        if (activeRun) setSelectedArticleResearchId(activeRun.id);
+        return;
+      }
       setArticleResearchError(null);
       try {
         const run = await runArticleResearch(selectedArticleId, { mode });
         setArticleResearchRuns(current => [run, ...current.filter(item => item.id !== run.id)]);
+        setSelectedArticleResearchId(run.id);
+        setArticleResearchDetail(null);
         syncArticleResearchStatus(run);
         setApiStatus("connected");
       } catch (error) {
@@ -377,15 +373,38 @@ export function ReaderWorkspacePage() {
         setApiStatus("unavailable");
       }
     },
-    [selectedArticleId, syncArticleResearchStatus],
+    [
+      articleResearchActive,
+      currentArticleResearchRuns,
+      selectedArticleId,
+      syncArticleResearchStatus,
+    ],
   );
+
+  const stopArticleResearchForSelected = useCallback(async () => {
+    if (!selectedArticleId || !selectedArticleResearch) return;
+    if (!["queued", "running"].includes(selectedArticleResearch.status)) return;
+    setArticleResearchError(null);
+    try {
+      const stoppedRun = await stopArticleResearch(selectedArticleId, selectedArticleResearch.id);
+      setArticleResearchRuns(current =>
+        current.map(run => (run.id === stoppedRun.id ? stoppedRun : run)),
+      );
+      setArticleResearchDetail(stoppedRun);
+      syncArticleResearchStatus(stoppedRun);
+      setApiStatus("connected");
+    } catch (error) {
+      setArticleResearchError(error instanceof Error ? error.message : "研究停止失败");
+      setApiStatus("unavailable");
+    }
+  }, [selectedArticleId, selectedArticleResearch, syncArticleResearchStatus]);
 
   useEffect(() => {
     if (
       !automationSettings?.enabled ||
       !selectedArticleId ||
       !selectedArticleKey ||
-      activeView === "research" ||
+      currentArticleResearchRuns.some(run => run.mode === "auto") ||
       readingActivity.key !== selectedArticleKey ||
       readingActivity.visibleSeconds < automationSettings.dwellSeconds ||
       readingActivity.progress < automationSettings.readRatio ||
@@ -396,8 +415,8 @@ export function ReaderWorkspacePage() {
     autoResearchAttempts.current.add(selectedArticleKey);
     void runArticleResearchForSelected("auto");
   }, [
-    activeView,
     automationSettings,
+    currentArticleResearchRuns,
     readingActivity,
     runArticleResearchForSelected,
     selectedArticleId,
@@ -464,17 +483,6 @@ export function ReaderWorkspacePage() {
     navigate(feedPath(feedId));
   };
 
-  const selectResearchRun = (runId: string) => {
-    setSelectedResearchRunId(runId);
-    setIngestResult(null);
-    agentTaskRequestId.current = null;
-    setAgentTask(null);
-    setAgentReport(null);
-    setResearchError(null);
-    setAgentPollKey(current => current + 1);
-    navigate(`${viewPaths.research}?run_id=${encodeURIComponent(runId)}`);
-  };
-
   const selectArticle = (articleId: string) => {
     setReadIds(current => new Set(current).add(articleId));
     void persistArticleStates([articleId], { isRead: true });
@@ -535,6 +543,8 @@ export function ReaderWorkspacePage() {
         return next;
       });
       setArticleResearchRuns([]);
+      setSelectedArticleResearchId(null);
+      setArticleResearchDetail(null);
       setApiStatus("connected");
       closeArticle();
     } catch (error) {
@@ -577,83 +587,10 @@ export function ReaderWorkspacePage() {
     }
   };
 
-  const refreshResearchRuns = useCallback(async () => {
-    try {
-      const loadedResearchRuns = await getResearchRuns();
-      setResearchRuns(loadedResearchRuns);
-      setApiStatus("connected");
-    } catch {
-      setApiStatus("unavailable");
-    }
-  }, []);
-
-  const createRun = async (input: {
-    topic: string;
-    feeds: string[];
-    timeoutSeconds: number;
-    limit: number;
-  }) => {
-    setResearchPhase("ingesting");
-    setResearchError(null);
-    agentTaskRequestId.current = null;
-    setAgentTask(null);
-    setAgentReport(null);
-    try {
-      const result = await createResearchRun(input);
-      setIngestResult(result);
-      setSelectedResearchRunId(result.run_id);
-      agentTaskRequestId.current = null;
-      setAgentTask(null);
-      navigate(`${viewPaths.research}?run_id=${encodeURIComponent(result.run_id)}`);
-      await refreshResearchRuns();
-    } catch (error) {
-      setResearchError(error instanceof Error ? error.message : "研究运行创建失败");
-    } finally {
-      setResearchPhase("idle");
-    }
-  };
-
-  const runAgent = async (runId: string) => {
-    const requestId = ++agentReportRequestId.current;
-    const taskRequestId = createResearchAgentRequestId();
-    agentTaskRequestId.current = taskRequestId;
-    setResearchPhase("running-agent");
-    setResearchError(null);
-    setAgentReport(null);
-    setAgentTask(null);
-    try {
-      const task = await runResearchAgent(
-        runId,
-        {
-          timeoutSeconds: 180,
-          maxSteps: 3,
-          maxAttempts: 3,
-        },
-        taskRequestId,
-      );
-      if (agentReportRequestId.current === requestId) {
-        setAgentTask(task);
-        setAgentReport(task.report);
-        setAgentPollKey(current => current + 1);
-      }
-      await refreshResearchRuns();
-    } catch (error) {
-      if (agentReportRequestId.current === requestId) {
-        setResearchError(error instanceof Error ? error.message : "Agent 运行失败");
-      }
-    }
-  };
-
-  const stopAgent = async (runId: string) => {
-    setResearchError(null);
-    try {
-      const task = await stopResearchAgent(runId, agentTaskRequestId.current);
-      setAgentTask(task);
-      setAgentReport(task.report);
-      setAgentPollKey(current => current + 1);
-    } catch (error) {
-      setResearchError(error instanceof Error ? error.message : "Agent 停止失败");
-    }
+  const selectArticleResearch = (runId: string) => {
+    setArticleResearchError(null);
+    setArticleResearchDetail(null);
+    setSelectedArticleResearchId(runId);
   };
 
   const openOverlay = useCallback(
@@ -719,7 +656,6 @@ export function ReaderWorkspacePage() {
         <AppSidebar
           activeView={activeView}
           feeds={feeds}
-          researchRuns={researchRuns}
           selectedFeedId={selectedFeedId}
           unreadTotal={unreadTotal}
           apiStatus={apiStatus}
@@ -730,7 +666,6 @@ export function ReaderWorkspacePage() {
           onExpand={openSidebar}
           onSelectView={selectView}
           onSelectFeed={selectFeed}
-          onSelectResearchRun={selectResearchRun}
           onAddFeed={() => openOverlay("add-feed")}
           onUnsubscribe={feedId => {
             void unsubscribeFeed(feedId).catch(() => setApiStatus("unavailable"));
@@ -744,23 +679,6 @@ export function ReaderWorkspacePage() {
 
         {location.pathname === "/settings" && outlet ? (
           <div className="h-full min-h-0 min-w-0 md:col-span-1 xl:col-span-2">{outlet}</div>
-        ) : activeView === "research" ? (
-          <div className="h-full min-h-0 min-w-0 overflow-hidden md:col-span-1 xl:col-span-2">
-            <ResearchWorkspace
-              runs={researchRuns}
-              selectedRunId={selectedResearchRunId}
-              ingestResult={ingestResult}
-              agentReport={agentReport}
-              agentTask={agentTask}
-              phase={researchPhase}
-              error={researchError}
-              onCreateRun={createRun}
-              onRunAgent={runAgent}
-              onStopAgent={stopAgent}
-              onSelectRun={selectResearchRun}
-              onRefreshRuns={refreshResearchRuns}
-            />
-          </div>
         ) : (
           <>
             <div className={`min-h-0 min-w-0 ${articleOpen ? "hidden" : "block"} md:block`}>
@@ -807,9 +725,14 @@ export function ReaderWorkspacePage() {
                 deleteError={articleDeleteError}
                 onProgress={reportReaderProgress}
                 onVisibleSeconds={reportVisibleSeconds}
-                onTestResearch={() => void runArticleResearchForSelected("manual")}
+                onResearch={() => void runArticleResearchForSelected("manual")}
+                onStopResearch={() => void stopArticleResearchForSelected()}
                 onRetrySummary={() => void retrySelectedSummary()}
-                researchRun={latestArticleResearch}
+                researchRuns={articleResearchRuns}
+                selectedResearchRunId={selectedArticleResearchId}
+                onSelectResearchRun={selectArticleResearch}
+                researchRun={articleResearchDetail}
+                researchRunning={articleResearchActive}
                 researchLoading={articleResearchLoading}
                 researchError={articleResearchError}
               />
