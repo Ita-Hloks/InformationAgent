@@ -1,4 +1,4 @@
-export type LibraryView = "inbox" | "today" | "all" | "saved" | "research";
+export type LibraryView = "inbox" | "today" | "all" | "saved";
 
 export type SummaryStatus = "pending" | "running" | "completed" | "failed";
 export type ResearchStatus =
@@ -80,18 +80,6 @@ export type LogSettings = {
   maxBytes: number;
 };
 
-export type ResearchRun = {
-  id: string;
-  title: string;
-  mode: ResearchMode;
-  status: "collecting" | "completed" | "partial" | "failed";
-  articleCount: number;
-  feedCount: number;
-  errorCount: number;
-  startedAt: string;
-  finishedAt?: string;
-};
-
 export type ReaderAutomationSettings = {
   enabled: boolean;
   dwellSeconds: number;
@@ -132,14 +120,6 @@ export type ArticleResearchRun = {
 export type ArticleResearchHistory = {
   articleId: string;
   runs: ArticleResearchRun[];
-};
-
-export type ResearchIngestResult = {
-  run_id: string;
-  topic: string;
-  status: ResearchRun["status"];
-  articles: unknown[];
-  errors: string[];
 };
 
 export type AgentReport = {

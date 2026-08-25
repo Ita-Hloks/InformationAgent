@@ -9,6 +9,7 @@ import {
   Loader2,
   Share2,
   Star,
+  Square,
   Trash2,
 } from "lucide-react";
 
@@ -29,9 +30,14 @@ type ReaderPaneProps = {
   deleteError?: string | null;
   onProgress?: (progress: number) => void;
   onVisibleSeconds?: (seconds: number) => void;
-  onTestResearch?: () => void;
+  onResearch?: () => void;
+  onStopResearch?: () => void;
   onRetrySummary?: () => void;
+  researchRuns?: ArticleResearchRun[];
+  selectedResearchRunId?: string | null;
+  onSelectResearchRun?: (runId: string) => void;
   researchRun?: ArticleResearchRun | null;
+  researchRunning?: boolean;
   researchLoading?: boolean;
   researchError?: string | null;
 };
@@ -49,9 +55,14 @@ export function ReaderPane({
   deleteError = null,
   onProgress,
   onVisibleSeconds,
-  onTestResearch,
+  onResearch,
+  onStopResearch,
   onRetrySummary,
+  researchRuns = [],
+  selectedResearchRunId = null,
+  onSelectResearchRun,
   researchRun = null,
+  researchRunning = false,
   researchLoading = false,
   researchError = null,
 }: ReaderPaneProps) {
@@ -266,6 +277,11 @@ export function ReaderPane({
           </div>
 
           <ArticleResearchSection
+            snapshotId={article.snapshotId}
+            researchRuns={researchRuns}
+            selectedResearchRunId={selectedResearchRunId}
+            onSelectResearchRun={onSelectResearchRun}
+            onStopResearch={onStopResearch}
             researchRun={researchRun}
             loading={researchLoading}
             error={researchError}
@@ -275,16 +291,14 @@ export function ReaderPane({
             <span className="rounded-md bg-[var(--reader-workspace-hover)] px-2.5 py-1 text-[11px] text-[#66686d]">
               {article.category}
             </span>
-            <span className="rounded-md bg-[var(--reader-workspace-hover)] px-2.5 py-1 text-[11px] text-[#66686d]">
-              RSS
-            </span>
-            {onTestResearch && (
+            {onResearch && (
               <button
                 type="button"
                 className="ml-auto rounded-md border border-[var(--reader-workspace-border)] bg-white px-2.5 py-1 text-[11px] font-medium text-[#56585d] hover:bg-[var(--reader-workspace-raised)]"
-                onClick={onTestResearch}
+                disabled={researchRunning}
+                onClick={onResearch}
               >
-                测试研究
+                {researchRunning ? "研究中" : "研究"}
               </button>
             )}
           </div>
@@ -295,15 +309,25 @@ export function ReaderPane({
 }
 
 function ArticleResearchSection({
+  snapshotId,
+  researchRuns,
+  selectedResearchRunId,
+  onSelectResearchRun,
+  onStopResearch,
   researchRun,
   loading,
   error,
 }: {
+  snapshotId: string;
+  researchRuns: ArticleResearchRun[];
+  selectedResearchRunId: string | null;
+  onSelectResearchRun?: (runId: string) => void;
+  onStopResearch?: () => void;
   researchRun: ArticleResearchRun | null;
   loading: boolean;
   error: string | null;
 }) {
-  if (loading && !researchRun) {
+  if (loading && !researchRun && researchRuns.length === 0) {
     return (
       <section className="mt-12 border-t border-[var(--reader-workspace-border)] pt-6">
         <h2 className="text-sm font-semibold text-[#34363a]">文章研究</h2>
@@ -312,7 +336,7 @@ function ArticleResearchSection({
     );
   }
 
-  if (!researchRun) {
+  if (!researchRun && researchRuns.length === 0) {
     return error ? (
       <section className="mt-12 border-t border-[var(--reader-workspace-border)] pt-6">
         <h2 className="text-sm font-semibold text-[#34363a]">文章研究</h2>
@@ -321,10 +345,13 @@ function ArticleResearchSection({
     ) : null;
   }
 
-  const report = researchRun.agent?.report ?? null;
-  const isActive = researchRun.status === "queued" || researchRun.status === "running";
+  const selectedRun =
+    researchRun ?? researchRuns.find(run => run.id === selectedResearchRunId) ?? null;
+  const report = researchRun?.agent?.report ?? null;
+  const isActive = selectedRun?.status === "queued" || selectedRun?.status === "running";
+  const isHistorical = researchRun !== null && researchRun.snapshotId !== snapshotId;
   const noSearch =
-    researchRun.status === "completed" &&
+    researchRun?.status === "completed" &&
     report !== null &&
     report.plans.length === 0 &&
     report.answers.length === 0;
@@ -333,156 +360,225 @@ function ArticleResearchSection({
     <section className="mt-12 border-t border-[var(--reader-workspace-border)] pt-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
-          <h2 className="text-sm font-semibold text-[#34363a]">文章研究</h2>
-          <span className="text-xs text-[#85878c]">{researchModeLabel(researchRun.mode)}</span>
+          <h2 className="text-sm font-semibold text-[#34363a]">
+            {isHistorical ? "历史文章研究" : "文章研究"}
+          </h2>
+          {selectedRun && (
+            <span className="text-xs text-[#85878c]">
+              {isHistorical ? "历史快照" : "当前快照"} · {researchModeLabel(selectedRun.mode)}
+            </span>
+          )}
         </div>
-        <span className="text-xs text-[#85878c]">{researchStatusLabel(researchRun.status)}</span>
-      </div>
-
-      <section className="mt-6 border-b border-[var(--reader-workspace-border)] pb-5">
-        <h3 className="text-xs font-semibold text-[#55585e]">结论与引用</h3>
-        {report?.final_answer ? (
-          <p className="mt-3 whitespace-pre-wrap text-[15px] leading-7 text-[#3f4248]">
-            {report.final_answer}
-          </p>
-        ) : isActive ? (
-          <p className="mt-3 text-sm leading-6 text-[#85878c]">研究处理中</p>
-        ) : (
-          <p className="mt-3 text-sm leading-6 text-[#85878c]">暂未生成结论</p>
-        )}
-        {noSearch && report && (
-          <p className="mt-3 text-sm leading-6 text-[#696b70]">
-            未发现需要外部搜索的关键缺口
-            <span className="ml-2 text-xs text-[#96989c]">结束原因：{report.stop_reason}</span>
-          </p>
-        )}
-        {report && report.citations.length > 0 && (
-          <div className="mt-4 space-y-3">
-            {report.citations.map((citation, index) => (
-              <div
-                key={`${citation.claim}-${index}`}
-                className="border-t border-[var(--reader-workspace-border)] pt-3 text-sm leading-6 text-[#55585e]"
+        {selectedRun && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-[#85878c]">
+              {researchStatusLabel(selectedRun.status)}
+            </span>
+            {isActive && onStopResearch && (
+              <button
+                type="button"
+                className="flex h-7 items-center gap-1.5 rounded-md border border-[#efc6ba] px-2 text-xs font-medium text-[#a64a35] hover:bg-[#fff5f1]"
+                aria-label="停止研究"
+                title="停止研究"
+                onClick={onStopResearch}
               >
-                <p>{citation.claim}</p>
-                {citation.source_urls.length > 0 && (
-                  <ul className="mt-2 space-y-1 text-xs">
-                    {citation.source_urls.map(sourceUrl => (
-                      <li key={sourceUrl} className="min-w-0">
-                        <a
-                          className="break-all text-[#3978a8] hover:underline"
-                          href={sourceUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {sourceUrl}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ))}
+                <Square size={12} fill="currentColor" />
+                停止
+              </button>
+            )}
           </div>
         )}
-      </section>
+      </div>
 
-      <section className="border-b border-[var(--reader-workspace-border)] py-5">
-        <h3 className="text-xs font-semibold text-[#55585e]">不确定性</h3>
-        {report && report.uncertainties.length > 0 ? (
-          <ul className="mt-3 space-y-2 text-sm leading-6 text-[#696b70]">
-            {report.uncertainties.map(item => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-3 text-sm leading-6 text-[#85878c]">暂无记录</p>
-        )}
-      </section>
-
-      <details
-        className="group border-b border-[var(--reader-workspace-border)] py-5"
-        open={isActive}
-      >
-        <summary className="flex cursor-pointer list-none items-center justify-between text-xs font-semibold text-[#55585e] [&::-webkit-details-marker]:hidden">
-          <span>研究轨迹</span>
-          <ChevronDown
-            size={14}
-            className="text-[#85878c] transition-transform group-open:rotate-180"
-          />
-        </summary>
-        {researchRun.agent ? (
-          <div className="mt-4 space-y-4 text-sm leading-6 text-[#696b70]">
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#85878c]">
-              <span>阶段：{researchRun.agent.phase}</span>
-              <span>
-                尝试：{researchRun.agent.attempt} / {researchRun.agent.max_attempts}
-              </span>
-            </div>
-            {researchRun.agent.stage_details.length > 0 && (
-              <div className="space-y-2">
-                {researchRun.agent.stage_details.map(stage => (
-                  <div
-                    key={stage.step_key}
-                    className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--reader-workspace-border)] pt-2 text-xs"
-                  >
-                    <span className="min-w-0 break-words font-medium text-[#55585e]">
-                      {stage.step_key}
+      {researchRuns.length > 0 && (
+        <div className="mt-5 border-b border-[var(--reader-workspace-border)] pb-5">
+          <h3 className="text-xs font-semibold text-[#55585e]">历史记录</h3>
+          <div className="mt-3 space-y-1.5">
+            {researchRuns.map(run => {
+              const selected = run.id === selectedResearchRunId;
+              const current = run.snapshotId === snapshotId;
+              return (
+                <button
+                  key={run.id}
+                  type="button"
+                  className={`flex w-full min-w-0 items-center justify-between gap-3 rounded-md border px-3 py-2 text-left transition-colors ${
+                    selected
+                      ? "border-[#d7b6a8] bg-[#fff8f4]"
+                      : "border-[var(--reader-workspace-border)] hover:bg-[var(--reader-workspace-raised)]"
+                  }`}
+                  onClick={() => onSelectResearchRun?.(run.id)}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-xs font-medium text-[#55585e]">
+                      {current ? "当前快照" : "历史快照"} · {researchModeLabel(run.mode)}
                     </span>
-                    <span className="text-[#85878c]">{stage.status}</span>
+                    <span className="mt-1 block text-[11px] text-[#85878c]">
+                      {formatArticleFullDate(run.createdAt)}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-[11px] text-[#85878c]">
+                    {researchStatusLabel(run.status)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {loading && !researchRun && <p className="mt-3 text-xs text-[#85878c]">读取研究详情中</p>}
+        </div>
+      )}
+
+      {!researchRun && error && <p className="mt-4 text-sm leading-6 text-[#8a3e24]">{error}</p>}
+
+      {!researchRun ? null : (
+        <>
+          <section className="mt-6 border-b border-[var(--reader-workspace-border)] pb-5">
+            <h3 className="text-xs font-semibold text-[#55585e]">结论与引用</h3>
+            {report?.final_answer ? (
+              <p className="mt-3 whitespace-pre-wrap text-[15px] leading-7 text-[#3f4248]">
+                {report.final_answer}
+              </p>
+            ) : isActive ? (
+              <p className="mt-3 text-sm leading-6 text-[#85878c]">研究处理中</p>
+            ) : (
+              <p className="mt-3 text-sm leading-6 text-[#85878c]">暂未生成结论</p>
+            )}
+            {noSearch && report && (
+              <p className="mt-3 text-sm leading-6 text-[#696b70]">
+                未发现需要外部搜索的关键缺口
+                <span className="ml-2 text-xs text-[#96989c]">结束原因：{report.stop_reason}</span>
+              </p>
+            )}
+            {report && report.citations.length > 0 && (
+              <div className="mt-4 space-y-3">
+                {report.citations.map((citation, index) => (
+                  <div
+                    key={`${citation.claim}-${index}`}
+                    className="border-t border-[var(--reader-workspace-border)] pt-3 text-sm leading-6 text-[#55585e]"
+                  >
+                    <p>{citation.claim}</p>
+                    {citation.source_urls.length > 0 && (
+                      <ul className="mt-2 space-y-1 text-xs">
+                        {citation.source_urls.map(sourceUrl => (
+                          <li key={sourceUrl} className="min-w-0">
+                            <a
+                              className="break-all text-[#3978a8] hover:underline"
+                              href={sourceUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {sourceUrl}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 ))}
               </div>
             )}
-            {report && report.plans.length > 0 && (
-              <div>
-                <p className="text-xs font-medium text-[#85878c]">研究问题与查询</p>
-                <div className="mt-2 space-y-3">
-                  {report.plans.map(plan => (
-                    <div key={`${plan.evidence_id}-${plan.question}`}>
-                      <p>{plan.question}</p>
-                      <p className="mt-1 break-words text-xs text-[#85878c]">
-                        原文锚点：{plan.trigger_quote}
-                      </p>
-                      <ul className="mt-1 space-y-1 text-xs text-[#85878c]">
-                        {plan.queries.map(query => (
-                          <li key={query.query}>{query.query}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {report && report.answers.length > 0 && (
-              <div>
-                <p className="text-xs font-medium text-[#85878c]">搜索回答</p>
-                <div className="mt-2 space-y-3">
-                  {report.answers.map(answer => (
-                    <div key={`${answer.evidence_id}-${answer.question}`}>
-                      <p>{answer.answer}</p>
-                      <p className="mt-1 break-words text-xs text-[#85878c]">{answer.question}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {researchRun.agent.message && (
-              <p className="text-xs text-[#85878c]">{researchRun.agent.message}</p>
-            )}
-          </div>
-        ) : (
-          <p className="mt-4 text-sm text-[#85878c]">等待 Agent 启动</p>
-        )}
-      </details>
+          </section>
 
-      <div className="pt-5">
-        <h3 className="text-xs font-semibold text-[#55585e]">本次有效参数</h3>
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#85878c]">
-          <span>超时 {researchRun.timeoutSeconds} 秒</span>
-          <span>搜索最多 {researchRun.maxSearches} 次</span>
-          <span>重试最多 {researchRun.maxAttempts} 次</span>
-        </div>
-      </div>
+          <section className="border-b border-[var(--reader-workspace-border)] py-5">
+            <h3 className="text-xs font-semibold text-[#55585e]">不确定性</h3>
+            {report && report.uncertainties.length > 0 ? (
+              <ul className="mt-3 space-y-2 text-sm leading-6 text-[#696b70]">
+                {report.uncertainties.map(item => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-3 text-sm leading-6 text-[#85878c]">暂无记录</p>
+            )}
+          </section>
+
+          <details
+            className="group border-b border-[var(--reader-workspace-border)] py-5"
+            open={isActive}
+          >
+            <summary className="flex cursor-pointer list-none items-center justify-between text-xs font-semibold text-[#55585e] [&::-webkit-details-marker]:hidden">
+              <span>研究轨迹</span>
+              <ChevronDown
+                size={14}
+                className="text-[#85878c] transition-transform group-open:rotate-180"
+              />
+            </summary>
+            {researchRun.agent ? (
+              <div className="mt-4 space-y-4 text-sm leading-6 text-[#696b70]">
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#85878c]">
+                  <span>阶段：{researchRun.agent.phase}</span>
+                  <span>
+                    尝试：{researchRun.agent.attempt} / {researchRun.agent.max_attempts}
+                  </span>
+                </div>
+                {researchRun.agent.stage_details.length > 0 && (
+                  <div className="space-y-2">
+                    {researchRun.agent.stage_details.map(stage => (
+                      <div
+                        key={stage.step_key}
+                        className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--reader-workspace-border)] pt-2 text-xs"
+                      >
+                        <span className="min-w-0 break-words font-medium text-[#55585e]">
+                          {stage.step_key}
+                        </span>
+                        <span className="text-[#85878c]">{stage.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {report && report.plans.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-[#85878c]">研究问题与查询</p>
+                    <div className="mt-2 space-y-3">
+                      {report.plans.map(plan => (
+                        <div key={`${plan.evidence_id}-${plan.question}`}>
+                          <p>{plan.question}</p>
+                          <p className="mt-1 break-words text-xs text-[#85878c]">
+                            原文锚点：{plan.trigger_quote}
+                          </p>
+                          <ul className="mt-1 space-y-1 text-xs text-[#85878c]">
+                            {plan.queries.map(query => (
+                              <li key={query.query}>{query.query}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {report && report.answers.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-[#85878c]">搜索回答</p>
+                    <div className="mt-2 space-y-3">
+                      {report.answers.map(answer => (
+                        <div key={`${answer.evidence_id}-${answer.question}`}>
+                          <p>{answer.answer}</p>
+                          <p className="mt-1 break-words text-xs text-[#85878c]">
+                            {answer.question}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {researchRun.agent.message && (
+                  <p className="text-xs text-[#85878c]">{researchRun.agent.message}</p>
+                )}
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-[#85878c]">等待 Agent 启动</p>
+            )}
+          </details>
+
+          <div className="pt-5">
+            <h3 className="text-xs font-semibold text-[#55585e]">本次有效参数</h3>
+            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#85878c]">
+              <span>超时 {researchRun.timeoutSeconds} 秒</span>
+              <span>搜索最多 {researchRun.maxSearches} 次</span>
+              <span>重试最多 {researchRun.maxAttempts} 次</span>
+            </div>
+          </div>
+        </>
+      )}
     </section>
   );
 }

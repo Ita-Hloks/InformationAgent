@@ -1,5 +1,4 @@
-import type { Article, Feed, ResearchRun } from "../types";
+import type { Article, Feed } from "../types";
 
 export const initialFeeds: Feed[] = [];
 export const initialArticles: Article[] = [];
-export const researchRuns: ResearchRun[] = [];

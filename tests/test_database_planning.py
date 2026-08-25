@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest
 
-from information_agent.cli import main
 from information_agent.collection import RawFeedEntry
-from information_agent.contracts import RunStatus
+from information_agent.contracts import CollectionReport, RunStatus
 from information_agent.investigation import (
-    PlanningReport,
     PlanningResponseError,
     PlanningResult,
     QuestionKind,
@@ -20,9 +17,8 @@ from information_agent.investigation import (
 )
 from information_agent.orchestration import database_planning
 from information_agent.orchestration.database_planning import plan_run
-from information_agent.orchestration.ingestion import ingest
 from information_agent.selection import SelectedEvidence
-from information_agent.storage import PersistedPlanning, SQLiteCollectionStore
+from information_agent.storage import SQLiteCollectionStore
 
 
 class RecordingPlanner:
@@ -108,18 +104,32 @@ def _collector(_: str, __: float) -> list[RawFeedEntry]:
     ]
 
 
+def _completed_run(database_path: Path) -> str:
+    from information_agent.normalization import normalize_evidence
+
+    store = SQLiteCollectionStore(database_path)
+    article = normalize_evidence(_collector("", 0), min_content_chars=1)[0]
+    run_id = store.start_run("AI 芯片", ["feed"])
+    store.complete_run(
+        run_id,
+        CollectionReport(
+            "AI 芯片",
+            RunStatus.COMPLETED,
+            [SelectedEvidence(article, evidence_id=1)],
+            [],
+        ),
+        [article],
+    )
+    return run_id
+
+
 def test_plan_run_loads_database_evidence_and_saves_plans(tmp_path: Path) -> None:
     database_path = tmp_path / "information-agent.db"
-    collection = ingest(
-        "AI 芯片",
-        ["feed"],
-        database_path=database_path,
-        collector=_collector,
-    )
+    run_id = _completed_run(database_path)
     planner = RecordingPlanner()
 
     result = plan_run(
-        collection.run_id,
+        run_id,
         database_path=database_path,
         timeout_seconds=12.5,
         planner=planner,
@@ -145,7 +155,7 @@ def test_plan_run_loads_database_evidence_and_saves_plans(tmp_path: Path) -> Non
         ).fetchone()
 
     assert planning is not None
-    assert planning[0] == collection.run_id
+    assert planning[0] == run_id
     assert planning[1] == "completed"
     assert json.loads(planning[2])["plans"][0]["evidence_id"] == 1
     assert stored_plan == (1, "推理成本降幅采用了什么比较基线？", "quantitative_claim")
@@ -154,15 +164,10 @@ def test_plan_run_loads_database_evidence_and_saves_plans(tmp_path: Path) -> Non
 
 def test_plan_run_saves_planner_failure_without_losing_evidence(tmp_path: Path) -> None:
     database_path = tmp_path / "information-agent.db"
-    collection = ingest(
-        "AI 芯片",
-        ["feed"],
-        database_path=database_path,
-        collector=_collector,
-    )
+    run_id = _completed_run(database_path)
 
     result = plan_run(
-        collection.run_id,
+        run_id,
         database_path=database_path,
         planner=FailingPlanner(),
     )
@@ -182,15 +187,10 @@ def test_plan_run_saves_planner_failure_without_losing_evidence(tmp_path: Path) 
 
 def test_plan_run_preserves_invalid_llm_response(tmp_path: Path) -> None:
     database_path = tmp_path / "information-agent.db"
-    collection = ingest(
-        "AI 芯片",
-        ["feed"],
-        database_path=database_path,
-        collector=_collector,
-    )
+    run_id = _completed_run(database_path)
 
     result = plan_run(
-        collection.run_id,
+        run_id,
         database_path=database_path,
         planner=InvalidResponsePlanner(),
     )
@@ -263,39 +263,3 @@ def test_plan_run_rejects_invalid_timeout_before_storage_or_planner(
     assert default_planner_calls == []
     assert supplied_planner.calls == 0
     assert not database_path.exists()
-
-
-def test_plan_run_cli_accepts_ingestion_run_id(monkeypatch, capsys) -> None:
-    result = PersistedPlanning(
-        run_id="run-123",
-        planning_run_id="planning-123",
-        report=PlanningReport("AI", RunStatus.COMPLETED, [], []),
-    )
-
-    def fake_plan_run(run_id: str, *, timeout_seconds: float) -> PersistedPlanning:
-        assert run_id == "run-123"
-        assert timeout_seconds == 12
-        return result
-
-    monkeypatch.setattr(
-        "information_agent.orchestration.database_planning.plan_run",
-        fake_plan_run,
-    )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["information-agent", "plan-run", "run-123", "--timeout", "12"],
-    )
-
-    main()
-
-    payload = json.loads(capsys.readouterr().out)
-    assert payload == {
-        "run_id": "run-123",
-        "planning_run_id": "planning-123",
-        "topic": "AI",
-        "status": "completed",
-        "articles": [],
-        "plans": [],
-        "errors": [],
-    }

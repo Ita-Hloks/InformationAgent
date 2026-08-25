@@ -24,6 +24,7 @@ _RESEARCH_STATUSES = {
     "failed",
     "cancelled",
 }
+_ACTIVE_RESEARCH_STATUSES = ("queued", "running")
 
 
 class ReaderAutomationPersistenceMixin:
@@ -226,6 +227,7 @@ class ReaderAutomationPersistenceMixin:
         agent_request_id = request_id.strip() if request_id else uuid4().hex
         config_json = json.dumps(config, ensure_ascii=False, sort_keys=True)
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             existing_request = connection.execute(
                 "SELECT * FROM article_research_runs WHERE agent_request_id = ?",
                 (agent_request_id,),
@@ -239,6 +241,22 @@ class ReaderAutomationPersistenceMixin:
                 ):
                     raise ValueError("研究请求标识已经对应其他任务")
                 return _research_run_from_row(existing_request)
+            active = connection.execute(
+                """
+                SELECT * FROM article_research_runs
+                WHERE article_id = ? AND snapshot_id = ?
+                  AND status IN (?, ?)
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (
+                    article.article.article_id,
+                    article.snapshot_id,
+                    *_ACTIVE_RESEARCH_STATUSES,
+                ),
+            ).fetchone()
+            if active is not None:
+                return _research_run_from_row(active)
             if normalized_mode == "auto":
                 existing = connection.execute(
                     """
@@ -311,19 +329,23 @@ class ReaderAutomationPersistenceMixin:
         conditions: list[str] = []
         parameters: list[object] = []
         if article_id is not None:
-            conditions.append("article_id = ?")
+            conditions.append("research.article_id = ?")
             parameters.append(article_id)
         if mode is not None:
-            conditions.append("mode = ?")
+            conditions.append("research.mode = ?")
             parameters.append(mode)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         parameters.append(limit)
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
-                SELECT * FROM article_research_runs
+                SELECT research.*
+                FROM article_research_runs AS research
+                JOIN article_snapshots AS snapshots
+                    ON snapshots.id = research.snapshot_id
+                   AND snapshots.article_id = research.article_id
                 {where}
-                ORDER BY created_at DESC, rowid DESC
+                ORDER BY research.created_at DESC, research.rowid DESC
                 LIMIT ?
                 """,
                 parameters,
@@ -336,6 +358,17 @@ class ReaderAutomationPersistenceMixin:
                 "SELECT * FROM article_research_runs WHERE id = ?", (run_id,)
             ).fetchone()
         return _research_run_from_row(row) if row is not None else None
+
+    def article_snapshot_belongs_to_article(self, article_id: str, snapshot_id: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM article_snapshots
+                WHERE id = ? AND article_id = ?
+                """,
+                (snapshot_id, article_id),
+            ).fetchone()
+        return row is not None
 
     def recover_running_article_research_runs(self) -> int:
         now = _format_datetime(project_now())
@@ -365,6 +398,7 @@ class ReaderAutomationPersistenceMixin:
         status: str,
         analysis_run_id: str | None = None,
         error: Exception | dict[str, Any] | None = None,
+        expected_status: str | None = None,
     ) -> ArticleResearchRun:
         if status not in _RESEARCH_STATUSES:
             raise ValueError("不支持的文章研究状态")
@@ -387,12 +421,12 @@ class ReaderAutomationPersistenceMixin:
                 """
                 UPDATE article_research_runs
                 SET status = ?, started_at = CASE
-                        WHEN ? = 'running' THEN COALESCE(started_at, ?) ELSE started_at END,
+                    WHEN ? = 'running' THEN COALESCE(started_at, ?) ELSE started_at END,
                     finished_at = CASE
                         WHEN ? IN ('completed', 'partial', 'failed', 'cancelled') THEN ?
                         ELSE NULL END,
                     analysis_run_id = COALESCE(?, analysis_run_id), error_json = ?
-                WHERE id = ?
+                WHERE id = ? AND (? IS NULL OR status = ?)
                 """,
                 (
                     status,
@@ -403,6 +437,8 @@ class ReaderAutomationPersistenceMixin:
                     analysis_run_id,
                     error_json,
                     run_id,
+                    expected_status,
+                    expected_status,
                 ),
             )
             row = connection.execute(

@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from ..collection import RawFeedEntry
-from ..contracts import CollectionReport
 
 if TYPE_CHECKING:
     from ..investigation import PlanningReport
@@ -23,14 +21,6 @@ class ResearchRunNotFoundError(ValueError):
 
 class ResearchRunNotReadyError(ValueError):
     """研究运行尚未产生可供下游分析的结果。"""
-
-
-@dataclass(frozen=True, slots=True)
-class PersistedCollection:
-    """已提交到数据库的一次粗处理结果。"""
-
-    run_id: str
-    report: CollectionReport
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,19 +266,3 @@ class OpinionRunRecord:
     unclassified_count: int = 0
     status_reason: str = "failed"
     attempts: tuple[dict[str, Any], ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class ResearchRunSummary:
-    """Safe, aggregate-only view of a persisted research run."""
-
-    run_id: str
-    topic: str
-    status: str
-    started_at: datetime
-    finished_at: datetime | None
-    feed_count: int
-    snapshot_count: int
-    selected_evidence_count: int
-    collection_error_count: int
-    mode: str = "manual"

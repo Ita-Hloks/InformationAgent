@@ -235,48 +235,6 @@ class OpinionResponse(BaseModel):
     attempts: list[dict[str, object]]
 
 
-class ResearchIngestRequest(BaseModel):
-    topic: str = Field(min_length=1, max_length=200)
-    feeds: list[str] = Field(min_length=1, max_length=20)
-    timeout_seconds: float = Field(default=300, gt=0, le=600)
-    limit: int = Field(default=20, ge=1, le=100)
-
-
-class AgentRunRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    timeout_seconds: float = Field(default=180, gt=0, le=600)
-    max_steps: int = Field(default=3, ge=1, le=10)
-    max_attempts: int = Field(default=3, ge=1, le=3)
-    request_id: str | None = Field(default=None, max_length=200)
-
-    @field_validator("request_id")
-    @classmethod
-    def normalize_request_id(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("request_id 不能为空")
-        return normalized
-
-
-class AgentStopRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    request_id: str | None = Field(default=None, max_length=200)
-
-    @field_validator("request_id")
-    @classmethod
-    def normalize_request_id(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("request_id 不能为空")
-        return normalized
-
-
 class AgentAttemptDetailResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -328,7 +286,7 @@ class AgentTaskSnapshotResponse(BaseModel):
     report: dict[str, Any] | None
 
 
-class ArticleResearchResponse(BaseModel):
+class ArticleResearchMetadataResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_id: str
@@ -346,31 +304,15 @@ class ArticleResearchResponse(BaseModel):
     max_searches: int
     max_attempts: int
     error: dict[str, Any] | None
+
+
+class ArticleResearchResponse(ArticleResearchMetadataResponse):
     agent: AgentTaskSnapshotResponse | None
 
 
 class ArticleResearchHistoryResponse(BaseModel):
     article_id: str
-    runs: list[ArticleResearchResponse]
-
-
-class ResearchRunResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    run_id: str
-    topic: str
-    status: Literal["collecting", "completed", "partial", "failed"]
-    mode: Literal["auto", "manual"]
-    started_at: str
-    finished_at: str | None = None
-    feed_count: int
-    snapshot_count: int
-    selected_evidence_count: int
-    collection_error_count: int
-
-
-class ResearchRunsResponse(BaseModel):
-    runs: list[ResearchRunResponse]
+    runs: list[ArticleResearchMetadataResponse]
 
 
 def feed_response(subscription: FeedSubscription) -> FeedResponse:
@@ -439,12 +381,10 @@ def reader_automation_settings_response(
     )
 
 
-def article_research_response(
+def article_research_metadata_response(
     run: ArticleResearchRun,
-    *,
-    agent: dict[str, Any] | None = None,
-) -> ArticleResearchResponse:
-    return ArticleResearchResponse(
+) -> ArticleResearchMetadataResponse:
+    return ArticleResearchMetadataResponse(
         run_id=run.id,
         article_id=run.article_id,
         snapshot_id=run.snapshot_id,
@@ -460,6 +400,16 @@ def article_research_response(
         max_searches=int(run.config["max_steps"]),
         max_attempts=int(run.config["max_attempts"]),
         error=run.error,
+    )
+
+
+def article_research_response(
+    run: ArticleResearchRun,
+    *,
+    agent: dict[str, Any] | None = None,
+) -> ArticleResearchResponse:
+    return ArticleResearchResponse(
+        **article_research_metadata_response(run).model_dump(),
         agent=AgentTaskSnapshotResponse(**agent) if agent is not None else None,
     )
 

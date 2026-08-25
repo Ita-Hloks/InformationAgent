@@ -8,10 +8,8 @@ import type {
   AgentTaskSnapshot,
   LLMSettings,
   LogSettings,
-  ResearchIngestResult,
   ReaderAutomationSettings,
   ResearchMode,
-  ResearchRun,
   ResearchStatus,
   SearchLLMSettings,
   SummaryStatus,
@@ -91,19 +89,6 @@ type LogSettingsPayload = {
   retention_days: number;
   max_bytes: number;
 };
-type AgentTaskSnapshotPayload = AgentTaskSnapshot;
-type ResearchRunPayload = {
-  run_id: string;
-  topic: string;
-  mode: ResearchMode;
-  status: ResearchRun["status"];
-  started_at: string;
-  finished_at?: string;
-  feed_count: number;
-  snapshot_count: number;
-  selected_evidence_count: number;
-  collection_error_count: number;
-};
 type ReaderAutomationSettingsPayload = {
   enabled: boolean;
   dwell_seconds: number;
@@ -130,7 +115,7 @@ type ArticleResearchRunPayload = {
   max_searches: number;
   max_attempts: number;
   error: ArticleResearchRun["error"];
-  agent: AgentTaskSnapshot | null;
+  agent?: AgentTaskSnapshot | null;
 };
 type ArticleResearchHistoryPayload = {
   article_id: string;
@@ -273,7 +258,7 @@ function toArticleResearchRun(payload: ArticleResearchRunPayload): ArticleResear
     maxSearches: payload.max_searches,
     maxAttempts: payload.max_attempts,
     error: payload.error,
-    agent: payload.agent,
+    agent: payload.agent ?? null,
   };
 }
 
@@ -338,6 +323,29 @@ export async function runArticleResearch(
       method: "POST",
       body: JSON.stringify({ mode: input.mode, request_id: input.requestId }),
     },
+  );
+  return toArticleResearchRun(payload);
+}
+
+export async function getArticleResearchRun(
+  articleId: string,
+  runId: string,
+  signal?: AbortSignal,
+): Promise<ArticleResearchRun> {
+  const payload = await request<ArticleResearchRunPayload>(
+    `/api/articles/${encodeURIComponent(articleId)}/research/${encodeURIComponent(runId)}`,
+    { signal },
+  );
+  return toArticleResearchRun(payload);
+}
+
+export async function stopArticleResearch(
+  articleId: string,
+  runId: string,
+): Promise<ArticleResearchRun> {
+  const payload = await request<ArticleResearchRunPayload>(
+    `/api/articles/${encodeURIComponent(articleId)}/research/${encodeURIComponent(runId)}/stop`,
+    { method: "POST" },
   );
   return toArticleResearchRun(payload);
 }
@@ -470,13 +478,6 @@ export function createArticleQuestionRequestId(): string {
   return `article-question-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-export function createResearchAgentRequestId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `research-agent-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
 export async function getArticleAnswerHistory(
   articleId: string,
   signal?: AbortSignal,
@@ -540,84 +541,4 @@ function waitForArticleAnswerPoll(signal?: AbortSignal): Promise<void> {
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
-}
-
-function toResearchRun(run: ResearchRunPayload): ResearchRun {
-  return {
-    id: run.run_id,
-    title: run.topic,
-    mode: run.mode,
-    status: run.status,
-    articleCount: run.selected_evidence_count,
-    feedCount: run.feed_count,
-    errorCount: run.collection_error_count,
-    startedAt: run.started_at,
-    finishedAt: run.finished_at,
-  };
-}
-
-export async function getResearchRuns(): Promise<ResearchRun[]> {
-  const payload = await request<{ runs: ResearchRunPayload[] }>("/api/research/runs");
-  return payload.runs.map(toResearchRun);
-}
-
-export async function getResearchAgentStatus(
-  runId: string,
-  requestId?: string | null,
-  signal?: AbortSignal,
-): Promise<AgentTaskSnapshot> {
-  const query = requestId ? `?request_id=${encodeURIComponent(requestId)}` : "";
-  return request<AgentTaskSnapshotPayload>(
-    `/api/research/runs/${encodeURIComponent(runId)}/agent/status${query}`,
-    { signal },
-  );
-}
-
-export async function createResearchRun(input: {
-  topic: string;
-  feeds: string[];
-  timeoutSeconds: number;
-  limit: number;
-}): Promise<ResearchIngestResult> {
-  return request<ResearchIngestResult>("/api/research/ingest", {
-    method: "POST",
-    body: JSON.stringify({
-      topic: input.topic,
-      feeds: input.feeds,
-      timeout_seconds: input.timeoutSeconds,
-      limit: input.limit,
-    }),
-  });
-}
-
-export async function runResearchAgent(
-  runId: string,
-  input: { timeoutSeconds: number; maxSteps: number; maxAttempts: number },
-  requestId?: string,
-): Promise<AgentTaskSnapshot> {
-  return request<AgentTaskSnapshotPayload>(
-    `/api/research/runs/${encodeURIComponent(runId)}/agent`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        timeout_seconds: input.timeoutSeconds,
-        max_steps: input.maxSteps,
-        max_attempts: input.maxAttempts,
-        request_id: requestId,
-      }),
-    },
-  );
-}
-
-export async function stopResearchAgent(
-  runId: string,
-  requestId?: string | null,
-): Promise<AgentTaskSnapshot> {
-  return request<AgentTaskSnapshotPayload>(
-    `/api/research/runs/${encodeURIComponent(runId)}/agent/stop`,
-    {
-      method: "POST",
-      body: JSON.stringify({ request_id: requestId }),
-    },
-  );
 }

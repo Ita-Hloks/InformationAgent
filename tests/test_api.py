@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import importlib
-import time
-from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from math import inf, nan
@@ -13,22 +10,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from information_agent import settings as settings_module
-from information_agent.agent import AgentReport, AgentStopReason
 from information_agent.api import create_app
-from information_agent.api.models import AgentRunRequest
 from information_agent.collection import FeedFetchResult, RawFeedEntry
 from information_agent.common import CONTENT_BATCH_CHARS
-from information_agent.contracts import PROJECT_TIMEZONE, CollectionReport, ContentType, RunStatus
+from information_agent.contracts import PROJECT_TIMEZONE, ContentType
 from information_agent.reader import (
     ArticleAssistant,
     ArticleNotFoundError,
     ReaderService,
-)
-from information_agent.serialization import agent_report_to_payload
-from information_agent.storage import (
-    AnalysisRunStatus,
-    PersistedCollection,
-    SQLiteCollectionStore,
 )
 
 
@@ -75,12 +64,6 @@ def test_settings_api_returns_only_redacted_main_llm_status(
     }
     assert "main-secret" not in response.text
     assert "search-secret" not in response.text
-
-
-def test_agent_run_request_limits_attempts_to_three() -> None:
-    assert AgentRunRequest(max_attempts=3).max_attempts == 3
-    with pytest.raises(ValueError):
-        AgentRunRequest(max_attempts=4)
 
 
 def test_settings_api_reports_unavailable_without_exposing_key_value(
@@ -495,246 +478,11 @@ def test_opinion_api_uses_contract_error_objects(tmp_path: Path) -> None:
     assert invalid_body.json()["detail"]["code"] == "invalid_request"
 
 
-def test_research_runs_api_lists_persisted_runs(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "api.db"
-    run_id = SQLiteCollectionStore(database_path).start_run("AI", ["https://example.com/rss.xml"])
-
-    response = _client(tmp_path).get("/api/research/runs")
-
-    assert response.status_code == 200
-    assert response.json()["runs"][0]["run_id"] == run_id
-    assert response.json()["runs"][0]["topic"] == "AI"
-
-
-def test_research_ingest_api_returns_persisted_collection(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[dict[str, object]] = []
-
-    def fake_ingest(topic: str, feeds: list[str], **kwargs: object) -> PersistedCollection:
-        calls.append({"topic": topic, "feeds": feeds, **kwargs})
-        return PersistedCollection(
-            run_id="run-api",
-            report=CollectionReport(topic, RunStatus.COMPLETED, []),
-        )
-
-    api_app_module = importlib.import_module("information_agent.api.app")
-    monkeypatch.setattr(api_app_module, "ingest", fake_ingest)
-
+def test_legacy_topic_research_routes_are_removed(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    response = client.post(
-        "/api/research/ingest",
-        json={
-            "topic": "AI",
-            "feeds": ["https://example.com/rss.xml"],
-            "timeout_seconds": 12,
-            "limit": 3,
-        },
-    )
 
-    assert response.status_code == 200
-    assert response.json()["run_id"] == "run-api"
-    assert response.json()["status"] == "completed"
-    assert calls == [
-        {
-            "topic": "AI",
-            "feeds": ["https://example.com/rss.xml"],
-            "database_path": tmp_path / "api.db",
-            "timeout_seconds": 12.0,
-            "limit": 3,
-        }
-    ]
-
-
-def test_research_agent_api_returns_agent_report(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[dict[str, object]] = []
-
-    def fake_agent_run(
-        run_id: str,
-        *,
-        database_path: Path,
-        timeout_seconds: float,
-        max_steps: int,
-        max_attempts: int,
-        idempotency_key: str,
-        should_stop: Callable[[], bool],
-        on_progress: Callable[[dict[str, object]], None],
-    ) -> AgentReport:
-        calls.append(
-            {
-                "run_id": run_id,
-                "database_path": database_path,
-                "timeout_seconds": timeout_seconds,
-                "max_steps": max_steps,
-                "max_attempts": max_attempts,
-                "idempotency_key": idempotency_key,
-                "should_stop": should_stop,
-                "on_progress": on_progress,
-            }
-        )
-        report = AgentReport(
-            run_id=run_id,
-            topic="AI",
-            status=RunStatus.COMPLETED,
-            articles=[],
-            plans=[],
-            answers=[],
-            final_answer="已完成核查。",
-            evidence_ids=(),
-            uncertainties=(),
-            steps=1,
-            stop_reason=AgentStopReason.FINISHED,
-            analysis_run_id="analysis-api",
-        )
-        store = SQLiteCollectionStore(database_path)
-        analysis_run = store.load_latest_analysis_run(run_id)
-        assert analysis_run is not None
-        payload = agent_report_to_payload(report)
-        store.record_analysis_artifact(
-            analysis_run.id,
-            "agent_report",
-            payload,
-            artifact_key="finalize:attempt-1:result",
-        )
-        store.set_analysis_run_status(analysis_run.id, AnalysisRunStatus.COMPLETED)
-        return replace(report, analysis_run_id=analysis_run.id)
-
-    api_app_module = importlib.import_module("information_agent.api.app")
-    monkeypatch.setattr(api_app_module, "agent_run", fake_agent_run)
-    monkeypatch.setenv("LLM_API_KEY", "test-main")
-    monkeypatch.setenv("SEARCH_LLM_API_KEY", "test-search")
-    monkeypatch.setenv("SEARCH_LLM_MODEL", "search-model")
-    monkeypatch.setenv("SEARCH_LLM_BASE_URL", "https://search.example/v1")
-    store = SQLiteCollectionStore(tmp_path / "api.db")
-    run_id = store.start_run("AI", ["https://example.com/rss.xml"])
-    store.complete_run(run_id, CollectionReport("AI", RunStatus.COMPLETED, []), [])
-
-    client = _client(tmp_path)
-    response = client.post(
-        f"/api/research/runs/{run_id}/agent",
-        json={"timeout_seconds": 30, "max_steps": 2, "max_attempts": 1, "request_id": "api-agent"},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["request_id"] == "api-agent"
-    for _ in range(20):
-        status = client.get(f"/api/research/runs/{run_id}/agent/status?request_id=api-agent")
-        if status.json()["status"] == "completed":
-            break
-        time.sleep(0.01)
-    assert status.json()["status"] == "completed"
-    assert status.json()["report"]["final_answer"] == "已完成核查。"
-    assert len(calls) == 1
-    assert calls[0]["run_id"] == run_id
-    assert calls[0]["database_path"] == tmp_path / "api.db"
-    assert calls[0]["timeout_seconds"] == 30.0
-    assert calls[0]["max_steps"] == 2
-    assert calls[0]["max_attempts"] == 1
-    assert calls[0]["idempotency_key"] == "api-agent"
-    assert callable(calls[0]["should_stop"])
-    assert callable(calls[0]["on_progress"])
-
-
-def test_research_agent_api_restores_latest_persisted_report(tmp_path: Path) -> None:
-    database_path = tmp_path / "api.db"
-    store = SQLiteCollectionStore(database_path)
-    run_id = store.start_run("AI", ["https://example.com/rss.xml"])
-    store.complete_run(run_id, CollectionReport("AI", RunStatus.COMPLETED, []), [])
-    analysis_run = store.create_analysis_run(run_id, "agent_research", {})
-    store.record_analysis_artifact(
-        analysis_run.id,
-        "agent_report",
-        {
-            "run_id": run_id,
-            "topic": "AI",
-            "status": "completed",
-            "articles": [],
-            "plans": [],
-            "answers": [],
-            "final_answer": "已保存的结论",
-            "evidence_ids": [],
-            "citations": [],
-            "uncertainties": [],
-            "steps": 1,
-            "stop_reason": "finished",
-            "errors": [],
-        },
-        artifact_key="finalize:attempt-1:result",
-    )
-    store.set_analysis_run_status(analysis_run.id, AnalysisRunStatus.COMPLETED)
-
-    response = _client(tmp_path).get(f"/api/research/runs/{run_id}/agent/status")
-
-    assert response.status_code == 200
-    assert response.json()["analysis_run_id"] == analysis_run.id
-    assert response.json()["report"]["final_answer"] == "已保存的结论"
-
-
-def test_research_agent_api_returns_null_without_persisted_report(tmp_path: Path) -> None:
-    store = SQLiteCollectionStore(tmp_path / "api.db")
-    run_id = store.start_run("AI", ["https://example.com/rss.xml"])
-
-    response = _client(tmp_path).get(f"/api/research/runs/{run_id}/agent/status")
-
-    assert response.status_code == 404
-
-
-def test_research_agent_api_distinguishes_missing_and_unready_runs(tmp_path: Path) -> None:
-    client = _client(tmp_path)
-    missing = client.post("/api/research/runs/missing/agent", json={})
-    run_id = SQLiteCollectionStore(tmp_path / "api.db").start_run(
-        "AI", ["https://example.com/rss.xml"]
-    )
-    unready = client.post(f"/api/research/runs/{run_id}/agent", json={})
-
-    assert missing.status_code == 404
-    assert unready.status_code == 409
-
-
-def test_research_agent_api_rejects_domain_value_errors(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def invalid_agent_run(
-        _: str,
-        *,
-        database_path: Path,
-        timeout_seconds: float,
-        max_steps: int,
-        max_attempts: int,
-        idempotency_key: str,
-        should_stop: Callable[[], bool],
-        on_progress: Callable[[dict[str, object]], None],
-    ) -> AgentReport:
-        raise ValueError("Agent 参数组合无效")
-
-    api_app_module = importlib.import_module("information_agent.api.app")
-    monkeypatch.setattr(api_app_module, "agent_run", invalid_agent_run)
-    monkeypatch.setenv("LLM_API_KEY", "test-main")
-    monkeypatch.setenv("SEARCH_LLM_API_KEY", "test-search")
-    monkeypatch.setenv("SEARCH_LLM_MODEL", "search-model")
-    monkeypatch.setenv("SEARCH_LLM_BASE_URL", "https://search.example/v1")
-    store = SQLiteCollectionStore(tmp_path / "api.db")
-    run_id = store.start_run("AI", ["https://example.com/rss.xml"])
-    store.complete_run(run_id, CollectionReport("AI", RunStatus.COMPLETED, []), [])
-
-    client = _client(tmp_path)
-    response = client.post(
-        f"/api/research/runs/{run_id}/agent",
-        json={"request_id": "invalid-agent"},
-    )
-
-    assert response.status_code == 200
-    for _ in range(20):
-        status = client.get(f"/api/research/runs/{run_id}/agent/status?request_id=invalid-agent")
-        if status.json()["status"] == "failed":
-            break
-        time.sleep(0.01)
-    assert status.json()["status"] == "failed"
-    assert status.json()["error"]["message"] == "Agent 参数组合无效"
+    assert client.get("/api/research/runs").status_code == 404
+    assert client.post("/api/research/ingest", json={}).status_code == 404
+    assert client.post("/api/research/runs/run-id/agent", json={}).status_code == 404
+    assert client.get("/api/research/runs/run-id/agent/status").status_code == 404
+    assert client.post("/api/research/runs/run-id/agent/stop", json={}).status_code == 404

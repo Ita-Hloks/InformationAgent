@@ -3,7 +3,6 @@ import {
   Bookmark,
   ChevronDown,
   CircleUserRound,
-  FlaskConical,
   Inbox,
   Library,
   PanelLeftClose,
@@ -16,12 +15,11 @@ import {
   X,
 } from "lucide-react";
 
-import type { Feed, LibraryView, ResearchRun } from "../../types";
+import type { Feed, LibraryView } from "../../types";
 
 type AppSidebarProps = {
   activeView: LibraryView;
   feeds: Feed[];
-  researchRuns: ResearchRun[];
   selectedFeedId: string | null;
   unreadTotal: number;
   apiStatus: "connecting" | "connected" | "unavailable";
@@ -32,7 +30,6 @@ type AppSidebarProps = {
   onExpand: () => void;
   onSelectView: (view: LibraryView) => void;
   onSelectFeed: (feedId: string) => void;
-  onSelectResearchRun: (runId: string) => void;
   onAddFeed: () => void;
   onUnsubscribe: (feedId: string) => void;
   settingsActive: boolean;
@@ -49,7 +46,6 @@ const mainNavigation = [
 export function AppSidebar({
   activeView,
   feeds,
-  researchRuns,
   selectedFeedId,
   unreadTotal,
   apiStatus,
@@ -60,7 +56,6 @@ export function AppSidebar({
   onExpand,
   onSelectView,
   onSelectFeed,
-  onSelectResearchRun,
   onAddFeed,
   onUnsubscribe,
   settingsActive,
@@ -75,11 +70,6 @@ export function AppSidebar({
 
   const selectFeed = (feedId: string) => {
     onSelectFeed(feedId);
-    onClose();
-  };
-
-  const selectResearchRun = (runId: string) => {
-    onSelectResearchRun(runId);
     onClose();
   };
 
@@ -162,50 +152,6 @@ export function AppSidebar({
             );
           })}
         </nav>
-
-        <div className="mt-6">
-          <div className="sidebar-section-tools mb-1.5 flex items-center justify-between px-2.5">
-            <span className="sidebar-label text-[11px] font-medium text-[#72767e]">研究运行</span>
-          </div>
-          <button
-            type="button"
-            className={`sidebar-compact-item flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm ${
-              !settingsActive && activeView === "research"
-                ? "bg-white/9 text-white"
-                : "text-[#aeb1b7] hover:bg-white/6 hover:text-white"
-            }`}
-            aria-label={collapsed ? "研究记录" : undefined}
-            title={collapsed ? "研究记录" : undefined}
-            onClick={() => selectView("research")}
-          >
-            <FlaskConical size={16} strokeWidth={1.8} />
-            <span className="sidebar-label flex-1 text-left">研究记录</span>
-            <span className="sidebar-meta text-xs text-[#777c84]">{researchRuns.length}</span>
-          </button>
-          {researchRuns.map(run => (
-            <button
-              key={run.id}
-              type="button"
-              className="sidebar-secondary-item group flex h-8 w-full items-center gap-2 rounded-md py-1 pr-2 pl-8 text-left text-xs text-[#858a92] hover:bg-white/6 hover:text-[#d7d8da]"
-              aria-hidden={collapsed}
-              tabIndex={collapsed ? -1 : 0}
-              onClick={() => selectResearchRun(run.id)}
-            >
-              <span
-                className={`size-1.5 shrink-0 rounded-full ${
-                  run.status === "completed"
-                    ? "bg-[#63b68d]"
-                    : run.status === "collecting"
-                      ? "bg-[#ef8354]"
-                      : run.status === "failed"
-                        ? "bg-[#b85c4c]"
-                        : "bg-[#c4a460]"
-                }`}
-              />
-              <span className="min-w-0 flex-1 truncate">{run.title}</span>
-            </button>
-          ))}
-        </div>
 
         <div className="mt-6">
           <div className="sidebar-section-tools mb-1.5 flex items-center justify-between px-2.5">
