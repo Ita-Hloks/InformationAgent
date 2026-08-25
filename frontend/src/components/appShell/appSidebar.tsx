@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Bookmark,
   ChevronDown,
@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import type { Feed, LibraryView } from "../../types";
+import { useClickOutside } from "../../hooks/useClickOutside";
 
 type AppSidebarProps = {
   activeView: LibraryView;
@@ -62,6 +63,13 @@ export function AppSidebar({
   onOpenSettings,
 }: AppSidebarProps) {
   const [confirmingFeedId, setConfirmingFeedId] = useState<string | null>(null);
+  const confirmingFeedActionRef = useRef<HTMLButtonElement>(null);
+
+  useClickOutside(
+    confirmingFeedActionRef,
+    () => setConfirmingFeedId(null),
+    confirmingFeedId !== null,
+  );
 
   const selectView = (view: LibraryView) => {
     onSelectView(view);
@@ -205,10 +213,11 @@ export function AppSidebar({
                 </button>
                 <button
                   type="button"
-                  className={`sidebar-feed-action shrink-0 rounded text-xs transition-[width,padding,color,background-color] duration-200 disabled:cursor-wait ${
+                  ref={confirmingFeedId === feed.id ? confirmingFeedActionRef : undefined}
+                  className={`sidebar-feed-action flex h-7 shrink-0 items-center justify-center gap-1.5 overflow-hidden rounded text-xs transition-[width,padding,color,background-color] duration-200 disabled:cursor-wait ${
                     confirmingFeedId === feed.id
-                      ? "flex h-7 items-center gap-1.5 bg-[#fbe9e4] px-2 text-[#b7523c] hover:bg-[#f8dfd8]"
-                      : "grid size-6 place-items-center text-[#777b82] hover:bg-white/10 hover:text-white"
+                      ? "w-[120px] bg-[#fbe9e4] px-2 text-[#b7523c] hover:bg-[#f8dfd8]"
+                      : "w-6 px-0 text-[#777b82] hover:bg-white/10 hover:text-white"
                   }`}
                   aria-label={
                     confirmingFeedId === feed.id

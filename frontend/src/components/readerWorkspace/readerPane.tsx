@@ -16,6 +16,7 @@ import {
 import type { Article } from "../../types";
 import type { ArticleResearchRun } from "../../types";
 import { formatArticleFullDate } from "../../utils/date";
+import { useClickOutside } from "../../hooks/useClickOutside";
 
 type ReaderPaneProps = {
   article: Article | null;
@@ -69,10 +70,13 @@ export function ReaderPane({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const articleKey = article ? `${article.id}:${article.snapshotId}` : null;
   const [deleteConfirming, setDeleteConfirming] = useState(false);
+  const deleteActionRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setDeleteConfirming(false);
   }, [articleKey]);
+
+  useClickOutside(deleteActionRef, () => setDeleteConfirming(false), deleteConfirming && !deleting);
 
   useEffect(() => {
     if (!articleKey || !onVisibleSeconds) return;
@@ -189,10 +193,11 @@ export function ReaderPane({
           </button>
           <button
             type="button"
-            className={`article-delete-action flex h-9 items-center justify-center overflow-hidden rounded-md text-xs font-medium transition-[width,padding,color,background-color] duration-200 disabled:cursor-wait disabled:opacity-70 ${
+            ref={deleteActionRef}
+            className={`article-delete-action flex h-9 w-9 shrink-0 items-center justify-center gap-1.5 overflow-hidden rounded-md px-0 text-xs font-medium transition-[width,padding,color,background-color] duration-200 disabled:cursor-wait disabled:opacity-70 ${
               deleteConfirming
-                ? "gap-1.5 bg-[#fbe9e4] px-2.5 text-[#b7523c] hover:bg-[#f8dfd8]"
-                : "w-9 text-[#696c72] hover:bg-[var(--reader-workspace-hover)]"
+                ? "w-[108px] bg-[#fbe9e4] px-2.5 text-[#b7523c] hover:bg-[#f8dfd8]"
+                : "text-[#696c72] hover:bg-[var(--reader-workspace-hover)]"
             }`}
             aria-label={deleteConfirming ? "确认删除文章" : "删除文章"}
             title={deleteConfirming ? "确认删除文章" : "删除文章"}
