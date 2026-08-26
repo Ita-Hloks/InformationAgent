@@ -264,6 +264,7 @@ class ArticleResearchTaskManager:
                 if cancelled
                 else _article_status(str(finished.get("status") or "failed"))
             )
+            finished_error = finished.get("error")
             self._store.update_article_research_run(
                 run_id,
                 status=terminal_status,
@@ -271,8 +272,8 @@ class ArticleResearchTaskManager:
                 error=(
                     _stop_error()
                     if cancelled
-                    else finished.get("error")
-                    if terminal_status == "failed"
+                    else finished_error
+                    if isinstance(finished_error, dict)
                     else None
                 ),
                 expected_status="running",
