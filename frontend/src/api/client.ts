@@ -1,5 +1,6 @@
 import type {
   Article,
+  ArticleContentBlock,
   ArticleAnswer,
   ArticleAnswerHistory,
   ArticleResearchHistory,
@@ -34,6 +35,7 @@ type ArticlePayload = {
   categories: string[];
   published_at: string | null;
   content: string;
+  content_blocks?: ArticleContentBlock[];
   summary: string | null;
   summary_status: SummaryStatus;
   summary_error: string | null;
@@ -139,11 +141,8 @@ const SAFE_ERROR_MESSAGES: Record<string, string> = {
   invalid_request: "请求参数不符合约定，请检查后重试",
   llm_unavailable: "模型服务暂时不可用，请稍后重试",
   assistant_failed: "文章问答失败，请稍后重试",
-  research_ingest_failed: "采集入库失败，请稍后重试",
-  research_agent_failed: "Agent 运行失败，请稍后重试",
   main_llm_unavailable: "主模型配置未完成，请先补全环境变量",
   search_llm_unavailable: "搜索模型配置未完成，请先补全环境变量",
-  agent_not_found: "不存在的 Agent 运行，请刷新后重试",
   article_not_found: "文章不存在，请刷新后重试",
   answer_not_found: "问答记录不存在，请刷新后重试",
   request_id_conflict: "请求已存在或已被占用，请稍后重试",
@@ -260,7 +259,13 @@ function toArticle(article: ArticlePayload): Article {
     imageUrl: article.image_url ?? "",
     unread: !(article.is_read ?? false),
     starred: article.is_saved ?? false,
-    body: article.content.split(/\n+/).filter(Boolean),
+    contentBlocks:
+      article.content_blocks && article.content_blocks.length > 0
+        ? article.content_blocks
+        : article.content
+            .split(/\n+/)
+            .filter(Boolean)
+            .map(text => ({ type: "text" as const, text })),
     sourceUrl: article.source_url,
   };
 }

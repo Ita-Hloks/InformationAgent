@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 import type { Article } from "../../types";
+import { ArticleImage } from "./articleImage";
 
 type ArticleListProps = {
   title: string;
@@ -177,10 +178,15 @@ export function ArticleList({
                     </span>
                   </span>
                   {article.imageUrl && (
-                    <img
-                      className="mt-0.5 h-14 w-[72px] rounded-md object-cover grayscale-[0.08]"
+                    <ArticleImage
                       src={article.imageUrl}
+                      label="文章缩略图"
                       alt=""
+                      variant="thumbnail"
+                      className="mt-0.5 h-14 w-[72px] rounded-md"
+                      imageClassName="h-full w-full object-cover grayscale-[0.08]"
+                      loading="lazy"
+                      showRetry={false}
                     />
                   )}
                 </button>

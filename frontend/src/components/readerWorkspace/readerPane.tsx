@@ -18,6 +18,7 @@ import type { Article } from "../../types";
 import type { ArticleResearchRun } from "../../types";
 import { formatArticleFullDate } from "../../utils/date";
 import { useClickOutside } from "../../hooks/useClickOutside";
+import { ArticleImage } from "./articleImage";
 
 type ReaderPaneProps = {
   article: Article | null;
@@ -127,6 +128,10 @@ export function ReaderPane({
       </section>
     );
   }
+
+  const hasInlineHeroImage =
+    Boolean(article.imageUrl) &&
+    article.contentBlocks.some(block => block.type === "image" && block.url === article.imageUrl);
 
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col bg-[var(--reader-workspace-surface)]">
@@ -275,18 +280,46 @@ export function ReaderPane({
             </div>
           )}
 
-          {article.imageUrl && (
-            <img
-              className="mt-8 aspect-[16/8.5] w-full rounded-lg object-cover"
+          {article.imageUrl && !hasInlineHeroImage && (
+            <ArticleImage
               src={article.imageUrl}
+              label="文章首图"
               alt=""
+              variant="hero"
+              className="mt-8 aspect-[16/8.5] w-full overflow-hidden rounded-lg"
+              errorClassName="mt-8 min-h-[132px] w-full rounded-lg"
+              imageClassName="h-full w-full object-cover"
             />
           )}
 
           <div className="reader-copy mt-9">
-            {article.body.map(paragraph => (
-              <p key={paragraph}>{paragraph}</p>
-            ))}
+            {article.contentBlocks.map((block, index) => {
+              if (block.type === "text") {
+                return (
+                  <p key={`text-${index}`} className="whitespace-pre-wrap">
+                    {block.text}
+                  </p>
+                );
+              }
+              return (
+                <figure key={`image-${index}`} className="my-8">
+                  <ArticleImage
+                    src={block.url}
+                    label="正文图片"
+                    alt={block.alt ?? ""}
+                    className="w-full overflow-hidden rounded-lg"
+                    errorClassName="min-h-[160px] w-full rounded-lg"
+                    imageClassName="h-auto w-full"
+                    loading="lazy"
+                  />
+                  {block.caption && (
+                    <figcaption className="mt-2 text-center font-sans text-sm leading-6 text-[#77797e]">
+                      {block.caption}
+                    </figcaption>
+                  )}
+                </figure>
+              );
+            })}
           </div>
 
           <ArticleResearchSection

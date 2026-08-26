@@ -8,6 +8,15 @@ from .call_log import (
     clear_log_directory,
     inspect_log_directory,
 )
+from .content import (
+    ContentBlock,
+    content_block_to_payload,
+    content_blocks_from_payload,
+    content_blocks_to_payload,
+    content_blocks_to_text,
+    first_image_candidate,
+    parse_content_blocks,
+)
 from .llm import (
     DEFAULT_LLM_MAX_ATTEMPTS,
     DEFAULT_LLM_TIMEOUT_SECONDS,
@@ -20,6 +29,7 @@ from .url import normalize_url
 
 __all__ = [
     "CallBackup",
+    "ContentBlock",
     "CONTENT_BATCH_CHARS",
     "DEFAULT_LLM_MAX_ATTEMPTS",
     "DEFAULT_LLM_TIMEOUT_SECONDS",
@@ -29,11 +39,17 @@ __all__ = [
     "LogCleanupReport",
     "LogUsage",
     "cleanup_log_directory",
+    "content_block_to_payload",
+    "content_blocks_from_payload",
+    "content_blocks_to_payload",
+    "content_blocks_to_text",
+    "first_image_candidate",
     "clear_log_directory",
     "inspect_log_directory",
     "is_retryable_llm_error",
     "llm_safe_text",
     "normalize_url",
     "request_json_completion",
+    "parse_content_blocks",
     "split_content",
 ]

@@ -4,6 +4,7 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from .common import content_blocks_to_payload
 from .contracts import PROJECT_TIMEZONE, CollectionReport, Report
 from .selection import SelectedEvidence
 
@@ -205,6 +206,7 @@ def _selected_evidence_to_payload(item: SelectedEvidence) -> dict[str, Any]:
     payload = asdict(item.article)
     payload["categories"] = list(item.article.categories)
     payload["content_chunks"] = list(item.article.content_chunks)
+    payload["content_blocks"] = content_blocks_to_payload(item.article.content_blocks)
     payload["processing_warnings"] = list(item.article.processing_warnings)
     payload["id"] = item.evidence_id
     payload["collected_at"] = format_json_datetime(item.article.collected_at)

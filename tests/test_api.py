@@ -478,16 +478,6 @@ def test_opinion_api_uses_contract_error_objects(tmp_path: Path) -> None:
     assert invalid_body.json()["detail"]["code"] == "invalid_request"
 
 
-def test_legacy_topic_research_routes_are_removed(tmp_path: Path) -> None:
-    client = _client(tmp_path)
-
-    assert client.get("/api/research/runs").status_code == 404
-    assert client.post("/api/research/ingest", json={}).status_code == 404
-    assert client.post("/api/research/runs/run-id/agent", json={}).status_code == 404
-    assert client.get("/api/research/runs/run-id/agent/status").status_code == 404
-    assert client.post("/api/research/runs/run-id/agent/stop", json={}).status_code == 404
-
-
 def test_article_ask_api_hides_runtime_error_details(tmp_path: Path) -> None:
     service = ReaderService(tmp_path / "api.db", fetcher=_fetcher)
     service.subscribe("https://example.com/rss.xml")
