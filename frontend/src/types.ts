@@ -14,6 +14,10 @@ export type Feed = {
   color: string;
 };
 
+export type ArticleContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; url: string; alt: string | null; caption: string | null };
+
 export type Article = {
   id: string;
   feedId: string;
@@ -33,7 +37,7 @@ export type Article = {
   imageUrl: string;
   unread: boolean;
   starred: boolean;
-  body: string[];
+  contentBlocks: ArticleContentBlock[];
   sourceUrl: string;
 };
 

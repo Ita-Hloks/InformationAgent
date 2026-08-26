@@ -20,7 +20,11 @@ from ..investigation import (
     SearchPlan,
     SearchQuery,
 )
-from ..normalization import NormalizedArticle
+from ..normalization import (
+    NormalizedArticle,
+    content_blocks_from_payload,
+    content_blocks_to_payload,
+)
 from ..selection import SelectedEvidence
 from .analysis_store import AnalysisPersistenceMixin
 from .common import (
@@ -1354,11 +1358,15 @@ class SQLiteCollectionStore(
         ).fetchone()
         if existing is not None:
             existing_payload = json.loads(existing["payload_json"])
-            if article.image_url and existing_payload.get("image_url") != article.image_url:
+            article_payload = _article_payload(article)
+            if any(
+                existing_payload.get(field) != article_payload.get(field)
+                for field in ("image_url", "content_blocks")
+            ):
                 connection.execute(
                     "UPDATE article_snapshots SET payload_json = ? WHERE id = ?",
                     (
-                        json.dumps(_article_payload(article), ensure_ascii=False, sort_keys=True),
+                        json.dumps(article_payload, ensure_ascii=False, sort_keys=True),
                         existing["id"],
                     ),
                 )
@@ -1927,6 +1935,7 @@ def _article_payload(article: NormalizedArticle) -> dict[str, object]:
     payload["content_type"] = article.content_type.value
     payload["categories"] = list(article.categories)
     payload["content_chunks"] = list(article.content_chunks)
+    payload["content_blocks"] = content_blocks_to_payload(article.content_blocks)
     payload["processing_warnings"] = list(article.processing_warnings)
     payload["published_at"] = (
         _format_datetime(article.published_at) if article.published_at else None
@@ -2257,11 +2266,12 @@ def _entry_marker(entry: RawFeedEntry) -> str | None:
 
 
 def _article_from_payload(payload: dict[str, object]) -> NormalizedArticle:
+    content = str(payload["content"])
     return NormalizedArticle(
         article_id=str(payload["article_id"]),
         source_url=str(payload["source_url"]),
         title=str(payload["title"]),
-        content=str(payload["content"]),
+        content=content,
         feed_url=_optional_text(payload.get("feed_url")),
         site_url=_optional_text(payload.get("site_url")),
         source_type=str(payload["source_type"]),
@@ -2274,4 +2284,5 @@ def _article_from_payload(payload: dict[str, object]) -> NormalizedArticle:
         collected_at=_required_datetime(payload["collected_at"]),
         processing_warnings=tuple(str(item) for item in payload["processing_warnings"]),
         image_url=_optional_text(payload.get("image_url")),
+        content_blocks=content_blocks_from_payload(payload.get("content_blocks"), content),
     )

@@ -6,14 +6,22 @@ import math
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from threading import Lock
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import trafilatura
+from lxml import etree
+from lxml import html as lxml_html
 
-from ..common import normalize_url
+from ..common import (
+    ContentBlock,
+    content_blocks_to_text,
+    first_image_candidate,
+    normalize_url,
+    parse_content_blocks,
+)
 from ..contracts import ContentType
 from ._http import content_length_exceeds_limit
 from .images import extract_image_url_from_html
@@ -67,11 +75,19 @@ def _extract_text(html: str, **kwargs) -> str | None:
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class ArticleFetchResult:
+    content: str
+    content_blocks: tuple[ContentBlock, ...]
+    image_url: str | None
+
+
 def fetch_article(
     article_url: str,
     *,
     timeout: float = 15,
-) -> str | None:
+    _return_details: bool = False,
+) -> str | ArticleFetchResult | None:
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("timeout must be a positive finite number")
 
@@ -79,66 +95,87 @@ def fetch_article(
     if page is None:
         return None
 
-    _, html = page
-    text = _extract_text(html)
-    if text is None or len(text) < MIN_CONTENT_CHARS:
-        return None
-    return text
-
-
-def fetch_article_image(
-    article_url: str,
-    *,
-    timeout: float = 15,
-) -> str | None:
-    page = _fetch_page_html(article_url, timeout)
-    if page is None:
-        return None
     normalized_url, html = page
-    return extract_image_url_from_html(html, normalized_url)
-
-
-def augment_images(
-    items: list[RawFeedEntry],
-    *,
-    timeout: float = 15,
-    max_workers: int = DEFAULT_MAX_WORKERS,
-) -> list[RawFeedEntry]:
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise ValueError("timeout must be a positive finite number")
-    if max_workers <= 0:
-        raise ValueError("max_workers must be positive")
-
-    to_fetch: list[tuple[int, RawFeedEntry]] = []
-    results: dict[int, RawFeedEntry] = {}
-    for i, item in enumerate(items):
-        if item.image_url:
-            results[i] = item
-        else:
-            to_fetch.append((i, item))
-
-    if not to_fetch:
-        return items
-
-    worker_count = min(max_workers, len(to_fetch))
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_map = {
-            executor.submit(fetch_article_image, item.source_url, timeout=timeout): i
-            for i, item in to_fetch
-        }
-        for future in as_completed(future_map):
-            i = future_map[future]
-            image_url = future.result()
-            results[i] = replace(items[i], image_url=image_url) if image_url else items[i]
-
-    return [results[i] for i in range(len(items))]
+    result = _extract_article_result(html, normalized_url)
+    if result is None:
+        return None
+    return result if _return_details else result.content
 
 
 def _augment_item(item: RawFeedEntry, timeout: float) -> RawFeedEntry:
-    content = fetch_article(item.source_url, timeout=timeout)
-    if content is None:
+    fetched = fetch_article(item.source_url, timeout=timeout, _return_details=True)
+    if fetched is None:
         return item
-    return replace(item, content=content, content_type=ContentType.RSS_CONTENT)
+    if isinstance(fetched, ArticleFetchResult):
+        return replace(
+            item,
+            content=fetched.content,
+            content_type=ContentType.RSS_CONTENT,
+            content_blocks=fetched.content_blocks,
+            image_url=item.image_url or fetched.image_url,
+        )
+    return replace(item, content=fetched, content_type=ContentType.RSS_CONTENT)
+
+
+def _extract_article_result(html: str, normalized_url: str) -> ArticleFetchResult | None:
+    try:
+        document = trafilatura.bare_extraction(
+            _prepare_html_for_extraction(html),
+            url=normalized_url,
+            include_images=True,
+        )
+    except Exception:
+        return None
+    if document is None or document.body is None:
+        return None
+
+    extracted_html = etree.tostring(document.body, encoding="unicode")
+    blocks = parse_content_blocks(extracted_html, normalized_url)
+    blocks = _restore_image_captions(blocks, parse_content_blocks(html, normalized_url))
+    text = content_blocks_to_text(blocks)
+    if len(text) < MIN_CONTENT_CHARS:
+        return None
+    return ArticleFetchResult(
+        content=text,
+        content_blocks=blocks,
+        image_url=extract_image_url_from_html(html, normalized_url)
+        or next((block.url for block in blocks if block.type == "image"), None),
+    )
+
+
+def _prepare_html_for_extraction(html: str) -> str:
+    try:
+        tree = lxml_html.fromstring(html)
+    except (etree.ParserError, ValueError):
+        return html
+    for image in tree.xpath(".//img"):
+        source = image.get("src")
+        if source and source.strip():
+            continue
+        attributes = {name.casefold(): value for name, value in image.attrib.items()}
+        candidate = first_image_candidate(attributes)
+        if candidate:
+            image.set("src", candidate)
+    return etree.tostring(tree, encoding="unicode")
+
+
+def _restore_image_captions(
+    extracted_blocks: tuple[ContentBlock, ...],
+    source_blocks: tuple[ContentBlock, ...],
+) -> tuple[ContentBlock, ...]:
+    captions = {
+        block.url: block.caption
+        for block in source_blocks
+        if block.type == "image" and block.url and block.caption
+    }
+    if not captions:
+        return extracted_blocks
+    return tuple(
+        replace(block, caption=captions.get(block.url))
+        if block.type == "image" and not block.caption and block.url in captions
+        else block
+        for block in extracted_blocks
+    )
 
 
 def _fetch_page_html(article_url: str, timeout: float) -> tuple[str, str] | None:

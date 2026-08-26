@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from ..common import ContentBlock
 from ..contracts import ContentType, project_now
 
 
@@ -25,6 +26,7 @@ class RawFeedEntry:
     updated_at: str | datetime | None = None
     collected_at: datetime = field(default_factory=project_now)
     image_url: str | None = None
+    content_blocks: tuple[ContentBlock, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)

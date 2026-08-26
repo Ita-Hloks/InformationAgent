@@ -1,5 +1,6 @@
 import type {
   Article,
+  ArticleContentBlock,
   ArticleAnswer,
   ArticleAnswerHistory,
   ArticleResearchHistory,
@@ -34,6 +35,7 @@ type ArticlePayload = {
   categories: string[];
   published_at: string | null;
   content: string;
+  content_blocks?: ArticleContentBlock[];
   summary: string | null;
   summary_status: SummaryStatus;
   summary_error: string | null;
@@ -260,7 +262,13 @@ function toArticle(article: ArticlePayload): Article {
     imageUrl: article.image_url ?? "",
     unread: !(article.is_read ?? false),
     starred: article.is_saved ?? false,
-    body: article.content.split(/\n+/).filter(Boolean),
+    contentBlocks:
+      article.content_blocks && article.content_blocks.length > 0
+        ? article.content_blocks
+        : article.content
+            .split(/\n+/)
+            .filter(Boolean)
+            .map(text => ({ type: "text" as const, text })),
     sourceUrl: article.source_url,
   };
 }

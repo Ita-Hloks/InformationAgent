@@ -6,7 +6,7 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 
 from ..collection import RawFeedEntry
-from ..common import CONTENT_BATCH_CHARS, normalize_url, split_content
+from ..common import CONTENT_BATCH_CHARS, ContentBlock, normalize_url, split_content
 from ..contracts import PROJECT_TIMEZONE
 from .models import NormalizedArticle
 
@@ -58,6 +58,7 @@ def normalize_evidence(
             continue
 
         content_chunks = split_content(content, content_batch_chars)
+        content_blocks = _normalize_content_blocks(item.content_blocks, content)
         processing_warnings: list[str] = []
         if len(content_chunks) > 1:
             processing_warnings.append(
@@ -82,6 +83,7 @@ def normalize_evidence(
                 collected_at=parse_published_at(item.collected_at) or item.collected_at,
                 processing_warnings=tuple(processing_warnings),
                 image_url=normalize_url(item.image_url) if item.image_url else None,
+                content_blocks=content_blocks,
             )
         )
     return normalized
@@ -90,6 +92,35 @@ def normalize_evidence(
 def _normalize_text(value: str) -> str:
     lines = [re.sub(r"\s+", " ", line).strip() for line in value.splitlines()]
     return "\n".join(line for line in lines if line)
+
+
+def _normalize_content_blocks(
+    blocks: tuple[ContentBlock, ...],
+    content: str,
+) -> tuple[ContentBlock, ...]:
+    normalized: list[ContentBlock] = []
+    seen_image_urls: set[str] = set()
+    for block in blocks:
+        if block.type == "text":
+            text = _normalize_text(block.text or "")
+            if text:
+                normalized.append(ContentBlock(type="text", text=text))
+            continue
+        if block.type != "image" or not block.url:
+            continue
+        image_url = normalize_url(block.url)
+        if image_url is None or image_url in seen_image_urls:
+            continue
+        seen_image_urls.add(image_url)
+        normalized.append(
+            ContentBlock(
+                type="image",
+                url=image_url,
+                alt=_normalize_text(block.alt or "") or None,
+                caption=_normalize_text(block.caption or "") or None,
+            )
+        )
+    return tuple(normalized) or (ContentBlock(type="text", text=content),)
 
 
 def _article_id(source_url: str) -> str:

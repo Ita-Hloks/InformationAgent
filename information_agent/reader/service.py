@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from ..collection import FeedFetchResult, augment_images, fetch_feed_with_cache
+from ..collection import FeedFetchResult, augment_evidence, fetch_feed_with_cache
 from ..common import normalize_url
 from ..normalization import normalize_evidence
 from ..storage import (
@@ -35,7 +35,7 @@ def _fetch_reader_feed(
     )
     if result.not_modified or not result.entries:
         return result
-    return replace(result, entries=augment_images(result.entries, timeout=timeout))
+    return replace(result, entries=augment_evidence(result.entries, timeout=timeout))
 
 
 class FeedNotFoundError(LookupError):

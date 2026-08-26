@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import math
-import re
 from collections.abc import Mapping
-from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -11,7 +9,12 @@ from urllib.request import Request, urlopen
 import aiohttp
 import feedparser
 
-from ..common import normalize_url
+from ..common import (
+    ContentBlock,
+    content_blocks_to_text,
+    normalize_url,
+    parse_content_blocks,
+)
 from ..contracts import ContentType
 from ._http import content_length_exceeds_limit
 from .images import extract_image_url_from_html, resolve_image_url
@@ -25,89 +28,8 @@ def _validate_timeout(timeout: float) -> None:
         raise ValueError("timeout must be a positive finite number")
 
 
-class _RSSTextParser(HTMLParser):
-    _BLOCK_TAGS = {
-        "address",
-        "article",
-        "aside",
-        "blockquote",
-        "br",
-        "dd",
-        "div",
-        "dl",
-        "dt",
-        "figcaption",
-        "figure",
-        "footer",
-        "h1",
-        "h2",
-        "h3",
-        "h4",
-        "h5",
-        "h6",
-        "header",
-        "hr",
-        "li",
-        "main",
-        "nav",
-        "ol",
-        "p",
-        "pre",
-        "section",
-        "table",
-        "td",
-        "th",
-        "tr",
-        "ul",
-    }
-    _IGNORED_TAGS = {
-        "code",
-        "kbd",
-        "noscript",
-        "pre",
-        "samp",
-        "script",
-        "style",
-        "template",
-    }
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.parts: list[str] = []
-        self._ignored_depth = 0
-
-    def handle_data(self, data: str) -> None:
-        if self._ignored_depth:
-            return
-        self.parts.append(data)
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        normalized_tag = tag.casefold()
-        if normalized_tag in self._IGNORED_TAGS:
-            self._ignored_depth += 1
-            return
-        if not self._ignored_depth and normalized_tag in self._BLOCK_TAGS:
-            self.parts.append("\n")
-
-    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.handle_starttag(tag, attrs)
-
-    def handle_endtag(self, tag: str) -> None:
-        normalized_tag = tag.casefold()
-        if normalized_tag in self._IGNORED_TAGS:
-            self._ignored_depth = max(0, self._ignored_depth - 1)
-            return
-        if not self._ignored_depth and normalized_tag in self._BLOCK_TAGS:
-            self.parts.append("\n")
-
-
 def _plain_text(value: str) -> str:
-    parser = _RSSTextParser()
-    parser.feed(value)
-    parser.close()
-    text = "".join(parser.parts)
-    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
-    return "\n".join(line for line in lines if line)
+    return content_blocks_to_text(parse_content_blocks(value))
 
 
 def fetch_feed(feed_url: str, timeout: float = 15) -> list[RawFeedEntry]:
@@ -212,7 +134,7 @@ def _parse_feed(payload: bytes, normalized_feed_url: str) -> list[RawFeedEntry]:
         source_url = normalize_url(str(entry.get("link") or entry.get("id") or ""))
         if source_url is None:
             continue
-        content, content_type = _entry_content(entry)
+        content, content_blocks, content_type = _entry_content_data(entry, source_url)
         items.append(
             RawFeedEntry(
                 source_url=source_url,
@@ -228,19 +150,31 @@ def _parse_feed(payload: bytes, normalized_feed_url: str) -> list[RawFeedEntry]:
                 entry_id=_entry_id(entry),
                 updated_at=entry.get("updated"),
                 image_url=_entry_image_url(entry, source_url),
+                content_blocks=content_blocks,
             )
         )
     return items
 
 
 def _entry_content(entry: dict[str, Any]) -> tuple[str, ContentType]:
+    content, _, content_type = _entry_content_data(entry, None)
+    return content, content_type
+
+
+def _entry_content_data(
+    entry: dict[str, Any],
+    base_url: str | None,
+) -> tuple[str, tuple[ContentBlock, ...], ContentType]:
     content_blocks = entry.get("content") or []
     for content_block in content_blocks:
-        content = _plain_text(str(content_block.get("value", "")))
+        html = str(content_block.get("value", ""))
+        blocks = parse_content_blocks(html, base_url)
+        content = content_blocks_to_text(blocks)
         if content:
-            return content, ContentType.RSS_CONTENT
-    summary = _plain_text(str(entry.get("summary") or entry.get("description") or ""))
-    return summary, ContentType.RSS_SUMMARY
+            return content, blocks, ContentType.RSS_CONTENT
+    html = str(entry.get("summary") or entry.get("description") or "")
+    blocks = parse_content_blocks(html, base_url)
+    return content_blocks_to_text(blocks), blocks, ContentType.RSS_SUMMARY
 
 
 def _entry_image_url(entry: Mapping[str, Any], base_url: str) -> str | None:

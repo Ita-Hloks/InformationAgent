@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ..common import content_blocks_to_payload
 from ..storage import (
     ArticleResearchRun,
     FeedSubscription,
@@ -46,6 +47,24 @@ class ArticleStateResponse(BaseModel):
     updated_at: str
 
 
+class ArticleTextBlockResponse(BaseModel):
+    type: Literal["text"]
+    text: str
+
+
+class ArticleImageBlockResponse(BaseModel):
+    type: Literal["image"]
+    url: str
+    alt: str | None
+    caption: str | None
+
+
+ArticleContentBlockResponse = Annotated[
+    ArticleTextBlockResponse | ArticleImageBlockResponse,
+    Field(discriminator="type"),
+]
+
+
 class ArticleResponse(BaseModel):
     id: str
     feed_id: str
@@ -62,6 +81,7 @@ class ArticleResponse(BaseModel):
     published_at: str | None
     collected_at: str
     content: str
+    content_blocks: list[ArticleContentBlockResponse]
     summary: str | None
     summary_status: Literal["pending", "running", "completed", "failed"]
     summary_error: str | None
@@ -348,6 +368,7 @@ def article_response(reader_article: ReaderArticle) -> ArticleResponse:
         published_at=article.published_at.isoformat() if article.published_at else None,
         collected_at=article.collected_at.isoformat(),
         content=article.content,
+        content_blocks=content_blocks_to_payload(article.content_blocks),
         summary=reader_article.summary,
         summary_status=reader_article.summary_status,  # type: ignore[arg-type]
         summary_error=reader_article.summary_error,

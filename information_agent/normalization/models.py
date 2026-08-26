@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from ..common import ContentBlock
 from ..contracts import ContentType
 
 
@@ -26,3 +27,4 @@ class NormalizedArticle:
     collected_at: datetime
     processing_warnings: tuple[str, ...] = field(default_factory=tuple)
     image_url: str | None = None
+    content_blocks: tuple[ContentBlock, ...] = field(default_factory=tuple)

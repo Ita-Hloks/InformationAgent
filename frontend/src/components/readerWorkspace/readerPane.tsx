@@ -128,6 +128,10 @@ export function ReaderPane({
     );
   }
 
+  const hasInlineHeroImage =
+    Boolean(article.imageUrl) &&
+    article.contentBlocks.some(block => block.type === "image" && block.url === article.imageUrl);
+
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col bg-[var(--reader-workspace-surface)]">
       <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[var(--reader-workspace-border)] px-3 sm:px-4">
@@ -275,7 +279,7 @@ export function ReaderPane({
             </div>
           )}
 
-          {article.imageUrl && (
+          {article.imageUrl && !hasInlineHeroImage && (
             <img
               className="mt-8 aspect-[16/8.5] w-full rounded-lg object-cover"
               src={article.imageUrl}
@@ -284,9 +288,30 @@ export function ReaderPane({
           )}
 
           <div className="reader-copy mt-9">
-            {article.body.map(paragraph => (
-              <p key={paragraph}>{paragraph}</p>
-            ))}
+            {article.contentBlocks.map((block, index) => {
+              if (block.type === "text") {
+                return (
+                  <p key={`text-${index}`} className="whitespace-pre-wrap">
+                    {block.text}
+                  </p>
+                );
+              }
+              return (
+                <figure key={`image-${index}`} className="my-8">
+                  <img
+                    className="h-auto w-full rounded-lg"
+                    src={block.url}
+                    alt={block.alt ?? ""}
+                    loading="lazy"
+                  />
+                  {block.caption && (
+                    <figcaption className="mt-2 text-center font-sans text-sm leading-6 text-[#77797e]">
+                      {block.caption}
+                    </figcaption>
+                  )}
+                </figure>
+              );
+            })}
           </div>
 
           <ArticleResearchSection
