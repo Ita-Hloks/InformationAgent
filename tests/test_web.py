@@ -8,11 +8,13 @@ import pytest
 from information_agent.collection import RawFeedEntry
 from information_agent.collection.web import (
     MAX_PAGE_BYTES,
+    ArticleFetchResult,
     _extract_text,
     _guess_encoding,
     augment_evidence,
     fetch_article,
 )
+from information_agent.common import ContentBlock
 from information_agent.contracts import ContentType
 
 
@@ -309,6 +311,36 @@ def test_augment_evidence_fetches_for_summary_items(monkeypatch) -> None:
     assert len(result) == 1
     assert result[0].content == "这是从网页抓取到的完整正文内容。"
     assert result[0].content_type is ContentType.RSS_CONTENT
+
+
+def test_augment_evidence_prefers_fetched_image_over_feed_image(monkeypatch) -> None:
+    fetched_image = "https://imgslim.example/image.jpg"
+
+    def fake_fetch(url: str, **kwargs) -> ArticleFetchResult:
+        assert url == "https://example.com/article"
+        assert kwargs["_return_details"] is True
+        return ArticleFetchResult(
+            content="这是从网页抓取到的完整正文内容。",
+            content_blocks=(ContentBlock(type="image", url=fetched_image),),
+            image_url=fetched_image,
+        )
+
+    monkeypatch.setattr("information_agent.collection.web.fetch_article", fake_fetch)
+
+    result = augment_evidence(
+        [
+            RawFeedEntry(
+                source_url="https://example.com/article",
+                title="标题",
+                content="原始摘要",
+                content_type=ContentType.RSS_SUMMARY,
+                image_url="https://toolkit.example/feishu-image?token=feed-image",
+            )
+        ]
+    )
+
+    assert result[0].image_url == fetched_image
+    assert result[0].content_blocks[0].url == fetched_image
 
 
 def test_augment_evidence_preserves_other_fields(monkeypatch) -> None:

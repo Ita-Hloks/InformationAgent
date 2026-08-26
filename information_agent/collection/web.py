@@ -112,7 +112,7 @@ def _augment_item(item: RawFeedEntry, timeout: float) -> RawFeedEntry:
             content=fetched.content,
             content_type=ContentType.RSS_CONTENT,
             content_blocks=fetched.content_blocks,
-            image_url=item.image_url or fetched.image_url,
+            image_url=fetched.image_url or item.image_url,
         )
     return replace(item, content=fetched, content_type=ContentType.RSS_CONTENT)
 
