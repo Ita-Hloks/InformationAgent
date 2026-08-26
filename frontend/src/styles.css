@@ -74,6 +74,7 @@ textarea:focus-visible {
   color: #393b3f;
   font-family: Georgia, "Noto Serif SC", serif;
   font-size: 17px;
+  font-weight: 500;
   line-height: 1.95;
 }
 
@@ -87,7 +88,7 @@ textarea:focus-visible {
   }
 
   .sidebar-layout.is-collapsed {
-    grid-template-columns: 64px 370px minmax(0, 1fr);
+    grid-template-columns: 64px 350px minmax(0, 1fr);
   }
 
   .sidebar-brand {

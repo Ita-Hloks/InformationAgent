@@ -256,32 +256,63 @@ export function ReaderPane({
           <h1 className="mt-7 text-[32px] leading-[1.18] font-semibold tracking-[0] text-[#202124] sm:text-[40px]">
             {article.title}
           </h1>
-          {article.summaryStatus === "completed" && article.summary && (
-            <p className="mt-4 text-[17px] leading-7 text-[#696b70]">{article.summary}</p>
-          )}
-          {(article.summaryStatus === "pending" || article.summaryStatus === "running") && (
-            <p className="mt-4 text-[15px] leading-7 text-[#96989c]">摘要生成中</p>
-          )}
-          {article.summaryStatus === "failed" && (
-            <div
-              className="mt-4 flex items-start gap-3 rounded-md border border-[#e3a39a] bg-[#fff5f2] px-3 py-2.5 text-sm leading-6 text-[#a33f31]"
-              role="alert"
+          {(article.summaryStatus !== "completed" || article.summary) && (
+            <section
+              className={`mt-5 rounded-lg border px-4 py-3.5 ${
+                article.summaryStatus === "failed"
+                  ? "border-[#e3a39a] bg-[#fff5f2]"
+                  : "border-[#ead9c9] bg-[#fff8f2]"
+              }`}
+              role={article.summaryStatus === "failed" ? "alert" : undefined}
+              aria-label="LLM 摘要"
             >
-              <p className="min-w-0 flex-1 whitespace-pre-wrap break-words">
-                {article.summaryError ?? "摘要生成失败"}
-              </p>
-              {onRetrySummary && (
-                <button
-                  type="button"
-                  className="grid size-8 shrink-0 place-items-center rounded-md text-[#8f493d] hover:bg-[#fbe2dc]"
-                  aria-label="重试摘要"
-                  title="重试摘要"
-                  onClick={onRetrySummary}
+              <div
+                className={`flex items-center gap-2 text-xs font-semibold ${
+                  article.summaryStatus === "failed" ? "text-[#a33f31]" : "text-[#a45132]"
+                }`}
+              >
+                <span
+                  className={`grid size-6 shrink-0 place-items-center rounded-md ${
+                    article.summaryStatus === "failed"
+                      ? "bg-[#f3c9bf] text-[#a33f31]"
+                      : "bg-[#ef8354] text-[#21130d]"
+                  }`}
                 >
-                  <RefreshCw size={16} />
-                </button>
+                  <Bot size={13} strokeWidth={1.8} />
+                </span>
+                <span>LLM 摘要</span>
+              </div>
+
+              {article.summaryStatus === "completed" && article.summary && (
+                <p className="mt-2.5 text-[17px] leading-7 text-[#5f6064]">{article.summary}</p>
               )}
-            </div>
+
+              {(article.summaryStatus === "pending" || article.summaryStatus === "running") && (
+                <div className="mt-2.5 flex items-center gap-2 text-[15px] leading-7 text-[#96989c]">
+                  <Loader2 size={15} className="animate-spin text-[#b75f39]" />
+                  摘要生成中
+                </div>
+              )}
+
+              {article.summaryStatus === "failed" && (
+                <div className="mt-2.5 flex items-start gap-3 text-sm leading-6 text-[#a33f31]">
+                  <p className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+                    {article.summaryError ?? "摘要生成失败"}
+                  </p>
+                  {onRetrySummary && (
+                    <button
+                      type="button"
+                      className="grid size-8 shrink-0 place-items-center rounded-md text-[#8f493d] hover:bg-[#fbe2dc]"
+                      aria-label="重试摘要"
+                      title="重试摘要"
+                      onClick={onRetrySummary}
+                    >
+                      <RefreshCw size={16} />
+                    </button>
+                  )}
+                </div>
+              )}
+            </section>
           )}
 
           {article.imageUrl && !hasInlineHeroImage && (

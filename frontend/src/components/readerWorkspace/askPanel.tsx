@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Loader2, RotateCw, Send, Sparkles, Trash2, TriangleAlert, X } from "lucide-react";
+import { Bot, Loader2, RotateCw, Send, Trash2, TriangleAlert, X } from "lucide-react";
 
 import {
   askArticle,
@@ -18,8 +18,6 @@ type AskPanelProps = {
 };
 
 type AnswerPhase = "idle" | "loading" | "success" | "error";
-
-const suggestions = ["总结核心观点", "找出关键事实", "这对产品团队意味着什么？"];
 
 export function AskPanel({ article, open, onClose }: AskPanelProps) {
   const questionInputRef = useRef<HTMLTextAreaElement>(null);
@@ -218,17 +216,6 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
     void requestAnswer();
   };
 
-  const selectSuggestion = (suggestion: string) => {
-    setQuestion(suggestion);
-    questionInputRef.current?.focus();
-    window.requestAnimationFrame(() => {
-      const input = questionInputRef.current;
-      if (input && document.activeElement === input) {
-        input.setSelectionRange(suggestion.length, suggestion.length);
-      }
-    });
-  };
-
   return (
     <>
       {open && (
@@ -333,27 +320,6 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
                 </button>
               )}
             </section>
-          )}
-
-          {phase === "idle" && (
-            <div className="mt-7">
-              <div className="flex items-center gap-2 text-xs font-medium text-[#b9bbc0]">
-                <Sparkles size={14} className="text-[#ef8354]" />
-                快速提问
-              </div>
-              <div className="mt-3 grid gap-2">
-                {suggestions.map(suggestion => (
-                  <button
-                    key={suggestion}
-                    type="button"
-                    className="rounded-md border border-white/10 bg-white/[0.03] px-3 py-2.5 text-left text-xs text-[#b8bbc1] hover:border-white/20 hover:bg-white/[0.06] hover:text-white"
-                    onClick={() => selectSuggestion(suggestion)}
-                  >
-                    {suggestion}
-                  </button>
-                ))}
-              </div>
-            </div>
           )}
 
           {phase === "loading" && (

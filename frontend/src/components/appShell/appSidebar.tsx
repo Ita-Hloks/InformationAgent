@@ -94,7 +94,7 @@ export function AppSidebar({
 
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-40 flex min-h-0 w-[252px] min-w-0 flex-col overflow-hidden border-r border-white/8 bg-[#17191d] text-[#ecece7] transition-transform duration-200 xl:h-full xl:relative xl:w-full xl:translate-x-0 xl:self-stretch xl:z-auto ${
+      className={`fixed inset-y-0 left-0 z-40 flex min-h-0 w-[240px] min-w-0 flex-col overflow-hidden border-r border-white/8 bg-[#17191d] text-[#ecece7] transition-transform duration-200 xl:h-full xl:relative xl:w-full xl:translate-x-0 xl:self-stretch xl:z-auto ${
         open ? "translate-x-0" : "-translate-x-full"
       }`}
       aria-label="资料库导航"
