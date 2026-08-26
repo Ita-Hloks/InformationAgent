@@ -18,6 +18,7 @@ import type { Article } from "../../types";
 import type { ArticleResearchRun } from "../../types";
 import { formatArticleFullDate } from "../../utils/date";
 import { useClickOutside } from "../../hooks/useClickOutside";
+import { ArticleImage } from "./articleImage";
 
 type ReaderPaneProps = {
   article: Article | null;
@@ -280,10 +281,14 @@ export function ReaderPane({
           )}
 
           {article.imageUrl && !hasInlineHeroImage && (
-            <img
-              className="mt-8 aspect-[16/8.5] w-full rounded-lg object-cover"
+            <ArticleImage
               src={article.imageUrl}
+              label="文章首图"
               alt=""
+              variant="hero"
+              className="mt-8 aspect-[16/8.5] w-full overflow-hidden rounded-lg"
+              errorClassName="mt-8 min-h-[132px] w-full rounded-lg"
+              imageClassName="h-full w-full object-cover"
             />
           )}
 
@@ -298,10 +303,13 @@ export function ReaderPane({
               }
               return (
                 <figure key={`image-${index}`} className="my-8">
-                  <img
-                    className="h-auto w-full rounded-lg"
+                  <ArticleImage
                     src={block.url}
+                    label="正文图片"
                     alt={block.alt ?? ""}
+                    className="w-full overflow-hidden rounded-lg"
+                    errorClassName="min-h-[160px] w-full rounded-lg"
+                    imageClassName="h-auto w-full"
                     loading="lazy"
                   />
                   {block.caption && (
