@@ -15,14 +15,16 @@ class FakeClient:
         self.chat = SimpleNamespace(completions=self)
         self.with_options_calls = 0
         self.create_calls = 0
+        self.requests: list[dict[str, object]] = []
 
     def with_options(self, *, timeout: float) -> FakeClient:
         self.with_options_calls += 1
         assert timeout > 0
         return self
 
-    def create(self, **_: object) -> SimpleNamespace:
+    def create(self, **kwargs: object) -> SimpleNamespace:
         self.create_calls += 1
+        self.requests.append(kwargs)
         if self.error is not None:
             raise self.error
         message = SimpleNamespace(content=self.content)
@@ -52,6 +54,7 @@ def test_request_json_completion_backs_up_request_and_response(tmp_path, monkeyp
     assert payload["response"] == '{"plans": []}'
     assert client.with_options_calls == 1
     assert client.create_calls == 1
+    assert client.requests == [{"model": "test-model", "messages": messages}]
 
 
 @pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf"), float("-inf")])
