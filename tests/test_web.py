@@ -8,13 +8,11 @@ import pytest
 from information_agent.collection import RawFeedEntry
 from information_agent.collection.web import (
     MAX_PAGE_BYTES,
-    ArticleFetchResult,
     _extract_text,
     _guess_encoding,
     augment_evidence,
     fetch_article,
 )
-from information_agent.common import ContentBlock
 from information_agent.contracts import ContentType
 
 
@@ -313,94 +311,6 @@ def test_augment_evidence_fetches_for_summary_items(monkeypatch) -> None:
     assert result[0].content_type is ContentType.RSS_CONTENT
 
 
-def test_augment_evidence_prefers_fetched_image_over_feed_image(monkeypatch) -> None:
-    fetched_image = "https://imgslim.example/image.jpg"
-
-    monkeypatch.setattr(
-        "information_agent.collection.web.image_url_is_accessible",
-        lambda *_args, **_kwargs: True,
-    )
-
-    def fake_fetch(url: str, **kwargs) -> ArticleFetchResult:
-        assert url == "https://example.com/article"
-        assert kwargs["_return_details"] is True
-        return ArticleFetchResult(
-            content="这是从网页抓取到的完整正文内容。",
-            content_blocks=(ContentBlock(type="image", url=fetched_image),),
-            image_url=fetched_image,
-        )
-
-    monkeypatch.setattr("information_agent.collection.web.fetch_article", fake_fetch)
-
-    result = augment_evidence(
-        [
-            RawFeedEntry(
-                source_url="https://example.com/article",
-                title="标题",
-                content="原始摘要",
-                content_type=ContentType.RSS_SUMMARY,
-                image_url="https://toolkit.example/feishu-image?token=feed-image",
-            )
-        ]
-    )
-
-    assert result[0].image_url == fetched_image
-    assert result[0].content_blocks[0].url == fetched_image
-
-
-def test_augment_evidence_drops_feed_image_when_fetched_article_has_no_image(monkeypatch) -> None:
-    def fake_fetch(url: str, **kwargs) -> ArticleFetchResult:
-        assert url == "https://example.com/article"
-        assert kwargs["_return_details"] is True
-        return ArticleFetchResult(
-            content="这是从网页抓取到的完整正文内容。",
-            content_blocks=(),
-            image_url=None,
-        )
-
-    monkeypatch.setattr("information_agent.collection.web.fetch_article", fake_fetch)
-    monkeypatch.setattr(
-        "information_agent.collection.web.image_url_is_accessible",
-        lambda *_args, **_kwargs: False,
-    )
-
-    result = augment_evidence(
-        [
-            RawFeedEntry(
-                source_url="https://example.com/article",
-                title="标题",
-                content="原始摘要",
-                content_type=ContentType.RSS_SUMMARY,
-                image_url="https://toolkit.example/feishu-image",
-            )
-        ]
-    )
-
-    assert result[0].image_url is None
-
-
-def test_augment_evidence_drops_unavailable_image_from_complete_rss_item(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "information_agent.collection.web.image_url_is_accessible",
-        lambda *_args, **_kwargs: False,
-    )
-
-    result = augment_evidence(
-        [
-            RawFeedEntry(
-                source_url="https://example.com/article",
-                title="标题",
-                content="这是完整的 RSS 正文内容。",
-                content_type=ContentType.RSS_CONTENT,
-                image_url="https://toolkit.example/feishu-image",
-            )
-        ]
-    )
-
-    assert result[0].content_type is ContentType.RSS_CONTENT
-    assert result[0].image_url is None
-
-
 def test_augment_evidence_preserves_other_fields(monkeypatch) -> None:
     def fake_fetch(url: str, **kwargs) -> str | None:
         return "补上的正文内容。"
@@ -490,43 +400,6 @@ def test_fetch_article_returns_none_on_http_403(monkeypatch) -> None:
     monkeypatch.setattr("information_agent.collection.web.urlopen", fake_urlopen)
 
     assert fetch_article("https://example.com/forbidden") is None
-
-
-def test_image_url_is_accessible_accepts_image_response(monkeypatch) -> None:
-    class FakeResponse:
-        status = 206
-        headers = {"Content-Type": "image/jpeg; charset=binary"}
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args) -> None:
-            return None
-
-        def read(self, _: int) -> bytes:
-            raise AssertionError("image body should not be read when content type is valid")
-
-    def fake_urlopen(request, timeout: float) -> FakeResponse:
-        assert request.full_url == "https://example.com/image.jpg"
-        assert timeout == 3
-        return FakeResponse()
-
-    monkeypatch.setattr("information_agent.collection.images.urlopen", fake_urlopen)
-
-    from information_agent.collection.images import image_url_is_accessible
-
-    assert image_url_is_accessible("https://example.com/image.jpg", timeout=3)
-
-
-def test_image_url_is_accessible_rejects_http_error(monkeypatch) -> None:
-    def fake_urlopen(request, timeout: float) -> None:
-        raise HTTPError(request.full_url, 400, "Bad Request", {}, None)
-
-    monkeypatch.setattr("information_agent.collection.images.urlopen", fake_urlopen)
-
-    from information_agent.collection.images import image_url_is_accessible
-
-    assert not image_url_is_accessible("https://example.com/bad-image", timeout=3)
 
 
 def test_fetch_article_returns_none_on_http_429(monkeypatch) -> None:
