@@ -5,6 +5,7 @@ import { feedPath, viewFromPath, viewPaths, viewTitles } from "../../app/navigat
 import {
   addFeed as createFeed,
   deleteArticle,
+  deleteArticleResearch,
   getArticles,
   getArticleResearch,
   getArticleResearchRun,
@@ -59,6 +60,7 @@ export function ReaderWorkspacePage() {
   );
   const [articleResearchLoading, setArticleResearchLoading] = useState(false);
   const [articleResearchError, setArticleResearchError] = useState<string | null>(null);
+  const [articleResearchDeleteId, setArticleResearchDeleteId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [savedIds, setSavedIds] = useState(
     () => new Set(initialArticles.filter(article => article.starred).map(article => article.id)),
@@ -593,6 +595,52 @@ export function ReaderWorkspacePage() {
     setSelectedArticleResearchId(runId);
   };
 
+  const deleteArticleResearchForSelected = useCallback(
+    async (runId: string) => {
+      if (!selectedArticleId || articleResearchDeleteId !== null) return;
+      const run = articleResearchRuns.find(item => item.id === runId);
+      if (!run || ["queued", "running"].includes(run.status)) return;
+
+      setArticleResearchError(null);
+      setArticleResearchDeleteId(runId);
+      try {
+        await deleteArticleResearch(selectedArticleId, runId);
+        const nextRuns = articleResearchRuns.filter(item => item.id !== runId);
+        const nextCurrentRun = nextRuns.find(item => item.snapshotId === selectedSnapshotId);
+        const nextSelectedRun = nextRuns.find(item => item.snapshotId === run.snapshotId);
+        setArticleResearchRuns(nextRuns);
+        setArticles(current =>
+          current.map(article =>
+            article.id === selectedArticleId && article.snapshotId === selectedSnapshotId
+              ? {
+                  ...article,
+                  researchStatus: nextCurrentRun?.status ?? "none",
+                  researchMode: nextCurrentRun?.mode ?? null,
+                }
+              : article,
+          ),
+        );
+        if (selectedArticleResearchId === runId) {
+          setSelectedArticleResearchId(nextSelectedRun?.id ?? null);
+          setArticleResearchDetail(null);
+        }
+        setApiStatus("connected");
+      } catch (error) {
+        setArticleResearchError(error instanceof Error ? error.message : "研究记录删除失败");
+        setApiStatus("unavailable");
+      } finally {
+        setArticleResearchDeleteId(null);
+      }
+    },
+    [
+      articleResearchDeleteId,
+      articleResearchRuns,
+      selectedArticleId,
+      selectedArticleResearchId,
+      selectedSnapshotId,
+    ],
+  );
+
   const openOverlay = useCallback(
     (overlay: OverlayName) => {
       updateSearchParams(
@@ -727,6 +775,7 @@ export function ReaderWorkspacePage() {
                 onVisibleSeconds={reportVisibleSeconds}
                 onResearch={() => void runArticleResearchForSelected("manual")}
                 onStopResearch={() => void stopArticleResearchForSelected()}
+                onDeleteResearch={runId => void deleteArticleResearchForSelected(runId)}
                 onRetrySummary={() => void retrySelectedSummary()}
                 researchRuns={articleResearchRuns}
                 selectedResearchRunId={selectedArticleResearchId}
@@ -735,6 +784,7 @@ export function ReaderWorkspacePage() {
                 researchRunning={articleResearchActive}
                 researchLoading={articleResearchLoading}
                 researchError={articleResearchError}
+                deletingResearchRunId={articleResearchDeleteId}
               />
             </div>
           </>

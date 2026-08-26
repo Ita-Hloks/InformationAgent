@@ -556,7 +556,7 @@ def test_agent_does_not_retry_invalid_decision_response(tmp_path: Path) -> None:
         max_attempts=3,
     )
 
-    assert report.status is RunStatus.PARTIAL
+    assert report.status is RunStatus.FAILED
     assert report.stop_reason is AgentStopReason.ERROR
     assert report.steps == 1
     assert decider.calls == 1
@@ -670,7 +670,7 @@ def test_agent_does_not_retry_non_retryable_service_error(tmp_path: Path) -> Non
         max_attempts=3,
     )
 
-    assert report.status is RunStatus.PARTIAL
+    assert report.status is RunStatus.FAILED
     assert report.stop_reason is AgentStopReason.ERROR
     assert decider.calls == 1
     assert report.errors == ["Agent 决策失败：余额不足"]
@@ -752,7 +752,7 @@ def test_agent_persists_decisions_searches_and_final_report(tmp_path: Path) -> N
     assert final_artifact.payload["final_answer"] == report.final_answer
 
 
-def test_agent_persists_partial_report_after_decision_failure(tmp_path: Path) -> None:
+def test_agent_persists_failed_report_after_decision_failure(tmp_path: Path) -> None:
     database_path, run_id = _ingested_run(tmp_path)
 
     class FailingDecider:
@@ -775,7 +775,7 @@ def test_agent_persists_partial_report_after_decision_failure(tmp_path: Path) ->
     assert report.analysis_run_id is not None
     state = SQLiteCollectionStore(database_path).load_analysis_state(report.analysis_run_id)
 
-    assert state.run.status is AnalysisRunStatus.PARTIAL
+    assert state.run.status is AnalysisRunStatus.FAILED
     assert state.steps[0].status is AnalysisStepStatus.FAILED
     final_artifact = next(
         artifact for artifact in state.artifacts if artifact.kind == "agent_report"

@@ -586,6 +586,42 @@ def create_app(
             agent=article_research_tasks.agent_snapshot(stopped),
         )
 
+    @app.delete(
+        "/api/articles/{article_id}/research/{run_id}",
+        status_code=204,
+    )
+    def delete_article_research(
+        article_id: str,
+        run_id: str,
+    ) -> None:
+        run = article_research_run_for_article(article_id, run_id)
+        if run.status in {"queued", "running"}:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "article_research_active",
+                    "message": "运行中的文章研究不能删除，请先停止研究",
+                },
+            )
+        try:
+            reader.store.delete_article_research_run(run.id, article_id=article_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "article_research_not_found",
+                    "message": "指定文章下不存在该研究运行",
+                },
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "article_research_delete_conflict",
+                    "message": str(exc),
+                },
+            ) from exc
+
     @app.get("/api/articles/{article_id}/opinion", response_model=OpinionResponse)
     def get_opinion_status(article_id: str) -> OpinionResponse:
         try:

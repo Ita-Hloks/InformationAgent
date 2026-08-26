@@ -35,6 +35,7 @@ type ReaderPaneProps = {
   onVisibleSeconds?: (seconds: number) => void;
   onResearch?: () => void;
   onStopResearch?: () => void;
+  onDeleteResearch?: (runId: string) => void;
   onRetrySummary?: () => void;
   researchRuns?: ArticleResearchRun[];
   selectedResearchRunId?: string | null;
@@ -43,6 +44,7 @@ type ReaderPaneProps = {
   researchRunning?: boolean;
   researchLoading?: boolean;
   researchError?: string | null;
+  deletingResearchRunId?: string | null;
 };
 
 export function ReaderPane({
@@ -60,6 +62,7 @@ export function ReaderPane({
   onVisibleSeconds,
   onResearch,
   onStopResearch,
+  onDeleteResearch,
   onRetrySummary,
   researchRuns = [],
   selectedResearchRunId = null,
@@ -68,6 +71,7 @@ export function ReaderPane({
   researchRunning = false,
   researchLoading = false,
   researchError = null,
+  deletingResearchRunId = null,
 }: ReaderPaneProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const articleKey = article ? `${article.id}:${article.snapshotId}` : null;
@@ -328,9 +332,11 @@ export function ReaderPane({
             selectedResearchRunId={selectedResearchRunId}
             onSelectResearchRun={onSelectResearchRun}
             onStopResearch={onStopResearch}
+            onDeleteResearch={onDeleteResearch}
             researchRun={researchRun}
             loading={researchLoading}
             error={researchError}
+            deletingResearchRunId={deletingResearchRunId}
           />
 
           <div className="mt-10 flex flex-wrap items-center gap-2 border-t border-[var(--reader-workspace-border)] pt-5">
@@ -360,18 +366,22 @@ function ArticleResearchSection({
   selectedResearchRunId,
   onSelectResearchRun,
   onStopResearch,
+  onDeleteResearch,
   researchRun,
   loading,
   error,
+  deletingResearchRunId,
 }: {
   snapshotId: string;
   researchRuns: ArticleResearchRun[];
   selectedResearchRunId: string | null;
   onSelectResearchRun?: (runId: string) => void;
   onStopResearch?: () => void;
+  onDeleteResearch?: (runId: string) => void;
   researchRun: ArticleResearchRun | null;
   loading: boolean;
   error: string | null;
+  deletingResearchRunId: string | null;
 }) {
   if (loading && !researchRun && researchRuns.length === 0) {
     return (
@@ -395,7 +405,8 @@ function ArticleResearchSection({
     researchRun ?? researchRuns.find(run => run.id === selectedResearchRunId) ?? null;
   const report = researchRun?.agent?.report ?? null;
   const isActive = selectedRun?.status === "queued" || selectedRun?.status === "running";
-  const isHistorical = researchRun !== null && researchRun.snapshotId !== snapshotId;
+  const isHistorical = selectedRun !== null && selectedRun.snapshotId !== snapshotId;
+  const errorMessage = selectedRun?.error?.message ?? researchRun?.agent?.error?.message;
   const noSearch =
     researchRun?.status === "completed" &&
     report !== null &&
@@ -443,29 +454,54 @@ function ArticleResearchSection({
             {researchRuns.map(run => {
               const selected = run.id === selectedResearchRunId;
               const current = run.snapshotId === snapshotId;
+              const active = run.status === "queued" || run.status === "running";
+              const deleting = run.id === deletingResearchRunId;
               return (
-                <button
+                <div
                   key={run.id}
-                  type="button"
-                  className={`flex w-full min-w-0 items-center justify-between gap-3 rounded-md border px-3 py-2 text-left transition-colors ${
+                  className={`flex w-full min-w-0 items-center gap-3 rounded-md border px-3 py-2 transition-colors ${
                     selected
                       ? "border-[#d7b6a8] bg-[#fff8f4]"
                       : "border-[var(--reader-workspace-border)] hover:bg-[var(--reader-workspace-raised)]"
                   }`}
-                  onClick={() => onSelectResearchRun?.(run.id)}
                 >
-                  <span className="min-w-0">
-                    <span className="block truncate text-xs font-medium text-[#55585e]">
-                      {current ? "当前快照" : "历史快照"} · {researchModeLabel(run.mode)}
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left"
+                    onClick={() => onSelectResearchRun?.(run.id)}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-xs font-medium text-[#55585e]">
+                        {current ? "当前快照" : "历史快照"} · {researchModeLabel(run.mode)}
+                      </span>
+                      <span className="mt-1 block text-[11px] text-[#85878c]">
+                        {formatArticleFullDate(run.createdAt)}
+                      </span>
                     </span>
-                    <span className="mt-1 block text-[11px] text-[#85878c]">
-                      {formatArticleFullDate(run.createdAt)}
+                    <span className="shrink-0 text-[11px] text-[#85878c]">
+                      {researchStatusLabel(run.status)}
                     </span>
-                  </span>
-                  <span className="shrink-0 text-[11px] text-[#85878c]">
-                    {researchStatusLabel(run.status)}
-                  </span>
-                </button>
+                  </button>
+                  {!active && onDeleteResearch && (
+                    <button
+                      type="button"
+                      className="grid size-7 shrink-0 place-items-center rounded-md text-[#85878c] hover:bg-[#fbe9e4] hover:text-[#a64a35] disabled:cursor-wait disabled:opacity-70"
+                      aria-label="删除研究记录"
+                      title="删除研究记录"
+                      disabled={deletingResearchRunId !== null}
+                      onClick={event => {
+                        event.stopPropagation();
+                        onDeleteResearch(run.id);
+                      }}
+                    >
+                      {deleting ? (
+                        <Loader2 size={15} className="animate-spin" />
+                      ) : (
+                        <Trash2 size={15} />
+                      )}
+                    </button>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -473,7 +509,11 @@ function ArticleResearchSection({
         </div>
       )}
 
-      {!researchRun && error && <p className="mt-4 text-sm leading-6 text-[#8a3e24]">{error}</p>}
+      {error && (
+        <p className="mt-4 text-sm leading-6 text-[#8a3e24]" role="alert">
+          {error}
+        </p>
+      )}
 
       {!researchRun ? null : (
         <>
@@ -485,6 +525,10 @@ function ArticleResearchSection({
               </p>
             ) : isActive ? (
               <p className="mt-3 text-sm leading-6 text-[#85878c]">研究处理中</p>
+            ) : errorMessage ? (
+              <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-[#a33f31]" role="alert">
+                {errorMessage}
+              </p>
             ) : (
               <p className="mt-3 text-sm leading-6 text-[#85878c]">暂未生成结论</p>
             )}

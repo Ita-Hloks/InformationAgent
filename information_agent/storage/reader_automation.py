@@ -359,6 +359,109 @@ class ReaderAutomationPersistenceMixin:
             ).fetchone()
         return _research_run_from_row(row) if row is not None else None
 
+    def delete_article_research_run(
+        self,
+        run_id: str,
+        *,
+        article_id: str | None = None,
+    ) -> None:
+        normalized_run_id = run_id.strip()
+        if not normalized_run_id:
+            raise ValueError("文章研究运行 ID 不能为空")
+        normalized_article_id = article_id.strip() if article_id is not None else None
+        if article_id is not None and not normalized_article_id:
+            raise ValueError("文章 ID 不能为空")
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT article_id, status FROM article_research_runs WHERE id = ?",
+                (normalized_run_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(normalized_run_id)
+            if normalized_article_id is not None and row["article_id"] != normalized_article_id:
+                raise KeyError(normalized_run_id)
+            if row["status"] in _ACTIVE_RESEARCH_STATUSES:
+                raise ValueError("运行中的文章研究不能删除，请先停止研究")
+
+            connection.execute(
+                """
+                DELETE FROM analysis_artifacts
+                WHERE analysis_run_id IN (
+                    SELECT id FROM analysis_runs WHERE research_run_id = ?
+                )
+                """,
+                (normalized_run_id,),
+            )
+            connection.execute(
+                """
+                DELETE FROM analysis_attempts
+                WHERE analysis_step_id IN (
+                    SELECT id FROM analysis_steps
+                    WHERE analysis_run_id IN (
+                        SELECT id FROM analysis_runs WHERE research_run_id = ?
+                    )
+                )
+                """,
+                (normalized_run_id,),
+            )
+            connection.execute(
+                """
+                DELETE FROM analysis_steps
+                WHERE analysis_run_id IN (
+                    SELECT id FROM analysis_runs WHERE research_run_id = ?
+                )
+                """,
+                (normalized_run_id,),
+            )
+            connection.execute(
+                "DELETE FROM analysis_runs WHERE research_run_id = ?",
+                (normalized_run_id,),
+            )
+            connection.execute(
+                """
+                DELETE FROM search_queries
+                WHERE plan_id IN (
+                    SELECT id FROM search_plans WHERE run_id = ?
+                )
+                """,
+                (normalized_run_id,),
+            )
+            connection.execute(
+                """
+                DELETE FROM opinion_queries
+                WHERE plan_id IN (
+                    SELECT id FROM opinion_plans WHERE run_id = ?
+                )
+                """,
+                (normalized_run_id,),
+            )
+            connection.execute(
+                "DELETE FROM search_plans WHERE run_id = ?",
+                (normalized_run_id,),
+            )
+            connection.execute(
+                "DELETE FROM opinion_plans WHERE run_id = ?",
+                (normalized_run_id,),
+            )
+            connection.execute(
+                "DELETE FROM planning_runs WHERE run_id = ?",
+                (normalized_run_id,),
+            )
+            connection.execute(
+                "DELETE FROM run_evidence WHERE run_id = ?",
+                (normalized_run_id,),
+            )
+            connection.execute(
+                "DELETE FROM article_research_runs WHERE id = ?",
+                (normalized_run_id,),
+            )
+            connection.execute(
+                "DELETE FROM research_runs WHERE id = ?",
+                (normalized_run_id,),
+            )
+
     def article_snapshot_belongs_to_article(self, article_id: str, snapshot_id: str) -> bool:
         with self._connect() as connection:
             row = connection.execute(

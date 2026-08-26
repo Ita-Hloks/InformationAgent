@@ -317,10 +317,12 @@ class SQLiteCollectionStore(
                        summaries.error_json AS summary_error,
                        COALESCE((SELECT research.status FROM article_research_runs AS research
                                  WHERE research.article_id = entries.article_id
+                                   AND research.snapshot_id = snapshots.id
                                  ORDER BY research.created_at DESC, research.rowid DESC LIMIT 1),
                                 'none') AS research_status,
                        (SELECT research.mode FROM article_research_runs AS research
                         WHERE research.article_id = entries.article_id
+                          AND research.snapshot_id = snapshots.id
                         ORDER BY research.created_at DESC, research.rowid DESC LIMIT 1
                        ) AS research_mode,
                        COALESCE(states.is_read, 0) AS is_read,
@@ -357,10 +359,12 @@ class SQLiteCollectionStore(
                        summaries.error_json AS summary_error,
                        COALESCE((SELECT research.status FROM article_research_runs AS research
                                  WHERE research.article_id = entries.article_id
+                                   AND research.snapshot_id = snapshots.id
                                  ORDER BY research.created_at DESC, research.rowid DESC LIMIT 1),
                                 'none') AS research_status,
                        (SELECT research.mode FROM article_research_runs AS research
                         WHERE research.article_id = entries.article_id
+                          AND research.snapshot_id = snapshots.id
                         ORDER BY research.created_at DESC, research.rowid DESC LIMIT 1
                        ) AS research_mode,
                        COALESCE(states.is_read, 0) AS is_read,
@@ -417,10 +421,12 @@ class SQLiteCollectionStore(
                        summaries.error_json AS summary_error,
                        COALESCE((SELECT research.status FROM article_research_runs AS research
                                  WHERE research.article_id = entries.article_id
+                                   AND research.snapshot_id = snapshots.id
                                  ORDER BY research.created_at DESC, research.rowid DESC LIMIT 1),
                                 'none') AS research_status,
                        (SELECT research.mode FROM article_research_runs AS research
                         WHERE research.article_id = entries.article_id
+                          AND research.snapshot_id = snapshots.id
                         ORDER BY research.created_at DESC, research.rowid DESC LIMIT 1
                        ) AS research_mode,
                        COALESCE(states.is_read, 0) AS is_read,

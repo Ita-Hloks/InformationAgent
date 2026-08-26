@@ -393,6 +393,13 @@ export async function stopArticleResearch(
   return toArticleResearchRun(payload);
 }
 
+export async function deleteArticleResearch(articleId: string, runId: string): Promise<void> {
+  await request<void>(
+    `/api/articles/${encodeURIComponent(articleId)}/research/${encodeURIComponent(runId)}`,
+    { method: "DELETE" },
+  );
+}
+
 export async function updateArticleStates(
   articleIds: string[],
   update: ArticleStateUpdate,

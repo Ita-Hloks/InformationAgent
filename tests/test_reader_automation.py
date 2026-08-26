@@ -177,6 +177,57 @@ class _BlockingAgentTasks:
         return None
 
 
+class _FailedAgentTasks:
+    def submit(self, research_run_id: str, **_: object) -> dict[str, object]:
+        return {"analysis_run_id": f"analysis-{research_run_id}", "status": "running"}
+
+    def wait(self, _request_id: str, timeout: float | None = None) -> dict[str, object]:
+        return {
+            "analysis_run_id": "analysis-failed",
+            "status": "failed",
+            "error": {
+                "type": "BadRequestError",
+                "message": "文章研究请求参数无效",
+            },
+        }
+
+    def shutdown(self) -> None:
+        return None
+
+
+def test_article_research_persists_agent_failure_and_error(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    article = service.list_articles()[0]
+    settings = service.store.get_reader_automation_settings()
+    manager = ArticleResearchTaskManager(
+        service.store.database_path,
+        store=service.store,
+        agent_tasks=_FailedAgentTasks(),
+    )
+    run = service.store.create_article_research_run(
+        article,
+        mode="manual",
+        config={
+            "timeout_seconds": settings.agent_timeout_seconds,
+            "max_steps": settings.max_searches,
+            "max_attempts": settings.max_attempts,
+        },
+    )
+
+    try:
+        manager._run_one(run.id)
+    finally:
+        manager.shutdown()
+
+    persisted = service.store.get_article_research_run(run.id)
+    assert persisted is not None
+    assert persisted.status == "failed"
+    assert persisted.error == {
+        "type": "BadRequestError",
+        "message": "文章研究请求参数无效",
+    }
+
+
 def test_manual_article_research_precedes_queued_auto_work(tmp_path: Path) -> None:
     service = _service(tmp_path)
     articles = service.list_articles()

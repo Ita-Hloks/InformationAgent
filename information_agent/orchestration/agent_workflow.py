@@ -226,6 +226,8 @@ class _AgentRunRecorder:
             if persisted_report.status is RunStatus.COMPLETED
             else AnalysisRunStatus.CANCELLED
             if persisted_report.stop_reason is AgentStopReason.CANCELLED
+            else AnalysisRunStatus.FAILED
+            if persisted_report.status is RunStatus.FAILED
             else AnalysisRunStatus.PARTIAL
         )
         error = (
@@ -576,7 +578,7 @@ def _failed_report(
     return AgentReport(
         run_id,
         topic,
-        RunStatus.PARTIAL,
+        RunStatus.FAILED,
         evidence,
         plans,
         answers,
