@@ -24,7 +24,7 @@ from ..common import (
 )
 from ..contracts import ContentType
 from ._http import content_length_exceeds_limit
-from .images import extract_image_url_from_html
+from .images import extract_image_url_from_html, image_url_is_accessible
 from .models import RawFeedEntry
 
 MAX_PAGE_BYTES = 2 * 1024 * 1024
@@ -105,16 +105,43 @@ def fetch_article(
 def _augment_item(item: RawFeedEntry, timeout: float) -> RawFeedEntry:
     fetched = fetch_article(item.source_url, timeout=timeout, _return_details=True)
     if fetched is None:
-        return item
+        return replace(
+            item,
+            image_url=_first_accessible_image_url((item.image_url,), timeout=timeout),
+        )
     if isinstance(fetched, ArticleFetchResult):
         return replace(
             item,
             content=fetched.content,
             content_type=ContentType.RSS_CONTENT,
             content_blocks=fetched.content_blocks,
-            image_url=fetched.image_url or item.image_url,
+            image_url=_first_accessible_image_url(
+                (fetched.image_url, item.image_url),
+                timeout=timeout,
+            ),
         )
-    return replace(item, content=fetched, content_type=ContentType.RSS_CONTENT)
+    return replace(
+        item,
+        content=fetched,
+        content_type=ContentType.RSS_CONTENT,
+        image_url=_first_accessible_image_url((item.image_url,), timeout=timeout),
+    )
+
+
+def _first_accessible_image_url(
+    candidates: tuple[str | None, ...],
+    *,
+    timeout: float,
+) -> str | None:
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized_url = normalize_url(candidate or "")
+        if normalized_url is None or normalized_url in seen:
+            continue
+        seen.add(normalized_url)
+        if image_url_is_accessible(normalized_url, timeout=timeout):
+            return normalized_url
+    return None
 
 
 def _extract_article_result(html: str, normalized_url: str) -> ArticleFetchResult | None:
@@ -238,12 +265,15 @@ def augment_evidence(
 
     for i, item in enumerate(items):
         if item.content_type != ContentType.RSS_SUMMARY:
-            results[i] = item
+            results[i] = replace(
+                item,
+                image_url=_first_accessible_image_url((item.image_url,), timeout=timeout),
+            )
         else:
             to_fetch.append((i, item))
 
     if not to_fetch:
-        return items
+        return [results[i] for i in range(len(items))]
 
     worker_count = min(max_workers, len(to_fetch))
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
