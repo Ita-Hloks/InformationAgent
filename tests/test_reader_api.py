@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from information_agent.api import create_app
 from information_agent.collection import FeedFetchResult, RawFeedEntry
 from information_agent.contracts import PROJECT_TIMEZONE, ContentType
+from information_agent.normalization import normalize_evidence
 from information_agent.reader import ReaderService
 from information_agent.storage import ArticleResearchRun, ReaderArticle, SQLiteCollectionStore
 
@@ -259,6 +260,69 @@ def test_feed_refresh_updates_entries_and_preserves_not_modified_articles(tmp_pa
     assert requests == [(None, None), ('"v1"', None), ('"v2"', None)]
 
 
+def test_article_research_status_is_bound_to_current_snapshot(tmp_path: Path) -> None:
+    feed_url = "https://example.com/rss.xml"
+    entries = [
+        RawFeedEntry(
+            source_url="https://example.com/reader-api-article",
+            title="快照状态测试文章",
+            content=content,
+            feed_url=feed_url,
+            entry_id="entry-1",
+            updated_at=marker,
+            collected_at=collected_at,
+            content_type=ContentType.RSS_CONTENT,
+        )
+        for content, marker, collected_at in (
+            (
+                "这是旧快照正文，内容足够长并且会保存研究状态。" * 8,
+                "2026-08-24T10:00:00+08:00",
+                datetime(2026, 8, 24, 10, tzinfo=PROJECT_TIMEZONE),
+            ),
+            (
+                "这是新快照正文，当前文章不应继承旧快照的研究状态。" * 8,
+                "2026-08-24T11:00:00+08:00",
+                datetime(2026, 8, 24, 11, tzinfo=PROJECT_TIMEZONE),
+            ),
+        )
+    ]
+    responses = [
+        FeedFetchResult(feed_url, [entries[0]], '"v1"', None),
+        FeedFetchResult(feed_url, [entries[1]], '"v2"', None),
+    ]
+
+    def fetcher(_url: str, _timeout: float, **_: object) -> FeedFetchResult:
+        return responses.pop(0)
+
+    client, store, _, _ = _app(tmp_path, fetcher=fetcher)
+    created = client.post("/api/feeds", json={"url": feed_url})
+    assert created.status_code == 200
+    article_id = client.get("/api/articles").json()[0]["id"]
+    old_article = store.get_reader_article(article_id)
+    assert old_article is not None
+    old_run = store.create_article_research_run(
+        old_article,
+        mode="manual",
+        config={"timeout_seconds": 180, "max_steps": 1, "max_attempts": 1},
+    )
+    store.update_article_research_run(old_run.id, status="partial", expected_status="queued")
+
+    store.save_subscription(
+        feed_url=feed_url,
+        title="快照状态测试文章",
+        site_url=None,
+        result_etag='"v2"',
+        result_last_modified=None,
+        entries=[entries[1]],
+        articles=normalize_evidence([entries[1]]),
+    )
+
+    current = client.get("/api/articles").json()[0]
+    assert current["snapshot_id"] != old_article.snapshot_id
+    assert current["research_status"] == "none"
+    assert current["research_mode"] is None
+
+
 def test_historical_snapshot_schema_is_migrated_once(tmp_path: Path) -> None:
     database_path = tmp_path / "legacy.db"
     with sqlite3.connect(database_path) as connection:
@@ -465,6 +529,95 @@ def test_article_research_detail_and_stop_are_scoped_to_article(
     assert missing_run.status_code == 404
     wrong_article = client.get(f"/api/articles/missing/research/{run_id}")
     assert wrong_article.status_code == 404
+
+
+def test_article_research_history_can_delete_finished_runs_but_not_active_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, store, _, _ = _app(tmp_path, monkeypatch=monkeypatch)
+    article_id = _create_article(client)
+    created = client.post(f"/api/articles/{article_id}/research", json={"mode": "manual"})
+    run_id = created.json()["run_id"]
+
+    active_delete = client.delete(f"/api/articles/{article_id}/research/{run_id}")
+    assert active_delete.status_code == 409
+    assert active_delete.json()["detail"]["code"] == "article_research_active"
+
+    store.update_article_research_run(run_id, status="completed", expected_status="queued")
+    analysis = store.create_analysis_run(
+        run_id,
+        "agent_research",
+        {"max_attempts": 1},
+        idempotency_key="delete-history-analysis",
+    )
+    step = store.create_analysis_step(analysis.id, 1, "decision-1")
+    attempt = store.create_analysis_attempt(
+        step.id,
+        "agent_decision",
+        "request-hash",
+        "attempt-1",
+    )
+    store.record_analysis_artifact(
+        analysis.id,
+        "request",
+        {"topic": "删除测试"},
+        artifact_key="attempt-1:request",
+        step_id=step.id,
+        attempt_id=attempt.id,
+    )
+    deleted = client.delete(f"/api/articles/{article_id}/research/{run_id}")
+    assert deleted.status_code == 204
+    assert deleted.content == b""
+    assert client.get(f"/api/articles/{article_id}/research/{run_id}").status_code == 404
+    assert client.get(f"/api/articles/{article_id}/research").json()["runs"] == []
+
+    with sqlite3.connect(store.database_path) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM article_research_runs WHERE id = ?", (run_id,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM research_runs WHERE id = ?", (run_id,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM run_evidence WHERE run_id = ?", (run_id,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM analysis_runs WHERE id = ?", (analysis.id,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM analysis_steps WHERE id = ?", (step.id,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM analysis_attempts WHERE id = ?", (attempt.id,)
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM analysis_artifacts WHERE analysis_run_id = ?",
+                (analysis.id,),
+            ).fetchone()[0]
+            == 0
+        )
+
+    assert client.delete(f"/api/articles/{article_id}/research/{run_id}").status_code == 404
 
 
 def test_create_app_shuts_down_injected_background_managers(tmp_path: Path) -> None:
