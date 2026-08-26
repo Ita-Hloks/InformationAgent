@@ -56,9 +56,9 @@ def request_json_completion(
             metadata=metadata,
         )
         try:
+            # 通过提示约束 JSON，兼容不支持 response_format 的 OpenAI-compatible 网关。
             response = client.with_options(timeout=timeout).chat.completions.create(
                 model=model,
-                response_format={"type": "json_object"},
                 messages=messages,
             )
             content = response.choices[0].message.content or ""
