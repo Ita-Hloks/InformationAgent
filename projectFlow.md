@@ -1,17 +1,17 @@
 # Information Agent 流程说明
 
-本文记录当前实现中的阅读器、文章研究、通用 Agent 和舆情边界。主题级“任意 RSS/Atom -> 采集入库 -> 证据集 -> Agent”业务已经废除；不会保留旧 API、旧 CLI 或兼容别名。
+本文记录当前实现中的阅读器、文章研究、通用 Agent 和舆情边界。
 
 ## 1. 当前产品边界
 
-系统有两条保留路径：
+系统由以下路径组成：
 
 - 阅读器路径：订阅 RSS/Atom、刷新来源、保存文章正文快照、维护阅读状态
 - 文章研究路径：从阅读器当前文章快照创建自动或手动研究任务，并在该快照上运行通用 Agent
 
-舆情分析是独立保留业务。其后端、API、服务、CLI 和持久化主体不因阅读器研究迁移而改变；文章研究只复用通用 Agent 生命周期和底层运行关系。
+舆情分析是独立业务。其后端、API、服务、CLI 和持久化主体独立运行；文章研究复用通用 Agent 生命周期和底层运行关系。
 
-一次性 CLI 的 `collect`、`analyze`、`plan`、`search` 和搜索验证仍按各自现有契约执行，但它们不是阅读器研究历史的入口，也不会为前端提供主题级运行列表。
+一次性 CLI 的 `collect`、`analyze`、`plan`、`search` 和搜索验证按各自契约执行。
 
 ## 2. 阅读器数据流
 
@@ -29,7 +29,7 @@ flowchart LR
     E --> K[舆情分析]
 ```
 
-Feed 刷新只负责把订阅内容变成文章快照。旧的主题采集入库链不再作为独立业务存在。文章研究必须使用阅读器已经存在的 `article_id` 和 `snapshot_id`，不能接收任意主题和任意 Feed 地址作为入口。
+Feed 刷新负责把订阅内容变成文章快照。文章研究使用阅读器已有的 `article_id` 和 `snapshot_id` 作为入口。
 
 ## 3. 文章快照契约
 
@@ -82,7 +82,7 @@ queued -> running -> completed
 | `GET` | `/api/articles/{article_id}/opinion` | 读取舆情状态 |
 | `POST` | `/api/articles/{article_id}/opinion` | 显式触发舆情分析 |
 
-已废除的 `/api/research/*` 主题级入口统一不再注册，访问结果为 `404`。前端只通过文章研究接口工作，不再加载独立研究页面或全局研究运行列表。
+前端通过文章研究接口工作，研究历史按文章归属加载。
 
 ## 7. CLI 边界
 
@@ -90,7 +90,7 @@ queued -> running -> completed
 
 | 命令 | 作用 |
 | --- | --- |
-| `collect` | 采集并输出筛选结果，不写入主题研究运行列表 |
+| `collect` | 采集并输出筛选结果 |
 | `analyze` | 一次性采集并分析 |
 | `plan` | 一次性生成搜索计划 |
 | `search` | 一次性采集、规划并联网回答 |
@@ -98,7 +98,7 @@ queued -> running -> completed
 | `opinion-status` | 读取文章舆情状态 |
 | `verify-search` | 验证联网搜索配置 |
 
-`ingest`、`plan-run`、`list-runs` 和 `agent-run` 已删除，不保留兼容命令。通用 Agent 的持久化执行由文章研究后台任务调用；CLI 不再以主题运行 ID 作为前端研究入口。
+通用 Agent 的持久化执行由文章研究后台任务调用；一次性 CLI 用于采集、分析、规划和搜索。
 
 ## 8. 持久化关系
 
@@ -116,7 +116,7 @@ analysis_steps -- analysis_attempts
 analysis_artifacts
 ```
 
-`opinion_runs` 及其评论、分类和尝试关系属于舆情业务，保持独立。清理废弃主题数据时，只删除未被 `article_research_runs` 关联的旧 `research_runs` 及其派生规划、分析和证据记录，不删除文章研究运行、文章快照、订阅或 `opinion_runs`。
+`opinion_runs` 及其评论、分类和尝试关系属于舆情业务，保持独立。
 
 ## 9. 前端数据流
 
@@ -151,5 +151,4 @@ AppRoutes -> ReaderWorkspacePage
 3. 已结束后手动请求可以创建历史记录
 4. 历史列表不包含 Agent 详情，详情按文章归属校验
 5. 排队和运行中停止都能收口，Agent 部分结果仍可读取
-6. 旧 `/api/research/*` 路由返回 `404`
-7. 舆情接口行为没有变化
+6. 舆情接口行为符合独立业务契约
