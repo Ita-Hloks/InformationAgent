@@ -7,6 +7,7 @@ from threading import Event, Lock
 from information_agent.collection import FeedFetchResult, RawFeedEntry
 from information_agent.contracts import PROJECT_TIMEZONE, ContentType
 from information_agent.orchestration.article_research_tasks import ArticleResearchTaskManager
+from information_agent.orchestration.summary_tasks import SummaryTaskManager
 from information_agent.reader import ReaderService
 
 
@@ -21,6 +22,7 @@ def _fetcher(feed_url: str, _timeout: float, **_: object) -> FeedFetchResult:
                 title="自动研究文章" if index == 1 else f"自动研究文章 {index}",
                 content=(
                     f"这是第 {index} 篇用于摘要和自动研究的正文内容，长度足以通过文章规范化边界。"
+                    + "补充正文内容。" * 50
                 ),
                 feed_url=feed_url,
                 content_type=ContentType.RSS_CONTENT,
@@ -35,6 +37,24 @@ def _service(tmp_path: Path) -> ReaderService:
     service = ReaderService(tmp_path / "reader.db", fetcher=_fetcher)
     service.subscribe("https://example.com/rss.xml")
     return service
+
+
+def _short_fetcher(feed_url: str, _timeout: float, **_: object) -> FeedFetchResult:
+    return FeedFetchResult(
+        feed_url=feed_url,
+        etag='"v1"',
+        last_modified=None,
+        entries=[
+            RawFeedEntry(
+                source_url="https://example.com/short-article",
+                title="短正文文章",
+                content="短正文内容。" * 20,
+                feed_url=feed_url,
+                content_type=ContentType.RSS_CONTENT,
+                published_at=datetime(2026, 8, 24, tzinfo=PROJECT_TIMEZONE),
+            )
+        ],
+    )
 
 
 def test_article_summary_is_cached_by_snapshot_and_can_retry(tmp_path: Path) -> None:
@@ -64,6 +84,28 @@ def test_article_summary_is_cached_by_snapshot_and_can_retry(tmp_path: Path) -> 
     remaining = service.store.claim_summary_job()
     assert remaining is not None
     assert remaining.snapshot_id != first.snapshot_id
+
+
+def test_short_article_skips_summary_generation(tmp_path: Path) -> None:
+    service = ReaderService(tmp_path / "short-reader.db", fetcher=_short_fetcher)
+    service.subscribe("https://example.com/short-rss.xml")
+    article = service.list_articles()[0]
+    assert len(article.article.content) < 300
+    assert article.summary is None
+    assert article.summary_status == "skipped"
+    assert service.store.claim_summary_job(preferred_snapshot_id=article.snapshot_id) is None
+
+    processed: list[str] = []
+    manager = SummaryTaskManager(
+        service.store,
+        runner=lambda job: processed.append(job.snapshot_id) or "摘要第一句。摘要第二句。",
+    )
+    try:
+        assert manager.wait_until_idle(1)
+    finally:
+        manager.shutdown()
+
+    assert processed == []
 
 
 def test_reader_automation_settings_persist_and_validate(tmp_path: Path) -> None:

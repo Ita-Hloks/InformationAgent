@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..collection import RawFeedEntry
+from ..common import should_generate_article_summary
 from ..contracts import CollectionReport, ContentType, project_now
 from ..investigation import (
     OPINION_PLATFORM,
@@ -394,22 +395,7 @@ class SQLiteCollectionStore(
         parameters.extend((limit, offset))
         with self._connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
-        return [
-            ReaderArticle(
-                feed_id=str(row["feed_id"]),
-                article=_article_from_payload(json.loads(row["payload_json"])),
-                is_read=bool(row["is_read"]),
-                is_saved=bool(row["is_saved"]),
-                snapshot_id=str(row["snapshot_id"]),
-                content_hash=str(row["content_hash"]),
-                summary=_optional_text(row["summary"]),
-                summary_status=str(row["summary_status"] or "pending"),
-                summary_error=_summary_error_message(row["summary_error"]),
-                research_status=str(row["research_status"] or "none"),
-                research_mode=_optional_text(row["research_mode"]),
-            )
-            for row in rows
-        ]
+        return [_reader_article_from_row(row) for row in rows]
 
     def get_reader_article(self, article_id: str) -> ReaderArticle | None:
         with self._connect() as connection:
@@ -452,19 +438,7 @@ class SQLiteCollectionStore(
             ).fetchone()
         if row is None:
             return None
-        return ReaderArticle(
-            feed_id=str(row["feed_id"]),
-            article=_article_from_payload(json.loads(row["payload_json"])),
-            is_read=bool(row["is_read"]),
-            is_saved=bool(row["is_saved"]),
-            snapshot_id=str(row["snapshot_id"]),
-            content_hash=str(row["content_hash"]),
-            summary=_optional_text(row["summary"]),
-            summary_status=str(row["summary_status"] or "pending"),
-            summary_error=_summary_error_message(row["summary_error"]),
-            research_status=str(row["research_status"] or "none"),
-            research_mode=_optional_text(row["research_mode"]),
-        )
+        return _reader_article_from_row(row)
 
     def update_reader_article_states(
         self,
@@ -1376,20 +1350,21 @@ class SQLiteCollectionStore(
                         existing["id"],
                     ),
                 )
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO article_summaries (
-                    snapshot_id, content_hash, status, summary, error_json,
-                    attempts, created_at, updated_at, finished_at
-                ) VALUES (?, ?, 'pending', NULL, NULL, 0, ?, ?, NULL)
-                """,
-                (
-                    existing["id"],
-                    content_hash,
-                    _format_datetime(project_now()),
-                    _format_datetime(project_now()),
-                ),
-            )
+            if should_generate_article_summary(article.content):
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO article_summaries (
+                        snapshot_id, content_hash, status, summary, error_json,
+                        attempts, created_at, updated_at, finished_at
+                    ) VALUES (?, ?, 'pending', NULL, NULL, 0, ?, ?, NULL)
+                    """,
+                    (
+                        existing["id"],
+                        content_hash,
+                        _format_datetime(project_now()),
+                        _format_datetime(project_now()),
+                    ),
+                )
             return str(existing["id"])
 
         created_at = _format_datetime(project_now())
@@ -1417,20 +1392,21 @@ class SQLiteCollectionStore(
                 created_at,
             ),
         )
-        connection.execute(
-            """
-            INSERT INTO article_summaries (
-                snapshot_id, content_hash, status, summary, error_json,
-                attempts, created_at, updated_at, finished_at
-            ) VALUES (?, ?, 'pending', NULL, NULL, 0, ?, ?, NULL)
-            """,
-            (
-                snapshot_id,
-                content_hash,
-                created_at,
-                created_at,
-            ),
-        )
+        if should_generate_article_summary(article.content):
+            connection.execute(
+                """
+                INSERT INTO article_summaries (
+                    snapshot_id, content_hash, status, summary, error_json,
+                    attempts, created_at, updated_at, finished_at
+                ) VALUES (?, ?, 'pending', NULL, NULL, 0, ?, ?, NULL)
+                """,
+                (
+                    snapshot_id,
+                    content_hash,
+                    created_at,
+                    created_at,
+                ),
+            )
         return snapshot_id
 
     def _record_feed_observation(
@@ -2241,6 +2217,27 @@ def _reader_article_state_from_row(row: sqlite3.Row) -> ReaderArticleState:
         read_at=_optional_text(row["read_at"]),
         saved_at=_optional_text(row["saved_at"]),
         updated_at=str(row["updated_at"]),
+    )
+
+
+def _reader_article_from_row(row: sqlite3.Row) -> ReaderArticle:
+    article = _article_from_payload(json.loads(row["payload_json"]))
+    summary = _optional_text(row["summary"])
+    summary_status = str(row["summary_status"] or "pending")
+    if summary is None and not should_generate_article_summary(article.content):
+        summary_status = "skipped"
+    return ReaderArticle(
+        feed_id=str(row["feed_id"]),
+        article=article,
+        is_read=bool(row["is_read"]),
+        is_saved=bool(row["is_saved"]),
+        snapshot_id=str(row["snapshot_id"]),
+        content_hash=str(row["content_hash"]),
+        summary=summary,
+        summary_status=summary_status,
+        summary_error=_summary_error_message(row["summary_error"]),
+        research_status=str(row["research_status"] or "none"),
+        research_mode=_optional_text(row["research_mode"]),
     )
 
 

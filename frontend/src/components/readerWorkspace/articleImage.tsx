@@ -1,35 +1,31 @@
-import { ImageOff, RefreshCw } from "lucide-react";
+import { ExternalLink, ImageOff } from "lucide-react";
 import { useEffect, useState } from "react";
 
 type ArticleImageProps = {
   src: string;
   alt: string;
-  label: string;
   className?: string;
   errorClassName?: string;
   imageClassName?: string;
+  fallbackHref?: string;
   loading?: "eager" | "lazy";
-  showRetry?: boolean;
   variant?: "hero" | "inline" | "thumbnail";
 };
 
 export function ArticleImage({
   src,
   alt,
-  label,
   className = "",
   errorClassName,
   imageClassName = "h-full w-full object-cover",
+  fallbackHref,
   loading,
-  showRetry = true,
   variant = "inline",
 }: ArticleImageProps) {
   const [failed, setFailed] = useState(false);
-  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     setFailed(false);
-    setRetryCount(0);
   }, [src]);
 
   if (failed) {
@@ -43,7 +39,7 @@ export function ArticleImage({
           <ImageOff size={compact ? 13 : 20} className="shrink-0" aria-hidden="true" />
           <div className={compact ? "min-w-0" : "text-center"}>
             <p className={compact ? "truncate text-[10px] font-medium" : "text-sm font-medium"}>
-              {compact ? "图片不可用" : `${label}加载失败`}
+              {compact ? "图片不可用" : "来源站限制或图片暂时不可访问"}
             </p>
             {!compact && (
               <p className="mt-0.5 max-w-[36rem] break-words text-xs leading-5 text-[#8f493d]">
@@ -51,20 +47,18 @@ export function ArticleImage({
               </p>
             )}
           </div>
-          {showRetry && !compact && (
-            <button
-              type="button"
+          {!compact && fallbackHref && (
+            <a
+              href={fallbackHref}
+              target="_blank"
+              rel="noreferrer"
               className="mt-1 inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[#e3a39a] bg-white px-2.5 text-xs font-medium text-[#8f493d] hover:bg-[#fbe2dc]"
-              aria-label={`重试${label}`}
-              title={`重试${label}`}
-              onClick={() => {
-                setFailed(false);
-                setRetryCount(current => current + 1);
-              }}
+              aria-label="打开原文查看图片"
+              title="打开原文查看图片"
             >
-              <RefreshCw size={14} />
-              重试
-            </button>
+              <ExternalLink size={14} />
+              打开原文
+            </a>
           )}
         </div>
       </div>
@@ -74,7 +68,6 @@ export function ArticleImage({
   return (
     <div className={className}>
       <img
-        key={`${src}-${retryCount}`}
         className={imageClassName}
         src={src}
         alt={alt}

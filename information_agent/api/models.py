@@ -83,7 +83,7 @@ class ArticleResponse(BaseModel):
     content: str
     content_blocks: list[ArticleContentBlockResponse]
     summary: str | None
-    summary_status: Literal["pending", "running", "completed", "failed"]
+    summary_status: Literal["pending", "running", "completed", "failed", "skipped"]
     summary_error: str | None
     research_status: Literal[
         "none", "queued", "running", "completed", "partial", "failed", "cancelled"

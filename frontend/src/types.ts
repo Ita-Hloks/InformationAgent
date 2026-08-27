@@ -1,6 +1,6 @@
 export type LibraryView = "inbox" | "today" | "all" | "saved";
 
-export type SummaryStatus = "pending" | "running" | "completed" | "failed";
+export type SummaryStatus = "pending" | "running" | "completed" | "failed" | "skipped";
 export type ResearchStatus =
   "none" | "queued" | "running" | "completed" | "partial" | "failed" | "cancelled";
 export type ResearchMode = "auto" | "manual";

@@ -25,7 +25,10 @@ def _fetcher(feed_url: str, _timeout: float, **_: object) -> FeedFetchResult:
             RawFeedEntry(
                 source_url="https://example.com/reader-api-article",
                 title="Reader API 测试文章",
-                content="这是用于 Reader API 测试的正文，包含足够的信息供摘要和研究任务使用。",
+                content=(
+                    "这是用于 Reader API 测试的正文，包含足够的信息供摘要和研究任务使用。"
+                    + "补充正文内容。" * 50
+                ),
                 feed_url=feed_url,
                 content_type=ContentType.RSS_CONTENT,
                 published_at=datetime(2026, 8, 24, tzinfo=PROJECT_TIMEZONE),

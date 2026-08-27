@@ -24,13 +24,20 @@ from .llm import (
     is_retryable_llm_error,
     request_json_completion,
 )
-from .text import CONTENT_BATCH_CHARS, llm_safe_text, split_content
+from .text import (
+    CONTENT_BATCH_CHARS,
+    MIN_ARTICLE_SUMMARY_CONTENT_CHARS,
+    llm_safe_text,
+    should_generate_article_summary,
+    split_content,
+)
 from .url import normalize_url
 
 __all__ = [
     "CallBackup",
     "ContentBlock",
     "CONTENT_BATCH_CHARS",
+    "MIN_ARTICLE_SUMMARY_CONTENT_CHARS",
     "DEFAULT_LLM_MAX_ATTEMPTS",
     "DEFAULT_LLM_TIMEOUT_SECONDS",
     "LLM_RETRY_DELAYS_SECONDS",
@@ -52,4 +59,5 @@ __all__ = [
     "request_json_completion",
     "parse_content_blocks",
     "split_content",
+    "should_generate_article_summary",
 ]

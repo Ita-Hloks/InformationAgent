@@ -61,6 +61,7 @@ export function ReaderWorkspacePage() {
   const [articleResearchLoading, setArticleResearchLoading] = useState(false);
   const [articleResearchError, setArticleResearchError] = useState<string | null>(null);
   const [articleResearchDeleteId, setArticleResearchDeleteId] = useState<string | null>(null);
+  const [articleResearchStoppingId, setArticleResearchStoppingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [savedIds, setSavedIds] = useState(
     () => new Set(initialArticles.filter(article => article.starred).map(article => article.id)),
@@ -221,6 +222,7 @@ export function ReaderWorkspacePage() {
     setArticleResearchDetail(null);
     setArticleResearchError(null);
     setArticleDeleteError(null);
+    setArticleResearchStoppingId(null);
   }, [selectedArticleKey]);
 
   const syncArticleResearchStatus = useCallback((run: ArticleResearchRun) => {
@@ -239,6 +241,21 @@ export function ReaderWorkspacePage() {
       const history = await getArticleResearch(selectedArticleId, { signal });
       if (signal?.aborted) return history;
       setArticleResearchRuns(history.runs);
+      const currentRun = history.runs.find(run => run.snapshotId === selectedSnapshotId);
+      if (currentRun) {
+        syncArticleResearchStatus(currentRun);
+      }
+      setArticleResearchDetail(current => {
+        if (!current) return current;
+        const latest = history.runs.find(run => run.id === current.id);
+        if (!latest || ["queued", "running"].includes(latest.status)) return current;
+        return {
+          ...current,
+          status: latest.status,
+          finishedAt: latest.finishedAt,
+          error: latest.error,
+        };
+      });
       const automaticRun = history.runs.find(
         run => run.mode === "auto" && run.snapshotId === selectedSnapshotId,
       );
@@ -291,6 +308,16 @@ export function ReaderWorkspacePage() {
     selectedArticleResearch && ["queued", "running"].includes(selectedArticleResearch.status),
   );
 
+  useEffect(() => {
+    if (!articleResearchStoppingId) return;
+    const stoppingRun = articleResearchRuns.find(run => run.id === articleResearchStoppingId);
+    if (stoppingRun && !["queued", "running"].includes(stoppingRun.status)) {
+      setArticleResearchStoppingId(current =>
+        current === articleResearchStoppingId ? null : current,
+      );
+    }
+  }, [articleResearchRuns, articleResearchStoppingId]);
+
   const loadArticleResearchDetail = useCallback(
     async (runId: string, signal?: AbortSignal) => {
       if (!selectedArticleId) return;
@@ -298,8 +325,14 @@ export function ReaderWorkspacePage() {
       if (signal?.aborted) return;
       setArticleResearchDetail(detail);
       syncArticleResearchStatus(detail);
+      if (
+        detail.id === articleResearchStoppingId &&
+        !["queued", "running"].includes(detail.status)
+      ) {
+        setArticleResearchStoppingId(current => (current === detail.id ? null : current));
+      }
     },
-    [selectedArticleId, syncArticleResearchStatus],
+    [articleResearchStoppingId, selectedArticleId, syncArticleResearchStatus],
   );
 
   useEffect(() => {
@@ -329,23 +362,26 @@ export function ReaderWorkspacePage() {
 
   useEffect(() => {
     if (!selectedArticleId || !articleResearchActive) return;
+    const pollInterval = articleResearchStoppingId ? 500 : 1500;
     const timer = window.setInterval(() => {
       void loadArticleResearch().catch(error => {
         setArticleResearchError(error instanceof Error ? error.message : "研究记录读取失败");
       });
-    }, 1500);
+    }, pollInterval);
     return () => window.clearInterval(timer);
-  }, [articleResearchActive, loadArticleResearch, selectedArticleId]);
+  }, [articleResearchActive, articleResearchStoppingId, loadArticleResearch, selectedArticleId]);
 
   useEffect(() => {
     if (!selectedArticleId || !selectedArticleResearchId || !selectedResearchActive) return;
+    const pollInterval = articleResearchStoppingId ? 500 : 1500;
     const timer = window.setInterval(() => {
       void loadArticleResearchDetail(selectedArticleResearchId).catch(error => {
         setArticleResearchError(error instanceof Error ? error.message : "研究详情读取失败");
       });
-    }, 1500);
+    }, pollInterval);
     return () => window.clearInterval(timer);
   }, [
+    articleResearchStoppingId,
     loadArticleResearchDetail,
     selectedArticleId,
     selectedArticleResearchId,
@@ -386,7 +422,9 @@ export function ReaderWorkspacePage() {
   const stopArticleResearchForSelected = useCallback(async () => {
     if (!selectedArticleId || !selectedArticleResearch) return;
     if (!["queued", "running"].includes(selectedArticleResearch.status)) return;
+    if (articleResearchStoppingId !== null) return;
     setArticleResearchError(null);
+    setArticleResearchStoppingId(selectedArticleResearch.id);
     try {
       const stoppedRun = await stopArticleResearch(selectedArticleId, selectedArticleResearch.id);
       setArticleResearchRuns(current =>
@@ -394,12 +432,21 @@ export function ReaderWorkspacePage() {
       );
       setArticleResearchDetail(stoppedRun);
       syncArticleResearchStatus(stoppedRun);
+      if (!["queued", "running"].includes(stoppedRun.status)) {
+        setArticleResearchStoppingId(null);
+      }
       setApiStatus("connected");
     } catch (error) {
       setArticleResearchError(error instanceof Error ? error.message : "研究停止失败");
       setApiStatus("unavailable");
+      setArticleResearchStoppingId(null);
     }
-  }, [selectedArticleId, selectedArticleResearch, syncArticleResearchStatus]);
+  }, [
+    articleResearchStoppingId,
+    selectedArticleId,
+    selectedArticleResearch,
+    syncArticleResearchStatus,
+  ]);
 
   useEffect(() => {
     if (
@@ -782,6 +829,7 @@ export function ReaderWorkspacePage() {
                 onSelectResearchRun={selectArticleResearch}
                 researchRun={articleResearchDetail}
                 researchRunning={articleResearchActive}
+                researchStoppingRunId={articleResearchStoppingId}
                 researchLoading={articleResearchLoading}
                 researchError={articleResearchError}
                 deletingResearchRunId={articleResearchDeleteId}
