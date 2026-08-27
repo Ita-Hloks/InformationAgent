@@ -52,7 +52,8 @@ textarea {
   outline: none;
 }
 
-.article-summary-clamp {
+.article-summary-clamp,
+.article-title-clamp {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;

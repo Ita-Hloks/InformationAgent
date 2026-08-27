@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Loader2, RotateCw, Send, Trash2, TriangleAlert, X } from "lucide-react";
+import { Loader2, RotateCw, Send, Sparkles, Trash2, TriangleAlert, X } from "lucide-react";
 
 import {
   askArticle,
@@ -239,9 +239,7 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
       >
         <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/10 px-4">
           <div className="flex items-center gap-2.5">
-            <span className="grid size-8 place-items-center rounded-md bg-[#ef8354] text-[#21130d]">
-              <Bot size={17} />
-            </span>
+            <Sparkles size={17} className="text-[#ef8354]" />
             <div>
               <h2 className="text-sm font-semibold">文章助手</h2>
               <p className="mt-0.5 text-[10px] text-[#838790]">当前文章</p>
@@ -261,7 +259,9 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
           <div className="border-l-2 border-[#ef8354] pl-3">
             <p className="text-[10px] font-medium text-[#8f939b]">当前上下文</p>
-            <h3 className="mt-1.5 text-sm leading-5 font-medium text-[#dedfdb]">{article.title}</h3>
+            <h3 className="article-title-clamp mt-1.5 break-words text-sm leading-5 font-medium text-[#dedfdb]">
+              {article.title}
+            </h3>
             <p className="mt-1 break-all text-[11px] text-[#858992]">{article.sourceUrl}</p>
           </div>
 

@@ -150,7 +150,7 @@ export function ArticleList({
                       <ResearchStatusIcon article={article} />
                     </span>
                     <strong
-                      className={`mt-1.5 block text-[14px] leading-[1.4] tracking-[0] ${
+                      className={`article-title-clamp mt-1.5 block break-words text-[14px] leading-[1.4] tracking-[0] ${
                         article.unread
                           ? "font-semibold text-[#222326]"
                           : "font-medium text-[#4f5156]"
