@@ -170,6 +170,57 @@ def test_llm_retries_recalculate_the_shared_deadline(monkeypatch) -> None:
     assert [item.outcome for item in analyzer.last_attempts] == ["failed", "succeeded"]
 
 
+def test_opinion_planning_prompt_prevents_invalid_query_shape_and_evidence_id(
+    monkeypatch,
+) -> None:
+    article = normalize_evidence(
+        [
+            RawFeedEntry(
+                "https://www.bilibili.com/video/BV1xx",
+                "一篇有争议的文章",
+                "厂商称效果提升 70%，但没有说明完整测试条件。",
+            )
+        ]
+    )[0]
+    invalid_responses = iter(
+        [
+            (
+                '{"opinion_plans":[{"evidence_id":"1",'
+                '"trigger_quote":"效果提升 70%","question":"效果提升的比较基线是否清楚？",'
+                '"queries":["效果提升 70%","测试条件","独立评测"]}]}'
+            ),
+            (
+                '{"opinion_plans":[{"evidence_id":"1-1",'
+                '"trigger_quote":"效果提升 70%","question":"效果提升的比较基线是否清楚？",'
+                '"queries":["效果提升 70%","测试条件"]}]}'
+            ),
+        ]
+    )
+    valid_response = (
+        '{"opinion_plans":[{"evidence_id":1,"trigger_quote":"效果提升 70%",'
+        '"question":"效果提升的比较基线是否清楚？",'
+        '"queries":[{"query":"效果提升 70%","purpose":"寻找相关讨论"}]}]}'
+    )
+    prompts: list[str] = []
+
+    def fake_request_json_completion(**kwargs: object) -> str:
+        system_prompt = str(kwargs["messages"][0]["content"])
+        prompts.append(system_prompt)
+        if "evidence_id 只能是 JSON 整数 1" in system_prompt:
+            assert "queries 必须是对象数组" in system_prompt
+            return valid_response
+        return next(invalid_responses)
+
+    monkeypatch.setattr(opinion_llm, "request_json_completion", fake_request_json_completion)
+    analyzer = LLMOpinionAnalyzer(client=object(), max_attempts=2)
+
+    plans = analyzer.detect_controversies(article, timeout=10)
+
+    assert len(plans) == 1
+    assert len(plans[0].queries) == 1
+    assert len(prompts) == 1
+
+
 def test_opinion_run_creation_is_atomic_under_concurrency(tmp_path: Path) -> None:
     reader = _reader_service(tmp_path / "opinion-concurrent.db")
     reader_article = reader.list_articles()[0]

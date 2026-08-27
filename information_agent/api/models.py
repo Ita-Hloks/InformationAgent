@@ -226,6 +226,45 @@ class OpinionRequest(BaseModel):
     force_refresh: bool = False
 
 
+class OpinionReferenceQueryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_id: int
+    trigger_quote: str
+    question: str
+    query: str
+    purpose: str
+
+
+class OpinionReferenceCandidateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    video_id: str
+    bvid: str | None
+    url: str
+    title: str
+    search_query: str
+    snippet: str | None
+    site_name: str | None
+    published_at: str | None
+    reference: str | None
+    author: str | None
+    tag: str | None
+
+
+class OpinionReferencesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    article_id: str
+    snapshot_id: str
+    content_hash: str
+    status: Literal["completed", "partial"]
+    status_reason: str
+    queries: list[OpinionReferenceQueryResponse]
+    candidates: list[OpinionReferenceCandidateResponse]
+    errors: list[str]
+
+
 class OpinionResponse(BaseModel):
     product_name: str
     article_id: str

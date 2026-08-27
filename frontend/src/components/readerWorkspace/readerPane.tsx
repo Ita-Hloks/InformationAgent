@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
-  Bot,
   Check,
   ChevronDown,
   ExternalLink,
@@ -9,6 +8,7 @@ import {
   Loader2,
   RefreshCw,
   Share2,
+  Sparkles,
   Star,
   Square,
   Trash2,
@@ -122,7 +122,7 @@ export function ReaderPane({
   if (!article) {
     return (
       <section className="flex h-full min-h-0 min-w-0 flex-col bg-[var(--reader-workspace-surface)]">
-        <header className="h-16 shrink-0 border-b border-[var(--reader-workspace-border)]" />
+        <header className="h-12 shrink-0 border-b border-[var(--reader-workspace-border)]" />
         <div className="grid min-h-0 flex-1 place-items-center px-6 text-center">
           <div>
             <FileText size={24} className="mx-auto text-[#a4a5a5]" />
@@ -139,7 +139,7 @@ export function ReaderPane({
 
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col bg-[var(--reader-workspace-surface)]">
-      <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[var(--reader-workspace-border)] px-3 sm:px-4">
+      <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-[var(--reader-workspace-border)] px-3 sm:px-4">
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -195,10 +195,10 @@ export function ReaderPane({
         <div className="flex items-center gap-1">
           <button
             type="button"
-            className="flex h-9 items-center gap-2 rounded-md border border-[var(--reader-workspace-border)] bg-white px-3 text-xs font-medium text-[#34363a] shadow-sm hover:border-[#c9c8c1] hover:bg-[var(--reader-workspace-raised)]"
+            className="flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--reader-workspace-border)] bg-white px-2 text-[11px] font-medium text-[#34363a] shadow-sm hover:border-[#c9c8c1] hover:bg-[var(--reader-workspace-raised)]"
             onClick={onAsk}
           >
-            <Bot size={16} className="text-[#b75f39]" />
+            <Sparkles size={14} className="text-[#b75f39]" />
             向助手提问
           </button>
           <button
@@ -237,7 +237,7 @@ export function ReaderPane({
       )}
 
       <div ref={scrollContainerRef} className="workspace-scroll min-h-0 flex-1 overflow-y-auto">
-        <article className="mx-auto w-full max-w-[760px] px-6 pt-10 pb-20 sm:px-10 sm:pt-14">
+        <article className="mx-auto w-full max-w-[760px] px-6 pt-6 pb-20 sm:px-10 sm:pt-8">
           <div className="flex items-center gap-3 text-xs text-[#77797e]">
             <span className="grid size-8 place-items-center rounded-md bg-[#24272c] text-[10px] font-semibold text-white">
               {article.source.slice(0, 2).toUpperCase()}
@@ -253,35 +253,64 @@ export function ReaderPane({
             </span>
           </div>
 
-          <h1 className="mt-7 text-[32px] leading-[1.18] font-semibold tracking-[0] text-[#202124] sm:text-[40px]">
+          <h1 className="article-title-clamp mt-7 break-words text-[32px] leading-[1.18] font-semibold tracking-[0] text-[#202124] sm:text-[40px]">
             {article.title}
           </h1>
-          {article.summaryStatus === "completed" && article.summary && (
-            <p className="mt-4 text-[17px] leading-7 text-[#696b70]">{article.summary}</p>
-          )}
-          {(article.summaryStatus === "pending" || article.summaryStatus === "running") && (
-            <p className="mt-4 text-[15px] leading-7 text-[#96989c]">摘要生成中</p>
-          )}
-          {article.summaryStatus === "failed" && (
-            <div
-              className="mt-4 flex items-start gap-3 rounded-md border border-[#e3a39a] bg-[#fff5f2] px-3 py-2.5 text-sm leading-6 text-[#a33f31]"
-              role="alert"
+          {(article.summaryStatus !== "completed" || article.summary) && (
+            <section
+              className={`mt-5 rounded-xl border px-4 py-3.5 ${
+                article.summaryStatus === "failed"
+                  ? "border-[#e3a39a] bg-[#fff5f2]"
+                  : "border-[#ead9c9] bg-[#fff8f2]"
+              }`}
+              role={article.summaryStatus === "failed" ? "alert" : undefined}
+              aria-label="LLM 摘要"
             >
-              <p className="min-w-0 flex-1 whitespace-pre-wrap break-words">
-                {article.summaryError ?? "摘要生成失败"}
-              </p>
-              {onRetrySummary && (
-                <button
-                  type="button"
-                  className="grid size-8 shrink-0 place-items-center rounded-md text-[#8f493d] hover:bg-[#fbe2dc]"
-                  aria-label="重试摘要"
-                  title="重试摘要"
-                  onClick={onRetrySummary}
-                >
-                  <RefreshCw size={16} />
-                </button>
+              <div
+                className={`flex items-center gap-2 text-xs font-semibold ${
+                  article.summaryStatus === "failed" ? "text-[#a33f31]" : "text-[#a45132]"
+                }`}
+              >
+                <Sparkles
+                  size={16}
+                  strokeWidth={1.8}
+                  className={
+                    article.summaryStatus === "failed" ? "text-[#a33f31]" : "text-[#b75f39]"
+                  }
+                />
+                <span>LLM 摘要</span>
+              </div>
+
+              {article.summaryStatus === "completed" && article.summary && (
+                <p className="mt-2.5 text-[17px] leading-7 text-[#5f6064]">{article.summary}</p>
               )}
-            </div>
+
+              {(article.summaryStatus === "pending" || article.summaryStatus === "running") && (
+                <div className="mt-2.5 flex items-center gap-2 text-[15px] leading-7 text-[#96989c]">
+                  <Loader2 size={15} className="animate-spin text-[#b75f39]" />
+                  摘要生成中
+                </div>
+              )}
+
+              {article.summaryStatus === "failed" && (
+                <div className="mt-2.5 flex items-start gap-3 text-sm leading-6 text-[#a33f31]">
+                  <p className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+                    {article.summaryError ?? "摘要生成失败"}
+                  </p>
+                  {onRetrySummary && (
+                    <button
+                      type="button"
+                      className="grid size-8 shrink-0 place-items-center rounded-md text-[#8f493d] hover:bg-[#fbe2dc]"
+                      aria-label="重试摘要"
+                      title="重试摘要"
+                      onClick={onRetrySummary}
+                    >
+                      <RefreshCw size={16} />
+                    </button>
+                  )}
+                </div>
+              )}
+            </section>
           )}
 
           {article.imageUrl && !hasInlineHeroImage && (

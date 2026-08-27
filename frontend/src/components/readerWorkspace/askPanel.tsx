@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Loader2, RotateCw, Send, Sparkles, Trash2, TriangleAlert, X } from "lucide-react";
+import { Loader2, RotateCw, Send, Sparkles, Trash2, TriangleAlert, X } from "lucide-react";
 
 import {
   askArticle,
@@ -18,8 +18,6 @@ type AskPanelProps = {
 };
 
 type AnswerPhase = "idle" | "loading" | "success" | "error";
-
-const suggestions = ["总结核心观点", "找出关键事实", "这对产品团队意味着什么？"];
 
 export function AskPanel({ article, open, onClose }: AskPanelProps) {
   const questionInputRef = useRef<HTMLTextAreaElement>(null);
@@ -218,17 +216,6 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
     void requestAnswer();
   };
 
-  const selectSuggestion = (suggestion: string) => {
-    setQuestion(suggestion);
-    questionInputRef.current?.focus();
-    window.requestAnimationFrame(() => {
-      const input = questionInputRef.current;
-      if (input && document.activeElement === input) {
-        input.setSelectionRange(suggestion.length, suggestion.length);
-      }
-    });
-  };
-
   return (
     <>
       {open && (
@@ -252,9 +239,7 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
       >
         <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/10 px-4">
           <div className="flex items-center gap-2.5">
-            <span className="grid size-8 place-items-center rounded-md bg-[#ef8354] text-[#21130d]">
-              <Bot size={17} />
-            </span>
+            <Sparkles size={17} className="text-[#ef8354]" />
             <div>
               <h2 className="text-sm font-semibold">文章助手</h2>
               <p className="mt-0.5 text-[10px] text-[#838790]">当前文章</p>
@@ -274,7 +259,9 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
           <div className="border-l-2 border-[#ef8354] pl-3">
             <p className="text-[10px] font-medium text-[#8f939b]">当前上下文</p>
-            <h3 className="mt-1.5 text-sm leading-5 font-medium text-[#dedfdb]">{article.title}</h3>
+            <h3 className="article-title-clamp mt-1.5 break-words text-sm leading-5 font-medium text-[#dedfdb]">
+              {article.title}
+            </h3>
             <p className="mt-1 break-all text-[11px] text-[#858992]">{article.sourceUrl}</p>
           </div>
 
@@ -333,27 +320,6 @@ export function AskPanel({ article, open, onClose }: AskPanelProps) {
                 </button>
               )}
             </section>
-          )}
-
-          {phase === "idle" && (
-            <div className="mt-7">
-              <div className="flex items-center gap-2 text-xs font-medium text-[#b9bbc0]">
-                <Sparkles size={14} className="text-[#ef8354]" />
-                快速提问
-              </div>
-              <div className="mt-3 grid gap-2">
-                {suggestions.map(suggestion => (
-                  <button
-                    key={suggestion}
-                    type="button"
-                    className="rounded-md border border-white/10 bg-white/[0.03] px-3 py-2.5 text-left text-xs text-[#b8bbc1] hover:border-white/20 hover:bg-white/[0.06] hover:text-white"
-                    onClick={() => selectSuggestion(suggestion)}
-                  >
-                    {suggestion}
-                  </button>
-                ))}
-              </div>
-            </div>
           )}
 
           {phase === "loading" && (

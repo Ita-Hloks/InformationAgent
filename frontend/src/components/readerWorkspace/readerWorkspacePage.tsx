@@ -697,7 +697,7 @@ export function ReaderWorkspacePage() {
       )}
 
       <div
-        className={`sidebar-layout grid h-full min-w-0 grid-cols-1 md:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[252px_370px_minmax(0,1fr)] ${
+        className={`sidebar-layout grid h-full min-w-0 grid-cols-1 md:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[240px_350px_minmax(0,1fr)] ${
           sidebarCollapsed ? "is-collapsed" : ""
         }`}
       >
