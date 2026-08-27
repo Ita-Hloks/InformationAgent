@@ -54,6 +54,7 @@ export function ReaderWorkspacePage() {
     null,
   );
   const [articleResearchRuns, setArticleResearchRuns] = useState<ArticleResearchRun[]>([]);
+  const [articleResearchHistoryLoaded, setArticleResearchHistoryLoaded] = useState(false);
   const [selectedArticleResearchId, setSelectedArticleResearchId] = useState<string | null>(null);
   const [articleResearchDetail, setArticleResearchDetail] = useState<ArticleResearchRun | null>(
     null,
@@ -218,6 +219,7 @@ export function ReaderWorkspacePage() {
   useEffect(() => {
     setReadingActivity({ key: selectedArticleKey, progress: 0, visibleSeconds: 0 });
     setArticleResearchRuns([]);
+    setArticleResearchHistoryLoaded(false);
     setSelectedArticleResearchId(null);
     setArticleResearchDetail(null);
     setArticleResearchError(null);
@@ -279,6 +281,7 @@ export function ReaderWorkspacePage() {
     void loadArticleResearch(controller.signal)
       .then(history => {
         if (!active || !history) return;
+        setArticleResearchHistoryLoaded(true);
         const latestCurrentRun = history.runs.find(run => run.snapshotId === selectedSnapshotId);
         setSelectedArticleResearchId(latestCurrentRun?.id ?? null);
       })
@@ -453,7 +456,8 @@ export function ReaderWorkspacePage() {
       !automationSettings?.enabled ||
       !selectedArticleId ||
       !selectedArticleKey ||
-      currentArticleResearchRuns.some(run => run.mode === "auto") ||
+      !articleResearchHistoryLoaded ||
+      currentArticleResearchRuns.length > 0 ||
       readingActivity.key !== selectedArticleKey ||
       readingActivity.visibleSeconds < automationSettings.dwellSeconds ||
       readingActivity.progress < automationSettings.readRatio ||
@@ -465,6 +469,7 @@ export function ReaderWorkspacePage() {
     void runArticleResearchForSelected("auto");
   }, [
     automationSettings,
+    articleResearchHistoryLoaded,
     currentArticleResearchRuns,
     readingActivity,
     runArticleResearchForSelected,
