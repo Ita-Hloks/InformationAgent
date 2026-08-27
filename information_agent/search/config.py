@@ -12,6 +12,8 @@ DEFAULT_RESULT_COUNT = 5
 MAX_RESULT_COUNT = 50
 DEFAULT_CONTENT_SIZE = "medium"
 DEFAULT_TIMEOUT_SECONDS = DEFAULT_LLM_TIMEOUT_SECONDS
+DEFAULT_ADAPTER = "openai_web_search"
+SUPPORTED_ADAPTERS = {"openai_web_search", "openai_responses_web_search"}
 
 SUPPORTED_CONTENT_SIZES = {"low", "medium", "high"}
 
@@ -24,6 +26,7 @@ class HostedSearchConfig:
     result_count: int = DEFAULT_RESULT_COUNT
     content_size: str = DEFAULT_CONTENT_SIZE
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    adapter: str = DEFAULT_ADAPTER
 
     def __post_init__(self) -> None:
         if not self.api_key.strip():
@@ -45,6 +48,9 @@ class HostedSearchConfig:
             raise ValueError("SEARCH_LLM_CONTENT_SIZE 必须是 low、medium 或 high")
         if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
             raise ValueError("SEARCH_LLM_TIMEOUT_SECONDS 必须大于 0")
+        if self.adapter not in SUPPORTED_ADAPTERS:
+            supported = "、".join(sorted(SUPPORTED_ADAPTERS))
+            raise ValueError(f"SEARCH_LLM_ADAPTER 必须是：{supported}")
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> HostedSearchConfig:
@@ -64,6 +70,7 @@ class HostedSearchConfig:
                 "SEARCH_LLM_TIMEOUT_SECONDS",
                 DEFAULT_TIMEOUT_SECONDS,
             ),
+            adapter=values.get("SEARCH_LLM_ADAPTER", DEFAULT_ADAPTER).strip(),
         )
 
 
