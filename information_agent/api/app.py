@@ -15,7 +15,12 @@ from ..common import (
     clear_log_directory,
     inspect_log_directory,
 )
-from ..opinion import BilibiliTargetError, OpinionAnalysisService, OpinionStatus
+from ..opinion import (
+    BilibiliTargetError,
+    OpinionAnalysisService,
+    OpinionStatus,
+    ReferenceDiscoveryService,
+)
 from ..opinion.service import OpinionArticleNotFoundError, OpinionSnapshotMismatchError
 from ..orchestration import AgentTaskManager, ArticleResearchTaskManager, agent_run
 from ..orchestration.summary_tasks import SummaryTaskManager
@@ -29,6 +34,7 @@ from ..reader import (
 )
 from ..search import public_status_from_env
 from ..serialization import (
+    opinion_references_to_payload,
     opinion_report_to_payload,
 )
 from ..settings import EnvFileOpenError, MainLLMConfig, open_project_env_file
@@ -51,6 +57,7 @@ from .models import (
     LogClearRequest,
     LogClearResponse,
     LogSettingsResponse,
+    OpinionReferencesResponse,
     OpinionRequest,
     OpinionResponse,
     ReaderAutomationSettingsResponse,
@@ -73,10 +80,12 @@ def create_app(
     summary_assistant: ArticleSummaryAssistant | None = None,
     summary_task_manager: SummaryTaskManager | None = None,
     article_research_task_manager: ArticleResearchTaskManager | None = None,
+    reference_discovery_service: ReferenceDiscoveryService | None = None,
 ) -> FastAPI:
     load_dotenv()
     reader = service or ReaderService()
     opinion = opinion_service or OpinionAnalysisService(store=reader.store)
+    references = reference_discovery_service or ReferenceDiscoveryService(store=reader.store)
     assistant = article_assistant or ArticleAssistant()
     agent_tasks = AgentTaskManager(reader.store.database_path, runner=agent_run)
     summary_tasks = summary_task_manager or SummaryTaskManager(
@@ -640,6 +649,30 @@ def create_app(
             raise HTTPException(
                 status_code=500,
                 detail={"code": "storage_failed", "message": "舆情状态读取失败"},
+            ) from exc
+
+    @app.post(
+        "/api/articles/{article_id}/opinion/references",
+        response_model=OpinionReferencesResponse,
+    )
+    def discover_opinion_references(article_id: str) -> OpinionReferencesResponse:
+        try:
+            result = references.discover(article_id)
+            return OpinionReferencesResponse(**opinion_references_to_payload(result))
+        except OpinionArticleNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "article_not_found", "message": str(exc)},
+            ) from exc
+        except OpinionSnapshotMismatchError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        except (sqlite3.Error, ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={"code": "reference_discovery_failed", "message": "候选视频发现失败"},
             ) from exc
 
     @app.post("/api/articles/{article_id}/opinion", response_model=OpinionResponse)

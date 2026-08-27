@@ -25,6 +25,13 @@ from .models import (
     aggregate_opinion_points,
 )
 from .parsing import parse_persisted_opinion_report
+from .references import (
+    BilibiliVideoCandidate,
+    BilibiliVideoSearcher,
+    ReferenceDiscoveryResult,
+    ReferenceDiscoveryService,
+    ReferenceDiscoveryStatus,
+)
 from .service import OpinionAnalysisService, OpinionSnapshotMismatchError
 
 __all__ = [
@@ -34,6 +41,8 @@ __all__ = [
     "BilibiliSourceError",
     "BilibiliTarget",
     "BilibiliTargetError",
+    "BilibiliVideoCandidate",
+    "BilibiliVideoSearcher",
     "ArticleSnapshotIdentity",
     "Attempt",
     "Classification",
@@ -46,6 +55,9 @@ __all__ = [
     "OpinionReport",
     "OpinionStatus",
     "OpinionSnapshotMismatchError",
+    "ReferenceDiscoveryResult",
+    "ReferenceDiscoveryService",
+    "ReferenceDiscoveryStatus",
     "Stance",
     "aggregate_opinion_points",
     "parse_comment_analysis",

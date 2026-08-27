@@ -11,6 +11,7 @@ from .selection import SelectedEvidence
 if TYPE_CHECKING:
     from .agent import AgentReport
     from .investigation import PlanningReport
+    from .opinion.references import ReferenceDiscoveryResult
     from .orchestration.search_workflow import SearchReport
     from .search import SearchAnswer
     from .storage import PersistedPlanning
@@ -95,6 +96,44 @@ def search_report_to_payload(report: SearchReport) -> dict[str, Any]:
     if report.opinion_plans:
         payload["opinion_plans"] = [_opinion_plan_to_payload(item) for item in report.opinion_plans]
     return payload
+
+
+def opinion_references_to_payload(result: ReferenceDiscoveryResult) -> dict[str, Any]:
+    return {
+        "article_id": result.article_id,
+        "snapshot_id": result.snapshot_id,
+        "content_hash": result.content_hash,
+        "status": result.status.value,
+        "status_reason": result.status_reason,
+        "queries": [
+            {
+                "evidence_id": plan.evidence_id,
+                "trigger_quote": plan.trigger_quote,
+                "question": plan.question,
+                "query": query.query,
+                "purpose": query.purpose,
+            }
+            for plan in result.plans
+            for query in plan.queries
+        ],
+        "candidates": [
+            {
+                "video_id": candidate.video_id,
+                "bvid": candidate.bvid,
+                "url": candidate.url,
+                "title": candidate.title,
+                "search_query": candidate.search_query,
+                "snippet": candidate.snippet,
+                "site_name": candidate.site_name,
+                "published_at": candidate.published_at,
+                "reference": candidate.reference,
+                "author": candidate.author,
+                "tag": candidate.tag,
+            }
+            for candidate in result.candidates
+        ],
+        "errors": list(result.errors),
+    }
 
 
 def opinion_report_to_payload(report: Any) -> dict[str, Any]:

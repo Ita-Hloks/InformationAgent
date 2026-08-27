@@ -266,8 +266,14 @@ def _controversy_system_prompt() -> str:
         "不要判断文章真假，不要把评论数量当作事实证据。"
         "争议点必须对应文章正文中的精确短句，问题和查询目的使用中文。"
         "普通负面措辞、没有公共讨论价值的细节、纯主观偏好不要生成。"
-        "输出 JSON 对象，且只能包含 opinion_plans 数组；每篇文章最多一个，"
-        "每个计划只能包含 evidence_id、trigger_quote、question、queries。"
+        "输出 JSON 对象，且只能包含 opinion_plans 数组；每篇文章最多一个。"
+        "严格遵守字段类型和数量：evidence_id 只能是 JSON 整数 1，不能是字符串、组合编号或其他编号；"
+        "queries 必须是对象数组，数组长度只能是 1 到 2，不能是字符串数组；"
+        "每个 query 对象只能包含 query 和 purpose 两个字符串字段。"
+        "唯一允许的非空输出形状如下："
+        '{"opinion_plans":[{"evidence_id":1,"trigger_quote":"正文中的精确短句",'
+        '"question":"中文问题","queries":[{"query":"搜索词","purpose":"中文目的"}]}]}。'
+        '没有符合条件的争议时，只输出{"opinion_plans":[]}。'
     )
 
 
