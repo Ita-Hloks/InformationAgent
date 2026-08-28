@@ -23,7 +23,7 @@ export type Article = {
   feedId: string;
   snapshotId: string;
   source: string;
-  author: string;
+  author: string | null;
   title: string;
   summary: string;
   summaryStatus: SummaryStatus;

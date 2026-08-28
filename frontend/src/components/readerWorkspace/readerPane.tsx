@@ -249,8 +249,8 @@ export function ReaderPane({
                 {article.source}
               </strong>
               <span className="mt-0.5 block text-[11px] text-[#8a8c90]">
-                {article.author} · {formatArticleFullDate(article.publishedAtIso)} ·{" "}
-                {article.readingMinutes} 分钟阅读
+                {article.author && <>{article.author} · </>}
+                {formatArticleFullDate(article.publishedAtIso)} · {article.readingMinutes} 分钟阅读
               </span>
             </span>
           </div>

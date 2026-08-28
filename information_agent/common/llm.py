@@ -42,6 +42,7 @@ def request_json_completion(
     sleep: Callable[[float], None] = time.sleep,
     record_content: bool = True,
     metadata: dict[str, Any] | None = None,
+    response_format: dict[str, Any] | None = None,
 ) -> str:
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("timeout must be a positive finite number")
@@ -51,15 +52,24 @@ def request_json_completion(
     for attempt in range(1, max_attempts + 1):
         backup = CallBackup.start(
             stage=stage,
-            request={"model": model, "messages": messages, "attempt": attempt},
+            request={
+                "model": model,
+                "messages": messages,
+                "attempt": attempt,
+                **({"response_format": response_format} if response_format is not None else {}),
+            },
             record_content=record_content,
             metadata=metadata,
         )
         try:
-            # 通过提示约束 JSON，兼容不支持 response_format 的 OpenAI-compatible 网关。
+            request_kwargs: dict[str, Any] = {
+                "model": model,
+                "messages": messages,
+            }
+            if response_format is not None:
+                request_kwargs["response_format"] = response_format
             response = client.with_options(timeout=timeout).chat.completions.create(
-                model=model,
-                messages=messages,
+                **request_kwargs
             )
             content = response.choices[0].message.content or ""
         except Exception as exc:

@@ -476,6 +476,186 @@ def test_parse_agent_search_reuses_search_plan_validation() -> None:
     assert decision.plan.question == "推理成本降幅采用了什么比较基线？"
 
 
+def test_llm_research_decider_requests_structured_decision(monkeypatch) -> None:
+    evidence = ingest_evidence()
+    raw = json.dumps(
+        {
+            "decision": "search",
+            "reason": None,
+            "citations": None,
+            "uncertainties": None,
+            "plan": {
+                "evidence_id": 1,
+                "trigger_quote": "推理成本下降 70%",
+                "question": "推理成本降幅采用了什么比较基线？",
+                "kind": "quantitative_claim",
+                "priority": 1,
+                "queries": [
+                    {
+                        "query": "AI 芯片 推理成本 独立测试",
+                        "purpose": "寻找独立测试材料",
+                    }
+                ],
+            },
+        },
+        ensure_ascii=False,
+    )
+    calls: list[dict[str, object]] = []
+
+    def fake_request_json_completion(**kwargs: object) -> str:
+        calls.append(kwargs)
+        return raw
+
+    monkeypatch.setattr(agent_decider, "request_json_completion", fake_request_json_completion)
+    decider = object.__new__(agent_decider.LLMResearchDecider)
+    decider.client = object()
+
+    decision = decider.decide("AI 芯片", evidence, [], timeout=10)
+
+    assert isinstance(decision, SearchDecision)
+    assert decision.plan.queries[0].purpose == "寻找独立测试材料"
+    assert calls[0]["response_format"] is agent_decider.AGENT_DECISION_RESPONSE_FORMAT
+    schema = calls[0]["response_format"]["json_schema"]["schema"]
+    assert set(schema["required"]) == {
+        "decision",
+        "reason",
+        "citations",
+        "uncertainties",
+        "plan",
+    }
+    query_schema = schema["properties"]["plan"]["anyOf"][0]["properties"]["queries"]
+    assert query_schema["items"]["required"] == ["query", "purpose"]
+
+
+def test_agent_retries_decision_when_trigger_quote_is_not_exact(
+    monkeypatch, tmp_path: Path
+) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+    invalid_response = json.dumps(
+        {
+            "decision": "search",
+            "reason": None,
+            "citations": None,
+            "uncertainties": None,
+            "plan": {
+                "evidence_id": 1,
+                "trigger_quote": "推理成本下降70%",
+                "question": "推理成本降幅采用了什么比较基线？",
+                "kind": "quantitative_claim",
+                "priority": 1,
+                "queries": [{"query": "AI 芯片 推理成本 独立测试", "purpose": "寻找独立测试材料"}],
+            },
+        },
+        ensure_ascii=False,
+    )
+    valid_response = json.dumps(
+        {
+            "decision": "finish",
+            "reason": "evidence_sufficient",
+            "citations": [
+                {
+                    "claim": "现有证据足以形成谨慎结论。",
+                    "evidence_ids": [1],
+                    "source_urls": [],
+                }
+            ],
+            "uncertainties": [],
+            "plan": None,
+        },
+        ensure_ascii=False,
+    )
+    responses = iter([invalid_response, valid_response])
+    messages: list[dict[str, str]] = []
+
+    def fake_request_json_completion(**kwargs: object) -> str:
+        messages.append(kwargs["messages"][1])
+        return next(responses)
+
+    monkeypatch.setattr(agent_decider, "request_json_completion", fake_request_json_completion)
+    decider = object.__new__(agent_decider.LLMResearchDecider)
+    decider.client = object()
+
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=decider,
+        timeout_seconds=10,
+        max_attempts=2,
+        sleep=lambda _: None,
+    )
+
+    assert report.status is RunStatus.COMPLETED
+    assert len(messages) == 2
+    assert "trigger_quote 未出现在对应文章正文中" not in messages[0]["content"]
+    assert "trigger_quote 未出现在对应文章正文中" in messages[1]["content"]
+
+
+def test_agent_preserves_existing_decision_feedback_on_trigger_quote_retry(
+    monkeypatch, tmp_path: Path
+) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+    valid_search_response = json.dumps(
+        {
+            "decision": "search",
+            "reason": None,
+            "citations": None,
+            "uncertainties": None,
+            "plan": {
+                "evidence_id": 1,
+                "trigger_quote": "推理成本下降 70%",
+                "question": "推理成本降幅采用了什么比较基线？",
+                "kind": "quantitative_claim",
+                "priority": 1,
+                "queries": [{"query": "AI 芯片 推理成本 独立测试", "purpose": "寻找独立测试材料"}],
+            },
+        },
+        ensure_ascii=False,
+    )
+    invalid_response = valid_search_response.replace("推理成本下降 70%", "推理成本下降70%")
+    valid_response = json.dumps(
+        {
+            "decision": "finish",
+            "reason": "insufficient_after_search",
+            "citations": [
+                {
+                    "claim": "现有证据不足。",
+                    "evidence_ids": [1],
+                    "source_urls": [],
+                }
+            ],
+            "uncertainties": ["缺少独立测试报告"],
+            "plan": None,
+        },
+        ensure_ascii=False,
+    )
+    responses = iter([valid_search_response, invalid_response, valid_response])
+    messages: list[dict[str, str]] = []
+
+    def fake_request_json_completion(**kwargs: object) -> str:
+        messages.append(kwargs["messages"][1])
+        return next(responses)
+
+    monkeypatch.setattr(agent_decider, "request_json_completion", fake_request_json_completion)
+    decider = object.__new__(agent_decider.LLMResearchDecider)
+    decider.client = object()
+
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=decider,
+        timeout_seconds=10,
+        max_steps=1,
+        max_attempts=2,
+        answerer=RecordingAnswerer(status=SearchAnswerStatus.INSUFFICIENT_EVIDENCE),
+        sleep=lambda _: None,
+    )
+
+    assert report.status is RunStatus.PARTIAL
+    assert len(messages) == 3
+    assert "只能输出 finish" in messages[2]["content"]
+    assert "trigger_quote 未出现在对应文章正文中" in messages[2]["content"]
+
+
 def test_agent_and_planner_share_search_plan_contract() -> None:
     assert SEARCH_PLAN_CONTRACT in agent_decider._system_prompt()
     assert SEARCH_PLAN_CONTRACT in investigation_planner._system_prompt()

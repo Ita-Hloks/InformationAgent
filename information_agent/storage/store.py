@@ -1906,7 +1906,7 @@ class SQLiteCollectionStore(
             INSERT OR IGNORE INTO reader_automation_settings (
                 id, enabled, dwell_seconds, read_ratio, agent_timeout_seconds,
                 max_searches, max_attempts, updated_at
-            ) VALUES (1, 1, 15, 0.3333333333333333, 180, 3, 3, ?)
+            ) VALUES (1, 1, 15, 0.3333333333333333, 300, 3, 3, ?)
             """,
             (_format_datetime(project_now()),),
         )

@@ -245,7 +245,7 @@ function toArticle(article: ArticlePayload): Article {
     feedId: article.feed_id,
     snapshotId: article.snapshot_id,
     source: "RSS",
-    author: article.author ?? "未知作者",
+    author: article.author,
     title: article.title,
     summary: article.summary?.trim() ?? "",
     summaryStatus: article.summary_status,

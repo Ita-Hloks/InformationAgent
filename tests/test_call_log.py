@@ -112,3 +112,31 @@ def test_request_json_completion_preserves_empty_response(tmp_path, monkeypatch)
     payload = json.loads(backup.read_text(encoding="utf-8"))
     assert result == ""
     assert payload["response"] == ""
+
+
+def test_request_json_completion_passes_optional_response_format(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("INFORMATION_AGENT_LOG_DIR", str(tmp_path))
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {"name": "test", "strict": True, "schema": {"type": "object"}},
+    }
+    client = FakeClient(content='{"ok":true}')
+
+    request_json_completion(
+        client=client,
+        model="test-model",
+        messages=[{"role": "user", "content": "测试正文"}],
+        timeout=1,
+        stage="agent-decision",
+        response_format=response_format,
+    )
+
+    assert client.requests == [
+        {
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "测试正文"}],
+            "response_format": response_format,
+        }
+    ]
+    payload = json.loads(next(tmp_path.glob("*.json")).read_text(encoding="utf-8"))
+    assert payload["request"]["response_format"] == response_format

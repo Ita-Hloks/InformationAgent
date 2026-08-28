@@ -115,7 +115,7 @@ def test_reader_automation_settings_persist_and_validate(tmp_path: Path) -> None
     assert defaults.enabled is True
     assert defaults.dwell_seconds == 15
     assert defaults.read_ratio == 1 / 3
-    assert defaults.agent_timeout_seconds == 180
+    assert defaults.agent_timeout_seconds == 300
     assert defaults.max_searches == 3
     assert defaults.max_attempts == 3
 
