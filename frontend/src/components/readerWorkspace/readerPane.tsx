@@ -42,6 +42,7 @@ type ReaderPaneProps = {
   onSelectResearchRun?: (runId: string) => void;
   researchRun?: ArticleResearchRun | null;
   researchRunning?: boolean;
+  researchStoppingRunId?: string | null;
   researchLoading?: boolean;
   researchError?: string | null;
   deletingResearchRunId?: string | null;
@@ -69,6 +70,7 @@ export function ReaderPane({
   onSelectResearchRun,
   researchRun = null,
   researchRunning = false,
+  researchStoppingRunId = null,
   researchLoading = false,
   researchError = null,
   deletingResearchRunId = null,
@@ -247,16 +249,19 @@ export function ReaderPane({
                 {article.source}
               </strong>
               <span className="mt-0.5 block text-[11px] text-[#8a8c90]">
-                {article.author} · {formatArticleFullDate(article.publishedAtIso)} ·{" "}
-                {article.readingMinutes} 分钟阅读
+                {article.author && <>{article.author} · </>}
+                {formatArticleFullDate(article.publishedAtIso)} · {article.readingMinutes} 分钟阅读
               </span>
             </span>
           </div>
 
-          <h1 className="article-title-clamp mt-7 break-words text-[32px] leading-[1.18] font-semibold tracking-[0] text-[#202124] sm:text-[40px]">
+          <h1 className="mt-7 break-words text-[32px] leading-[1.18] font-semibold tracking-[0] text-[#202124] sm:text-[40px]">
             {article.title}
           </h1>
-          {(article.summaryStatus !== "completed" || article.summary) && (
+          {(article.summaryStatus === "pending" ||
+            article.summaryStatus === "running" ||
+            article.summaryStatus === "failed" ||
+            article.summary) && (
             <section
               className={`mt-5 rounded-xl border px-4 py-3.5 ${
                 article.summaryStatus === "failed"
@@ -316,8 +321,8 @@ export function ReaderPane({
           {article.imageUrl && !hasInlineHeroImage && (
             <ArticleImage
               src={article.imageUrl}
-              label="文章首图"
               alt=""
+              fallbackHref={article.sourceUrl}
               variant="hero"
               className="mt-8 aspect-[16/8.5] w-full overflow-hidden rounded-lg"
               errorClassName="mt-8 min-h-[132px] w-full rounded-lg"
@@ -338,8 +343,8 @@ export function ReaderPane({
                 <figure key={`image-${index}`} className="my-8">
                   <ArticleImage
                     src={block.url}
-                    label="正文图片"
                     alt={block.alt ?? ""}
+                    fallbackHref={article.sourceUrl}
                     className="w-full overflow-hidden rounded-lg"
                     errorClassName="min-h-[160px] w-full rounded-lg"
                     imageClassName="h-auto w-full"
@@ -363,6 +368,7 @@ export function ReaderPane({
             onStopResearch={onStopResearch}
             onDeleteResearch={onDeleteResearch}
             researchRun={researchRun}
+            stoppingResearchRunId={researchStoppingRunId}
             loading={researchLoading}
             error={researchError}
             deletingResearchRunId={deletingResearchRunId}
@@ -376,10 +382,10 @@ export function ReaderPane({
               <button
                 type="button"
                 className="ml-auto rounded-md border border-[var(--reader-workspace-border)] bg-white px-2.5 py-1 text-[11px] font-medium text-[#56585d] hover:bg-[var(--reader-workspace-raised)]"
-                disabled={researchRunning}
+                disabled={researchRunning || researchStoppingRunId !== null}
                 onClick={onResearch}
               >
-                {researchRunning ? "研究中" : "研究"}
+                {researchStoppingRunId !== null ? "停止中" : researchRunning ? "研究中" : "研究"}
               </button>
             )}
           </div>
@@ -397,6 +403,7 @@ function ArticleResearchSection({
   onStopResearch,
   onDeleteResearch,
   researchRun,
+  stoppingResearchRunId,
   loading,
   error,
   deletingResearchRunId,
@@ -408,6 +415,7 @@ function ArticleResearchSection({
   onStopResearch?: () => void;
   onDeleteResearch?: (runId: string) => void;
   researchRun: ArticleResearchRun | null;
+  stoppingResearchRunId: string | null;
   loading: boolean;
   error: string | null;
   deletingResearchRunId: string | null;
@@ -434,6 +442,7 @@ function ArticleResearchSection({
     researchRun ?? researchRuns.find(run => run.id === selectedResearchRunId) ?? null;
   const report = researchRun?.agent?.report ?? null;
   const isActive = selectedRun?.status === "queued" || selectedRun?.status === "running";
+  const isStopping = Boolean(isActive && selectedRun && selectedRun.id === stoppingResearchRunId);
   const isHistorical = selectedRun !== null && selectedRun.snapshotId !== snapshotId;
   const errorMessage = selectedRun?.error?.message ?? researchRun?.agent?.error?.message;
   const noSearch =
@@ -458,23 +467,46 @@ function ArticleResearchSection({
         {selectedRun && (
           <div className="flex items-center gap-2">
             <span className="text-xs text-[#85878c]">
-              {researchStatusLabel(selectedRun.status)}
+              {isStopping ? "停止中" : researchStatusLabel(selectedRun.status)}
             </span>
             {isActive && onStopResearch && (
               <button
                 type="button"
-                className="flex h-7 items-center gap-1.5 rounded-md border border-[#efc6ba] px-2 text-xs font-medium text-[#a64a35] hover:bg-[#fff5f1]"
-                aria-label="停止研究"
-                title="停止研究"
+                className="flex h-7 items-center gap-1.5 rounded-md border border-[#efc6ba] px-2 text-xs font-medium text-[#a64a35] hover:bg-[#fff5f1] disabled:cursor-wait disabled:opacity-70"
+                aria-label={isStopping ? "停止请求处理中" : "停止研究"}
+                title={isStopping ? "停止请求处理中" : "停止研究"}
+                disabled={isStopping}
                 onClick={onStopResearch}
               >
-                <Square size={12} fill="currentColor" />
-                停止
+                {isStopping ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <Square size={12} fill="currentColor" />
+                )}
+                {isStopping ? "停止中" : "停止"}
               </button>
             )}
           </div>
         )}
       </div>
+
+      {isStopping && selectedRun && (
+        <p
+          className="mt-3 flex items-start gap-2 border-l-2 border-[#ef8354] pl-3 text-sm leading-6 text-[#8a5b3d]"
+          role="status"
+          aria-live="polite"
+        >
+          <Loader2 size={15} className="mt-1 shrink-0 animate-spin" aria-hidden="true" />
+          <span>
+            <span className="block font-medium">停止请求已提交</span>
+            <span className="block text-xs text-[#a87860]">
+              {selectedRun.status === "queued"
+                ? "正在取消排队任务，页面会自动更新"
+                : "正在等待当前模型调用结束，页面会自动更新"}
+            </span>
+          </span>
+        </p>
+      )}
 
       {researchRuns.length > 0 && (
         <div className="mt-5 border-b border-[var(--reader-workspace-border)] pb-5">
@@ -508,7 +540,9 @@ function ArticleResearchSection({
                       </span>
                     </span>
                     <span className="shrink-0 text-[11px] text-[#85878c]">
-                      {researchStatusLabel(run.status)}
+                      {run.id === stoppingResearchRunId && active
+                        ? "停止中"
+                        : researchStatusLabel(run.status)}
                     </span>
                   </button>
                   {!active && onDeleteResearch && (

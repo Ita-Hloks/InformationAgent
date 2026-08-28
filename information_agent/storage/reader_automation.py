@@ -6,6 +6,7 @@ import sqlite3
 from typing import Any
 from uuid import uuid4
 
+from ..common import MIN_ARTICLE_SUMMARY_CONTENT_CHARS, should_generate_article_summary
 from ..contracts import project_now
 from .common import _format_datetime, _load_json_object, _optional_text
 from .models import (
@@ -42,8 +43,9 @@ class ReaderAutomationPersistenceMixin:
                 )
                 SELECT id, content_hash, 'pending', NULL, NULL, 0, ?, ?, NULL
                 FROM article_snapshots
+                WHERE COALESCE(length(json_extract(payload_json, '$.content')), 0) >= ?
                 """,
-                (now, now),
+                (now, now, MIN_ARTICLE_SUMMARY_CONTENT_CHARS),
             )
             return connection.total_changes - before
 
@@ -61,11 +63,12 @@ class ReaderAutomationPersistenceMixin:
                 FROM article_summaries AS summaries
                 JOIN article_snapshots AS snapshots ON snapshots.id = summaries.snapshot_id
                 WHERE summaries.status = 'pending'
+                  AND COALESCE(length(json_extract(snapshots.payload_json, '$.content')), 0) >= ?
                 ORDER BY CASE WHEN summaries.snapshot_id = ? THEN 0 ELSE 1 END,
                          snapshots.collected_at DESC, snapshots.created_at DESC
                 LIMIT 1
                 """,
-                (preferred_snapshot_id,),
+                (MIN_ARTICLE_SUMMARY_CONTENT_CHARS, preferred_snapshot_id),
             ).fetchone()
             if row is None:
                 return None
@@ -134,7 +137,7 @@ class ReaderAutomationPersistenceMixin:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT id FROM article_snapshots
+                SELECT id, payload_json FROM article_snapshots
                 WHERE article_id = ?
                 ORDER BY collected_at DESC, created_at DESC
                 LIMIT 1
@@ -143,6 +146,9 @@ class ReaderAutomationPersistenceMixin:
             ).fetchone()
             if row is None:
                 raise KeyError(article_id)
+            payload = _load_json_object(row["payload_json"], "article_snapshots.payload_json")
+            if not should_generate_article_summary(str(payload.get("content") or "")):
+                return str(row["id"])
             connection.execute(
                 """
                 UPDATE article_summaries

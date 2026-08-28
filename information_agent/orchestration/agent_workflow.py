@@ -10,6 +10,7 @@ from typing import Any, TypeVar
 
 from ..agent import (
     AgentDecision,
+    AgentDecisionResponseError,
     AgentObservation,
     AgentReport,
     AgentStopReason,
@@ -376,13 +377,20 @@ def agent_run(
             remaining = budget.remaining()
             if remaining <= 0:
                 raise TimeoutError("Agent 总时限已耗尽")
-            return active_decider.decide(
-                topic,
-                evidence,
-                observations,
-                remaining,
-                validation_feedback=feedback_state[0],
-            )
+            try:
+                return active_decider.decide(
+                    topic,
+                    evidence,
+                    observations,
+                    remaining,
+                    validation_feedback=feedback_state[0],
+                )
+            except AgentDecisionResponseError as exc:
+                if exc.retryable:
+                    feedback_state[0] = (
+                        f"{feedback_state[0]}\n{exc}" if feedback_state[0] else str(exc)
+                    )
+                raise
 
         try:
             decision = recorder.execute(
@@ -397,7 +405,7 @@ def agent_run(
                 ),
                 decide,
                 max_attempts=max_attempts,
-                should_retry=is_retryable_llm_error,
+                should_retry=_should_retry_agent_decision,
                 result_kind="agent_decision",
                 result_payload=_agent_decision_payload,
             )
@@ -774,6 +782,12 @@ def _agent_report_payload(report: AgentReport) -> dict[str, Any]:
         "stop_reason": report.stop_reason.value,
         "errors": report.errors,
     }
+
+
+def _should_retry_agent_decision(error: Exception) -> bool:
+    if isinstance(error, AgentDecisionResponseError):
+        return error.retryable
+    return is_retryable_llm_error(error)
 
 
 def _validate_input(timeout_seconds: float, max_steps: int, max_attempts: int) -> None:

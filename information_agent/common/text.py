@@ -5,6 +5,11 @@ import re
 _CODE_FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 _INLINE_CODE = re.compile(r"`+[^`\n]+`+")
 CONTENT_BATCH_CHARS = 2_000
+MIN_ARTICLE_SUMMARY_CONTENT_CHARS = 300
+
+
+def should_generate_article_summary(content: str) -> bool:
+    return len(content) >= MIN_ARTICLE_SUMMARY_CONTENT_CHARS
 
 
 def llm_safe_text(value: str) -> str:

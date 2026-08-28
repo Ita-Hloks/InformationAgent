@@ -59,6 +59,35 @@ class FakeClient:
         return self.responses.pop(0)
 
 
+class FakeResponsesResponse:
+    def __init__(self, *, output: list[dict[str, object]] | None) -> None:
+        self.output = output
+        self.output_text = ""
+        if output:
+            self.output_text = "\n".join(
+                content["text"]
+                for item in output
+                if item.get("type") == "message"
+                for content in item.get("content", [])
+                if content.get("type") == "output_text"
+            )
+
+    def model_dump(self, *, mode: str) -> dict[str, object]:
+        assert mode == "json"
+        return {"output": self.output, "output_text": self.output_text}
+
+
+class FakeResponsesClient:
+    def __init__(self, response: FakeResponsesResponse | list[FakeResponsesResponse]) -> None:
+        self.responses_queue = response if isinstance(response, list) else [response]
+        self.requests: list[dict[str, object]] = []
+        self.responses = SimpleNamespace(create=self.create)
+
+    def create(self, **kwargs: object) -> FakeResponsesResponse:
+        self.requests.append(kwargs)
+        return self.responses_queue.pop(0)
+
+
 def _plan() -> SearchPlan:
     return SearchPlan(
         evidence_id=2,
@@ -81,6 +110,16 @@ def _config() -> HostedSearchConfig:
         model="search-model",
         base_url="https://api.example.com/v1",
         timeout_seconds=30,
+    )
+
+
+def _responses_config() -> HostedSearchConfig:
+    return HostedSearchConfig(
+        api_key="secret",
+        model="search-model",
+        base_url="https://api.example.com/v1",
+        timeout_seconds=30,
+        adapter="openai_responses_web_search",
     )
 
 
@@ -139,7 +178,9 @@ def test_hosted_search_answerer_requires_sources(tmp_path, monkeypatch) -> None:
     assert result.sources == ()
 
 
-def test_hosted_search_answerer_accepts_json_content_sources(tmp_path, monkeypatch) -> None:
+def test_hosted_search_answerer_rejects_json_content_sources_without_tool_results(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setenv("INFORMATION_AGENT_LOG_DIR", str(tmp_path))
     client = FakeClient(
         FakeResponse(
@@ -162,10 +203,110 @@ def test_hosted_search_answerer_accepts_json_content_sources(tmp_path, monkeypat
 
     result = HostedSearchAnswerer(_config(), client).answer(_plan(), timeout=20)
 
+    assert result.status is SearchAnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.answer == "未能获得带有可验证来源的搜索结果。"
+    assert result.sources == ()
+
+
+def test_hosted_search_answerer_accepts_responses_tool_sources_and_url_citations(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("INFORMATION_AGENT_LOG_DIR", str(tmp_path))
+    client = FakeResponsesClient(
+        FakeResponsesResponse(
+            output=[
+                {
+                    "type": "web_search_call",
+                    "status": "completed",
+                    "action": {
+                        "sources": [
+                            {
+                                "title": "Python Documentation",
+                                "url": "https://docs.python.org/3/",
+                                "snippet": "The official Python documentation.",
+                            }
+                        ]
+                    },
+                },
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Python 官方文档首页是 https://docs.python.org/3/。",
+                            "annotations": [
+                                {
+                                    "type": "url_citation",
+                                    "title": "Python Documentation",
+                                    "url": "https://docs.python.org/3/",
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ]
+        )
+    )
+
+    result = HostedSearchAnswerer(_responses_config(), client).answer(_plan(), timeout=20)
+
     assert result.status is SearchAnswerStatus.ANSWERED
     assert result.answer == "Python 官方文档首页是 https://docs.python.org/3/。"
-    assert result.sources[0].url == "https://docs.python.org/3/"
-    assert result.sources[0].site_name == "Python Documentation"
+    assert [source.url for source in result.sources] == ["https://docs.python.org/3/"]
+    request = client.requests[0]
+    assert request["model"] == "search-model"
+    assert request["timeout"] == 20
+    assert request["tool_choice"] == "required"
+    assert request["include"] == ["web_search_call.action.sources"]
+    assert request["tools"] == [{"type": "web_search", "search_context_size": "medium"}]
+    backup = json.loads(next(tmp_path.glob("*.json")).read_text(encoding="utf-8"))
+    assert backup["response"]["output"][0]["type"] == "web_search_call"
+    assert backup["result"]["status"] == "answered"
+
+
+def test_hosted_search_answerer_rejects_responses_body_url_without_search_call(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("INFORMATION_AGENT_LOG_DIR", str(tmp_path))
+    client = FakeResponsesClient(
+        FakeResponsesResponse(
+            output=[
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Python 官方文档首页是 https://docs.python.org/3/。",
+                            "annotations": [
+                                {
+                                    "type": "url_citation",
+                                    "title": "Python Documentation",
+                                    "url": "https://docs.python.org/3/",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        )
+    )
+
+    result = HostedSearchAnswerer(_responses_config(), client).answer(_plan(), timeout=20)
+
+    assert result.status is SearchAnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.answer == "未能获得带有可验证来源的搜索结果。"
+    assert result.sources == ()
+
+
+def test_hosted_search_answerer_handles_missing_responses_output(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("INFORMATION_AGENT_LOG_DIR", str(tmp_path))
+    response = FakeResponsesResponse(output=None)
+    client = FakeResponsesClient(response)
+
+    result = HostedSearchAnswerer(_responses_config(), client).answer(_plan(), timeout=20)
+
+    assert result.status is SearchAnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.sources == ()
 
 
 def test_hosted_search_answerer_synthesizes_search_trace(tmp_path, monkeypatch) -> None:

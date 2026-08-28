@@ -103,10 +103,13 @@ flowchart LR
 | `SEARCH_LLM_API_KEY` | 联网搜索模型凭据 |
 | `SEARCH_LLM_MODEL` | 联网搜索模型名称 |
 | `SEARCH_LLM_BASE_URL` | 联网搜索服务地址 |
+| `SEARCH_LLM_ADAPTER` | 搜索协议；官方 OpenAI Responses API 使用 `openai_responses_web_search` |
 | `BILIBILI_COOKIE` | 舆情分析所需的可选 Cookie |
 | `INFORMATION_AGENT_DB_PATH` | SQLite 数据库路径 |
 
 没有 LLM 配置时仍可使用订阅、刷新和文章阅读接口。
+
+文章研究的可验证来源必须来自搜索服务响应中的真实 `web_search_call`，不能只依赖模型正文自行填写的 URL。使用官方 OpenAI Responses API 时，将 `SEARCH_LLM_ADAPTER` 设为 `openai_responses_web_search`，并将 `SEARCH_LLM_BASE_URL` 设为 `https://api.openai.com/v1`。服务返回 `web_search_call` 和 URL 引用后，研究结果才会被标记为有证据；只有正文 URL 或没有搜索调用时会保留为证据不足。
 
 ## 项目结构
 

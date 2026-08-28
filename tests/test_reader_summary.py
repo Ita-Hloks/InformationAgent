@@ -4,9 +4,18 @@ import threading
 
 import pytest
 
+from information_agent.common import (
+    MIN_ARTICLE_SUMMARY_CONTENT_CHARS,
+    should_generate_article_summary,
+)
 from information_agent.orchestration.summary_tasks import SummaryTaskManager
 from information_agent.reader.summary import parse_article_summary
 from information_agent.storage import ArticleSummaryJob
+
+
+def test_article_summary_content_threshold() -> None:
+    assert not should_generate_article_summary("字" * (MIN_ARTICLE_SUMMARY_CONTENT_CHARS - 1))
+    assert should_generate_article_summary("字" * MIN_ARTICLE_SUMMARY_CONTENT_CHARS)
 
 
 def test_parse_article_summary_accepts_exact_summary_payload() -> None:

@@ -26,6 +26,114 @@ MAX_SOURCE_SNIPPET_CHARS = 1_000
 MAX_CITATIONS = 10
 MAX_CLAIM_CHARS = 1_000
 MAX_UNCERTAINTY_CHARS = 500
+_STRUCTURED_DECISION_FIELDS = {"decision", "reason", "citations", "uncertainties", "plan"}
+
+AGENT_DECISION_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "agent_research_decision",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "decision": {"type": "string", "enum": ["search", "finish"]},
+                "reason": {
+                    "anyOf": [
+                        {
+                            "type": "string",
+                            "enum": [
+                                "evidence_sufficient",
+                                "no_material_gap",
+                                "insufficient_after_search",
+                            ],
+                        },
+                        {"type": "null"},
+                    ]
+                },
+                "citations": {
+                    "anyOf": [
+                        {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": MAX_CITATIONS,
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "claim": {"type": "string"},
+                                    "evidence_ids": {
+                                        "type": "array",
+                                        "items": {"type": "integer"},
+                                    },
+                                    "source_urls": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                },
+                                "required": ["claim", "evidence_ids", "source_urls"],
+                            },
+                        },
+                        {"type": "null"},
+                    ]
+                },
+                "uncertainties": {
+                    "anyOf": [
+                        {"type": "array", "items": {"type": "string"}},
+                        {"type": "null"},
+                    ]
+                },
+                "plan": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "evidence_id": {"type": "integer"},
+                                "trigger_quote": {"type": "string"},
+                                "question": {"type": "string"},
+                                "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                        "quantitative_claim",
+                                        "causal_claim",
+                                        "attribution_claim",
+                                        "time_sensitive_claim",
+                                    ],
+                                },
+                                "priority": {"type": "integer", "enum": [1]},
+                                "queries": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "maxItems": 2,
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "properties": {
+                                            "query": {"type": "string"},
+                                            "purpose": {"type": "string"},
+                                        },
+                                        "required": ["query", "purpose"],
+                                    },
+                                },
+                            },
+                            "required": [
+                                "evidence_id",
+                                "trigger_quote",
+                                "question",
+                                "kind",
+                                "priority",
+                                "queries",
+                            ],
+                        },
+                        {"type": "null"},
+                    ]
+                },
+            },
+            "required": ["decision", "reason", "citations", "uncertainties", "plan"],
+        },
+    },
+}
 
 
 class ResearchDecider(Protocol):
@@ -40,9 +148,10 @@ class ResearchDecider(Protocol):
 
 
 class AgentDecisionResponseError(ValueError):
-    def __init__(self, message: str, raw_response: str) -> None:
+    def __init__(self, message: str, raw_response: str, *, retryable: bool = False) -> None:
         super().__init__(message)
         self.raw_response = raw_response
+        self.retryable = retryable
 
 
 class LLMResearchDecider:
@@ -84,13 +193,20 @@ class LLMResearchDecider:
                     ),
                 },
             ],
+            response_format=AGENT_DECISION_RESPONSE_FORMAT,
         )
         try:
-            return parse_agent_decision(raw, selected, observations)
+            return _parse_agent_decision_payload(
+                _normalize_structured_decision_payload(json.loads(raw)),
+                selected,
+                observations,
+            )
         except ValueError as exc:
+            message = _validation_feedback(str(exc), observations)
             raise AgentDecisionResponseError(
-                _validation_feedback(str(exc), observations),
+                message,
                 raw,
+                retryable=_is_retryable_validation_error(message),
             ) from exc
 
 
@@ -100,6 +216,14 @@ def parse_agent_decision(
     observations: list[AgentObservation] | None = None,
 ) -> AgentDecision:
     payload = json.loads(raw)
+    return _parse_agent_decision_payload(payload, evidence, observations or [])
+
+
+def _parse_agent_decision_payload(
+    payload: Any,
+    evidence: list[SelectedEvidence],
+    observations: list[AgentObservation],
+) -> AgentDecision:
     if not isinstance(payload, dict):
         raise ValueError("Agent 决策必须是 JSON 对象")
 
@@ -114,7 +238,38 @@ def parse_agent_decision(
         return SearchDecision(plans[0])
 
     if decision == "finish":
-        return _parse_finish_decision(payload, evidence, observations or [])
+        return _parse_finish_decision(payload, evidence, observations)
+
+    raise ValueError("decision 必须是 search 或 finish")
+
+
+def _normalize_structured_decision_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Agent 决策必须是 JSON 对象")
+    if set(payload) != _STRUCTURED_DECISION_FIELDS:
+        raise ValueError("结构化 Agent 决策字段不符合约定")
+
+    decision = payload["decision"]
+    if decision == "search":
+        if any(payload[field] is not None for field in ("reason", "citations", "uncertainties")):
+            raise ValueError("search 决策的 finish 字段必须为 null")
+        if not isinstance(payload["plan"], dict):
+            raise ValueError("search 决策必须包含 plan")
+        return {"decision": decision, "plan": payload["plan"]}
+
+    if decision == "finish":
+        if payload["plan"] is not None:
+            raise ValueError("finish 决策的 plan 必须为 null")
+        if payload["reason"] is None or payload["citations"] is None:
+            raise ValueError("finish 决策必须包含 reason 和 citations")
+        return {
+            "decision": decision,
+            "reason": payload["reason"],
+            "citations": payload["citations"],
+            "uncertainties": payload["uncertainties"]
+            if payload["uncertainties"] is not None
+            else [],
+        }
 
     raise ValueError("decision 必须是 search 或 finish")
 
@@ -224,6 +379,10 @@ def _required_text(value: Any, name: str, maximum_length: int) -> str:
     if not normalized or len(normalized) > maximum_length:
         raise ValueError(f"{name} 不能为空且长度不能超过 {maximum_length}")
     return normalized
+
+
+def _is_retryable_validation_error(message: str) -> bool:
+    return "trigger_quote 未出现在对应文章正文中" in message
 
 
 def _system_prompt() -> str:
