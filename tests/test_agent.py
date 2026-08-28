@@ -60,6 +60,49 @@ def _plan(evidence_id: int = 1, query: str = "AI 芯片 推理成本 独立测�
     )
 
 
+def _search_decision_response(trigger_quote: str = "推理成本下降 70%") -> str:
+    return json.dumps(
+        {
+            "decision": "search",
+            "reason": None,
+            "citations": None,
+            "uncertainties": None,
+            "plan": {
+                "evidence_id": 1,
+                "trigger_quote": trigger_quote,
+                "question": "推理成本降幅采用了什么比较基线？",
+                "kind": "quantitative_claim",
+                "priority": 1,
+                "queries": [
+                    {
+                        "query": "AI 芯片 推理成本 独立测试",
+                        "purpose": "寻找独立测试材料",
+                    }
+                ],
+            },
+        },
+        ensure_ascii=False,
+    )
+
+
+def _finish_decision_response(
+    *,
+    reason: str = "evidence_sufficient",
+    claim: str = "现有证据足以形成谨慎结论。",
+    uncertainties: list[str] | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "decision": "finish",
+            "reason": reason,
+            "citations": [{"claim": claim, "evidence_ids": [1], "source_urls": []}],
+            "uncertainties": uncertainties or [],
+            "plan": None,
+        },
+        ensure_ascii=False,
+    )
+
+
 def _finish(
     reason: FinishReason = FinishReason.EVIDENCE_SUFFICIENT,
 ) -> FinishDecision:
@@ -478,28 +521,7 @@ def test_parse_agent_search_reuses_search_plan_validation() -> None:
 
 def test_llm_research_decider_requests_structured_decision(monkeypatch) -> None:
     evidence = ingest_evidence()
-    raw = json.dumps(
-        {
-            "decision": "search",
-            "reason": None,
-            "citations": None,
-            "uncertainties": None,
-            "plan": {
-                "evidence_id": 1,
-                "trigger_quote": "推理成本下降 70%",
-                "question": "推理成本降幅采用了什么比较基线？",
-                "kind": "quantitative_claim",
-                "priority": 1,
-                "queries": [
-                    {
-                        "query": "AI 芯片 推理成本 独立测试",
-                        "purpose": "寻找独立测试材料",
-                    }
-                ],
-            },
-        },
-        ensure_ascii=False,
-    )
+    raw = _search_decision_response()
     calls: list[dict[str, object]] = []
 
     def fake_request_json_completion(**kwargs: object) -> str:
@@ -531,39 +553,8 @@ def test_agent_retries_decision_when_trigger_quote_is_not_exact(
     monkeypatch, tmp_path: Path
 ) -> None:
     database_path, run_id = _ingested_run(tmp_path)
-    invalid_response = json.dumps(
-        {
-            "decision": "search",
-            "reason": None,
-            "citations": None,
-            "uncertainties": None,
-            "plan": {
-                "evidence_id": 1,
-                "trigger_quote": "推理成本下降70%",
-                "question": "推理成本降幅采用了什么比较基线？",
-                "kind": "quantitative_claim",
-                "priority": 1,
-                "queries": [{"query": "AI 芯片 推理成本 独立测试", "purpose": "寻找独立测试材料"}],
-            },
-        },
-        ensure_ascii=False,
-    )
-    valid_response = json.dumps(
-        {
-            "decision": "finish",
-            "reason": "evidence_sufficient",
-            "citations": [
-                {
-                    "claim": "现有证据足以形成谨慎结论。",
-                    "evidence_ids": [1],
-                    "source_urls": [],
-                }
-            ],
-            "uncertainties": [],
-            "plan": None,
-        },
-        ensure_ascii=False,
-    )
+    invalid_response = _search_decision_response("推理成本下降70%")
+    valid_response = _finish_decision_response()
     responses = iter([invalid_response, valid_response])
     messages: list[dict[str, str]] = []
 
@@ -594,39 +585,12 @@ def test_agent_preserves_existing_decision_feedback_on_trigger_quote_retry(
     monkeypatch, tmp_path: Path
 ) -> None:
     database_path, run_id = _ingested_run(tmp_path)
-    valid_search_response = json.dumps(
-        {
-            "decision": "search",
-            "reason": None,
-            "citations": None,
-            "uncertainties": None,
-            "plan": {
-                "evidence_id": 1,
-                "trigger_quote": "推理成本下降 70%",
-                "question": "推理成本降幅采用了什么比较基线？",
-                "kind": "quantitative_claim",
-                "priority": 1,
-                "queries": [{"query": "AI 芯片 推理成本 独立测试", "purpose": "寻找独立测试材料"}],
-            },
-        },
-        ensure_ascii=False,
-    )
+    valid_search_response = _search_decision_response()
     invalid_response = valid_search_response.replace("推理成本下降 70%", "推理成本下降70%")
-    valid_response = json.dumps(
-        {
-            "decision": "finish",
-            "reason": "insufficient_after_search",
-            "citations": [
-                {
-                    "claim": "现有证据不足。",
-                    "evidence_ids": [1],
-                    "source_urls": [],
-                }
-            ],
-            "uncertainties": ["缺少独立测试报告"],
-            "plan": None,
-        },
-        ensure_ascii=False,
+    valid_response = _finish_decision_response(
+        reason="insufficient_after_search",
+        claim="现有证据不足。",
+        uncertainties=["缺少独立测试报告"],
     )
     responses = iter([valid_search_response, invalid_response, valid_response])
     messages: list[dict[str, str]] = []

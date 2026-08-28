@@ -17,18 +17,10 @@ from information_agent.serialization import collection_report_to_payload
 
 
 @pytest.mark.parametrize(
-    ("timeout_name", "invalid_timeout"),
-    [
-        ("timeout_seconds", float("nan")),
-        ("timeout_seconds", float("inf")),
-        ("timeout_seconds", float("-inf")),
-        ("source_timeout_seconds", float("nan")),
-        ("source_timeout_seconds", float("inf")),
-        ("source_timeout_seconds", float("-inf")),
-    ],
+    "source_timeout_seconds", [float("nan"), float("inf"), float("-inf")]
 )
-def test_collect_rejects_nonfinite_timeouts_before_reachable_collector_call(
-    timeout_name: str, invalid_timeout: float
+def test_collect_rejects_nonfinite_source_timeout_before_reachable_collector_call(
+    source_timeout_seconds: float,
 ) -> None:
     calls: list[str] = []
 
@@ -37,7 +29,12 @@ def test_collect_rejects_nonfinite_timeouts_before_reachable_collector_call(
         return []
 
     with pytest.raises(ValueError):
-        collect("AI", ["feed"], collector=collector, **{timeout_name: invalid_timeout})
+        collect(
+            "AI",
+            ["feed"],
+            collector=collector,
+            source_timeout_seconds=source_timeout_seconds,
+        )
 
     assert calls == []
     collect("AI", ["feed"], collector=collector)

@@ -68,13 +68,6 @@ def _guess_encoding(response) -> str | None:
     return None
 
 
-def _extract_text(html: str, **kwargs) -> str | None:
-    try:
-        return trafilatura.extract(html, **kwargs)
-    except Exception:
-        return None
-
-
 @dataclass(frozen=True, slots=True)
 class ArticleFetchResult:
     content: str

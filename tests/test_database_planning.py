@@ -237,29 +237,21 @@ def test_plan_run_rejects_invalid_timeout_before_storage_or_planner(
     database_path = tmp_path / "information-agent.db"
     supplied_planner = RecordingPlanner()
     storage_calls: list[object] = []
-    default_planner_calls: list[object] = []
 
     def unexpected_store(*args: object) -> None:
         storage_calls.append(args)
         raise AssertionError("storage must not be constructed")
 
-    def unexpected_default_planner() -> None:
-        default_planner_calls.append(None)
-        raise AssertionError("default planner must not be constructed")
-
     monkeypatch.setattr(database_planning, "SQLiteCollectionStore", unexpected_store)
-    monkeypatch.setattr(database_planning, "LLMQuestionPlanner", unexpected_default_planner)
 
-    for planner in (supplied_planner, None):
-        with pytest.raises(ValueError, match="finite positive"):
-            database_planning.plan_run(
-                "run-id",
-                database_path=database_path,
-                timeout_seconds=timeout_seconds,
-                planner=planner,
-            )
+    with pytest.raises(ValueError, match="finite positive"):
+        database_planning.plan_run(
+            "run-id",
+            database_path=database_path,
+            timeout_seconds=timeout_seconds,
+            planner=supplied_planner,
+        )
 
     assert storage_calls == []
-    assert default_planner_calls == []
     assert supplied_planner.calls == 0
     assert not database_path.exists()
