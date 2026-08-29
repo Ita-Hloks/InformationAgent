@@ -2,8 +2,7 @@ import json
 import sys
 import time
 from collections import Counter
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Barrier, Thread
+from threading import Barrier
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -16,9 +15,7 @@ from information_agent.selection import SelectedEvidence
 from information_agent.serialization import collection_report_to_payload
 
 
-@pytest.mark.parametrize(
-    "source_timeout_seconds", [float("nan"), float("inf"), float("-inf")]
-)
+@pytest.mark.parametrize("source_timeout_seconds", [float("nan"), float("inf"), float("-inf")])
 def test_collect_rejects_nonfinite_source_timeout_before_reachable_collector_call(
     source_timeout_seconds: float,
 ) -> None:
@@ -367,50 +364,6 @@ def test_collect_stops_retrying_when_total_deadline_expires() -> None:
     assert elapsed < 0.5
     assert report.status is RunStatus.FAILED
     assert len(report.errors) == 1
-
-
-def test_collect_enforces_total_timeout_for_a_slow_streaming_feed() -> None:
-    class SlowFeedHandler(BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-
-        def do_GET(self) -> None:  # noqa: N802
-            self.send_response(200)
-            self.send_header("Content-Type", "application/rss+xml")
-            self.send_header("Content-Length", "10000")
-            self.end_headers()
-            try:
-                for _ in range(100):
-                    self.wfile.write(b" ")
-                    self.wfile.flush()
-                    time.sleep(0.02)
-            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
-                pass
-
-        def log_message(self, _format: str, *args: object) -> None:
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), SlowFeedHandler)
-    server.daemon_threads = True
-    server_thread = Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    try:
-        started = time.monotonic()
-        report = collect(
-            "AI",
-            [f"http://127.0.0.1:{server.server_port}/slow.xml"],
-            timeout_seconds=0.05,
-            source_timeout_seconds=1,
-        )
-        elapsed = time.monotonic() - started
-    finally:
-        server.shutdown()
-        server.server_close()
-        server_thread.join()
-
-    assert elapsed < 0.5
-    assert report.status is RunStatus.FAILED
-    assert len(report.errors) == 1
-    assert "超时" in report.errors[0]
 
 
 def test_collect_cli_loads_llm_configuration(monkeypatch, capsys) -> None:

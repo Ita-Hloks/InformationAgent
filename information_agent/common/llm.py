@@ -68,7 +68,7 @@ def request_json_completion(
             }
             if response_format is not None:
                 request_kwargs["response_format"] = response_format
-            response = client.with_options(timeout=timeout).chat.completions.create(
+            response = client.with_options(timeout=timeout, max_retries=0).chat.completions.create(
                 **request_kwargs
             )
             content = response.choices[0].message.content or ""

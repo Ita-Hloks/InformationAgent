@@ -8,6 +8,7 @@ import pytest
 
 from information_agent.investigation import QuestionKind, SearchPlan, SearchQuery
 from information_agent.search import HostedSearchAnswerer, HostedSearchConfig, SearchAnswerStatus
+from information_agent.search.client import create_search_client
 from information_agent.search.config import MAX_RESULT_COUNT
 from information_agent.search.hosted import (
     MAX_SOURCE_PUBLISHED_AT_CHARS,
@@ -428,6 +429,25 @@ def test_hosted_search_answerer_creates_a_client_when_not_injected(monkeypatch) 
 
     assert answerer.client is client
     assert observed_configs == [_config()]
+
+
+def test_search_client_disables_sdk_retries(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr("information_agent.search.client.OpenAI", FakeOpenAI)
+
+    client = create_search_client(_config())
+
+    assert isinstance(client, FakeOpenAI)
+    assert captured == {
+        "api_key": "secret",
+        "base_url": "https://api.example.com/v1",
+        "max_retries": 0,
+    }
 
 
 @pytest.mark.parametrize("timeout", [0, -1, math.nan, math.inf, -math.inf])

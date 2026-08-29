@@ -27,6 +27,7 @@ from information_agent.investigation import (
     SearchQuery,
 )
 from information_agent.investigation import planner as investigation_planner
+from information_agent.orchestration import agent_workflow
 from information_agent.orchestration.agent_tasks import AgentTaskManager
 from information_agent.orchestration.agent_workflow import agent_run
 from information_agent.search import SearchAnswer, SearchAnswerStatus, SearchSource
@@ -785,6 +786,28 @@ def test_agent_retries_same_decision_and_tool_calls(tmp_path: Path) -> None:
         "search-1:attempt-2:error",
         "search-1:attempt-3:result",
     } <= artifact_keys
+
+
+def test_agent_does_not_retry_when_backoff_exceeds_remaining_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+    answerer = RecordingAnswerer(failures=3)
+    monkeypatch.setattr(agent_workflow, "LLM_RETRY_DELAYS_SECONDS", (20.0,))
+
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=SequenceDecider([SearchDecision(_plan())]),
+        answerer=answerer,
+        timeout_seconds=1,
+        max_attempts=3,
+        sleep=lambda _: None,
+    )
+
+    assert report.status is RunStatus.FAILED
+    assert report.stop_reason is AgentStopReason.ERROR
+    assert answerer.calls == [_plan()]
 
 
 def test_agent_does_not_retry_non_retryable_service_error(tmp_path: Path) -> None:

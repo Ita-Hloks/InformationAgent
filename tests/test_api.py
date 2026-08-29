@@ -147,7 +147,9 @@ class _FakeCompletionClient:
         self.calls: list[dict[str, object]] = []
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
 
-    def with_options(self, *, timeout: float) -> _FakeCompletionClient:
+    def with_options(
+        self, *, timeout: float, max_retries: int | None = None
+    ) -> _FakeCompletionClient:
         return self
 
     def create(self, **kwargs: object) -> SimpleNamespace:

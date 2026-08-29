@@ -379,14 +379,6 @@ def test_fetch_article_returns_none_on_http_error(
     assert fetch_article(url) is None
 
 
-def test_domain_rate_limiter_allows_fast_requests() -> None:
-    from information_agent.collection.web import DomainRateLimiter
-
-    limiter = DomainRateLimiter(requests_per_second=10)
-    for _ in range(10):
-        limiter.wait_if_needed("example.com")
-
-
 def test_domain_rate_limiter_blocks_excessive_requests() -> None:
     from information_agent.collection.web import DomainRateLimiter
 

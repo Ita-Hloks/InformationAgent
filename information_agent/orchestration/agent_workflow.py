@@ -96,6 +96,7 @@ class _AgentRunRecorder:
         *,
         max_attempts: int = 1,
         should_retry: Callable[[Exception], bool] | None = None,
+        can_retry: Callable[[float], bool] | None = None,
         result_kind: str,
         result_payload: Callable[[T], dict[str, Any]],
         allow_when_stopped: bool = False,
@@ -162,25 +163,29 @@ class _AgentRunRecorder:
                     AnalysisAttemptStatus.FAILED,
                     error=exc,
                 )
-                if attempt_no < max_attempts and should_retry is not None and should_retry(exc):
+                retryable = (
+                    attempt_no < max_attempts and should_retry is not None and should_retry(exc)
+                )
+                if retryable:
                     delay = LLM_RETRY_DELAYS_SECONDS[
                         min(attempt_no - 1, len(LLM_RETRY_DELAYS_SECONDS) - 1)
                     ]
-                    self._notify(
-                        step_key=step_key,
-                        phase=operation,
-                        status="retrying",
-                        attempt=attempt_no,
-                        max_attempts=max_attempts,
-                        retryable=True,
-                        retry_in_seconds=delay,
-                        error={"type": type(exc).__name__, "message": str(exc)},
-                    )
-                    if self._should_stop() and not allow_when_stopped:
-                        self._cancel_step(step.id, step_key, "用户请求停止 Agent")
-                        raise AgentCancellationRequested("用户请求停止 Agent") from exc
-                    self._sleep(delay)
-                    continue
+                    if can_retry is None or can_retry(delay):
+                        self._notify(
+                            step_key=step_key,
+                            phase=operation,
+                            status="retrying",
+                            attempt=attempt_no,
+                            max_attempts=max_attempts,
+                            retryable=True,
+                            retry_in_seconds=delay,
+                            error={"type": type(exc).__name__, "message": str(exc)},
+                        )
+                        if self._should_stop() and not allow_when_stopped:
+                            self._cancel_step(step.id, step_key, "用户请求停止 Agent")
+                            raise AgentCancellationRequested("用户请求停止 Agent") from exc
+                        self._sleep(delay)
+                        continue
                 self._store.set_analysis_step_status(
                     step.id,
                     AnalysisStepStatus.FAILED,
@@ -406,6 +411,7 @@ def agent_run(
                 decide,
                 max_attempts=max_attempts,
                 should_retry=_should_retry_agent_decision,
+                can_retry=lambda delay: budget.remaining() > delay,
                 result_kind="agent_decision",
                 result_payload=_agent_decision_payload,
             )
@@ -524,6 +530,7 @@ def agent_run(
                 answer_search,
                 max_attempts=max_attempts,
                 should_retry=is_retryable_llm_error,
+                can_retry=lambda delay: budget.remaining() > delay,
                 result_kind="search_answer",
                 result_payload=_search_answer_payload,
             )
