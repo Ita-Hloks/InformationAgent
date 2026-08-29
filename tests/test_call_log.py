@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from information_agent.common import request_json_completion
+from information_agent.common import MAX_LLM_REQUEST_TIMEOUT_SECONDS, request_json_completion
 
 
 class FakeClient:
@@ -14,12 +14,14 @@ class FakeClient:
         self.error = error
         self.chat = SimpleNamespace(completions=self)
         self.with_options_calls = 0
+        self.with_options_timeouts: list[float] = []
         self.with_options_max_retries: list[int | None] = []
         self.create_calls = 0
         self.requests: list[dict[str, object]] = []
 
     def with_options(self, *, timeout: float, max_retries: int | None = None) -> FakeClient:
         self.with_options_calls += 1
+        self.with_options_timeouts.append(timeout)
         self.with_options_max_retries.append(max_retries)
         assert timeout > 0
         return self
@@ -143,3 +145,18 @@ def test_request_json_completion_passes_optional_response_format(tmp_path, monke
     ]
     payload = json.loads(next(tmp_path.glob("*.json")).read_text(encoding="utf-8"))
     assert payload["request"]["response_format"] == response_format
+
+
+def test_request_json_completion_caps_single_request_timeout(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("INFORMATION_AGENT_LOG_DIR", str(tmp_path))
+    client = FakeClient()
+
+    request_json_completion(
+        client=client,
+        model="test-model",
+        messages=[{"role": "user", "content": "测试正文"}],
+        timeout=MAX_LLM_REQUEST_TIMEOUT_SECONDS + 30,
+        stage="agent-decision",
+    )
+
+    assert client.with_options_timeouts == [MAX_LLM_REQUEST_TIMEOUT_SECONDS]

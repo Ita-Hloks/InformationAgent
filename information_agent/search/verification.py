@@ -42,6 +42,14 @@ def _has_official_python_source(result: SearchAnswer) -> bool:
     for source in result.sources:
         parsed = urlparse(source.url)
         hostname = (parsed.hostname or "").casefold()
-        if hostname == "docs.python.org" and parsed.path.startswith("/3"):
+        path_segments = [segment for segment in parsed.path.split("/") if segment]
+        if hostname == "docs.python.org" and any(
+            _is_python_three_version(segment) for segment in path_segments[:2]
+        ):
             return True
     return False
+
+
+def _is_python_three_version(segment: str) -> bool:
+    parts = segment.split(".")
+    return parts[0] == "3" and all(part.isdigit() for part in parts[1:])

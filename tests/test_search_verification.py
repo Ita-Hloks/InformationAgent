@@ -10,9 +10,10 @@ from information_agent.search import (
 
 
 class RecordingAnswerer:
-    def __init__(self) -> None:
+    def __init__(self, source_url: str = "https://docs.python.org/3/") -> None:
         self.plan: SearchPlan | None = None
         self.timeout: float | None = None
+        self.source_url = source_url
 
     def answer(self, plan: SearchPlan, timeout: float) -> SearchAnswer:
         self.plan = plan
@@ -22,7 +23,7 @@ class RecordingAnswerer:
             question=plan.question,
             answer="验证完成。",
             status=SearchAnswerStatus.ANSWERED,
-            sources=(SearchSource("Python Documentation", "https://docs.python.org/3/"),),
+            sources=(SearchSource("Python Documentation", self.source_url),),
         )
 
 
@@ -39,6 +40,15 @@ def test_verify_connection_uses_a_fixed_public_search_plan() -> None:
     assert answerer.plan.queries[0].query == (
         'site:docs.python.org/3 "Python documentation" homepage'
     )
+
+
+def test_verify_connection_accepts_localized_official_python_source() -> None:
+    result = verify_connection(
+        12,
+        RecordingAnswerer("https://docs.python.org/fr/3/faq/general.html"),
+    )
+
+    assert result.status is SearchAnswerStatus.ANSWERED
 
 
 class NonOfficialSourceAnswerer(RecordingAnswerer):

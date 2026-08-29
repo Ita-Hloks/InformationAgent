@@ -19,6 +19,7 @@ def test_hosted_search_config_reads_defaults() -> None:
     assert config.result_count == 5
     assert config.content_size == "medium"
     assert config.timeout_seconds == 300
+    assert config.adapter == "openai_responses_web_search"
 
 
 def test_hosted_search_config_requires_api_key() -> None:

@@ -621,6 +621,105 @@ def test_agent_preserves_existing_decision_feedback_on_trigger_quote_retry(
     assert "trigger_quote 未出现在对应文章正文中" in messages[2]["content"]
 
 
+def test_agent_preserves_search_results_when_final_decision_times_out(tmp_path: Path) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+
+    class TimeoutAfterSearchDecider:
+        calls = 0
+
+        def decide(
+            self,
+            topic: str,
+            evidence: list[SelectedEvidence],
+            observations: list[AgentObservation],
+            timeout: float,
+            validation_feedback: str | None = None,
+        ):
+            self.calls += 1
+            if self.calls == 1:
+                return SearchDecision(_plan())
+            raise TimeoutError("Request timed out.")
+
+    decider = TimeoutAfterSearchDecider()
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=decider,
+        answerer=RecordingAnswerer(),
+        max_attempts=1,
+    )
+
+    assert report.status is RunStatus.PARTIAL
+    assert report.stop_reason is AgentStopReason.TIMEOUT
+    assert report.final_answer is None
+    assert len(report.answers) == 1
+    assert report.errors == []
+
+
+def test_agent_forces_finish_before_another_search_when_budget_is_low(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+    now = 0.0
+
+    def clock() -> float:
+        return now
+
+    def advance(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    original_start = agent_workflow.ExecutionBudget.start
+    monkeypatch.setattr(
+        agent_workflow.ExecutionBudget,
+        "start",
+        classmethod(lambda cls, total_seconds, **_: original_start(total_seconds, clock=clock)),
+    )
+
+    class BudgetAwareDecider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.feedback: list[str | None] = []
+
+        def decide(
+            self,
+            topic: str,
+            evidence: list[SelectedEvidence],
+            observations: list[AgentObservation],
+            timeout: float,
+            validation_feedback: str | None = None,
+        ):
+            self.calls += 1
+            self.feedback.append(validation_feedback)
+            advance(10)
+            if validation_feedback:
+                return _finish()
+            return SearchDecision(_plan(query=f"独立查询 {self.calls}"))
+
+    class AdvancingAnswerer(RecordingAnswerer):
+        def answer(self, plan: SearchPlan, timeout: float) -> SearchAnswer:
+            advance(10)
+            return super().answer(plan, timeout)
+
+    decider = BudgetAwareDecider()
+    answerer = AdvancingAnswerer()
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=decider,
+        answerer=answerer,
+        timeout_seconds=151,
+        max_steps=3,
+        max_attempts=1,
+    )
+
+    assert report.status is RunStatus.COMPLETED
+    assert decider.calls == 3
+    assert len(answerer.calls) == 2
+    assert decider.feedback[2] is not None
+    assert "必须输出 finish" in decider.feedback[2]
+
+
 def test_agent_and_planner_share_search_plan_contract() -> None:
     assert SEARCH_PLAN_CONTRACT in agent_decider._system_prompt()
     assert SEARCH_PLAN_CONTRACT in investigation_planner._system_prompt()
