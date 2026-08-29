@@ -27,6 +27,7 @@ from information_agent.investigation import (
     SearchQuery,
 )
 from information_agent.investigation import planner as investigation_planner
+from information_agent.orchestration import agent_workflow
 from information_agent.orchestration.agent_tasks import AgentTaskManager
 from information_agent.orchestration.agent_workflow import agent_run
 from information_agent.search import SearchAnswer, SearchAnswerStatus, SearchSource
@@ -57,6 +58,49 @@ def _plan(evidence_id: int = 1, query: str = "AI 芯片 推理成本 独立测�
         kind=QuestionKind.QUANTITATIVE_CLAIM,
         priority=1,
         queries=(SearchQuery(query, "寻找独立测试材料"),),
+    )
+
+
+def _search_decision_response(trigger_quote: str = "推理成本下降 70%") -> str:
+    return json.dumps(
+        {
+            "decision": "search",
+            "reason": None,
+            "citations": None,
+            "uncertainties": None,
+            "plan": {
+                "evidence_id": 1,
+                "trigger_quote": trigger_quote,
+                "question": "推理成本降幅采用了什么比较基线？",
+                "kind": "quantitative_claim",
+                "priority": 1,
+                "queries": [
+                    {
+                        "query": "AI 芯片 推理成本 独立测试",
+                        "purpose": "寻找独立测试材料",
+                    }
+                ],
+            },
+        },
+        ensure_ascii=False,
+    )
+
+
+def _finish_decision_response(
+    *,
+    reason: str = "evidence_sufficient",
+    claim: str = "现有证据足以形成谨慎结论。",
+    uncertainties: list[str] | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "decision": "finish",
+            "reason": reason,
+            "citations": [{"claim": claim, "evidence_ids": [1], "source_urls": []}],
+            "uncertainties": uncertainties or [],
+            "plan": None,
+        },
+        ensure_ascii=False,
     )
 
 
@@ -478,28 +522,7 @@ def test_parse_agent_search_reuses_search_plan_validation() -> None:
 
 def test_llm_research_decider_requests_structured_decision(monkeypatch) -> None:
     evidence = ingest_evidence()
-    raw = json.dumps(
-        {
-            "decision": "search",
-            "reason": None,
-            "citations": None,
-            "uncertainties": None,
-            "plan": {
-                "evidence_id": 1,
-                "trigger_quote": "推理成本下降 70%",
-                "question": "推理成本降幅采用了什么比较基线？",
-                "kind": "quantitative_claim",
-                "priority": 1,
-                "queries": [
-                    {
-                        "query": "AI 芯片 推理成本 独立测试",
-                        "purpose": "寻找独立测试材料",
-                    }
-                ],
-            },
-        },
-        ensure_ascii=False,
-    )
+    raw = _search_decision_response()
     calls: list[dict[str, object]] = []
 
     def fake_request_json_completion(**kwargs: object) -> str:
@@ -531,39 +554,8 @@ def test_agent_retries_decision_when_trigger_quote_is_not_exact(
     monkeypatch, tmp_path: Path
 ) -> None:
     database_path, run_id = _ingested_run(tmp_path)
-    invalid_response = json.dumps(
-        {
-            "decision": "search",
-            "reason": None,
-            "citations": None,
-            "uncertainties": None,
-            "plan": {
-                "evidence_id": 1,
-                "trigger_quote": "推理成本下降70%",
-                "question": "推理成本降幅采用了什么比较基线？",
-                "kind": "quantitative_claim",
-                "priority": 1,
-                "queries": [{"query": "AI 芯片 推理成本 独立测试", "purpose": "寻找独立测试材料"}],
-            },
-        },
-        ensure_ascii=False,
-    )
-    valid_response = json.dumps(
-        {
-            "decision": "finish",
-            "reason": "evidence_sufficient",
-            "citations": [
-                {
-                    "claim": "现有证据足以形成谨慎结论。",
-                    "evidence_ids": [1],
-                    "source_urls": [],
-                }
-            ],
-            "uncertainties": [],
-            "plan": None,
-        },
-        ensure_ascii=False,
-    )
+    invalid_response = _search_decision_response("推理成本下降70%")
+    valid_response = _finish_decision_response()
     responses = iter([invalid_response, valid_response])
     messages: list[dict[str, str]] = []
 
@@ -594,39 +586,12 @@ def test_agent_preserves_existing_decision_feedback_on_trigger_quote_retry(
     monkeypatch, tmp_path: Path
 ) -> None:
     database_path, run_id = _ingested_run(tmp_path)
-    valid_search_response = json.dumps(
-        {
-            "decision": "search",
-            "reason": None,
-            "citations": None,
-            "uncertainties": None,
-            "plan": {
-                "evidence_id": 1,
-                "trigger_quote": "推理成本下降 70%",
-                "question": "推理成本降幅采用了什么比较基线？",
-                "kind": "quantitative_claim",
-                "priority": 1,
-                "queries": [{"query": "AI 芯片 推理成本 独立测试", "purpose": "寻找独立测试材料"}],
-            },
-        },
-        ensure_ascii=False,
-    )
+    valid_search_response = _search_decision_response()
     invalid_response = valid_search_response.replace("推理成本下降 70%", "推理成本下降70%")
-    valid_response = json.dumps(
-        {
-            "decision": "finish",
-            "reason": "insufficient_after_search",
-            "citations": [
-                {
-                    "claim": "现有证据不足。",
-                    "evidence_ids": [1],
-                    "source_urls": [],
-                }
-            ],
-            "uncertainties": ["缺少独立测试报告"],
-            "plan": None,
-        },
-        ensure_ascii=False,
+    valid_response = _finish_decision_response(
+        reason="insufficient_after_search",
+        claim="现有证据不足。",
+        uncertainties=["缺少独立测试报告"],
     )
     responses = iter([valid_search_response, invalid_response, valid_response])
     messages: list[dict[str, str]] = []
@@ -654,6 +619,105 @@ def test_agent_preserves_existing_decision_feedback_on_trigger_quote_retry(
     assert len(messages) == 3
     assert "只能输出 finish" in messages[2]["content"]
     assert "trigger_quote 未出现在对应文章正文中" in messages[2]["content"]
+
+
+def test_agent_preserves_search_results_when_final_decision_times_out(tmp_path: Path) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+
+    class TimeoutAfterSearchDecider:
+        calls = 0
+
+        def decide(
+            self,
+            topic: str,
+            evidence: list[SelectedEvidence],
+            observations: list[AgentObservation],
+            timeout: float,
+            validation_feedback: str | None = None,
+        ):
+            self.calls += 1
+            if self.calls == 1:
+                return SearchDecision(_plan())
+            raise TimeoutError("Request timed out.")
+
+    decider = TimeoutAfterSearchDecider()
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=decider,
+        answerer=RecordingAnswerer(),
+        max_attempts=1,
+    )
+
+    assert report.status is RunStatus.PARTIAL
+    assert report.stop_reason is AgentStopReason.TIMEOUT
+    assert report.final_answer is None
+    assert len(report.answers) == 1
+    assert report.errors == []
+
+
+def test_agent_forces_finish_before_another_search_when_budget_is_low(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+    now = 0.0
+
+    def clock() -> float:
+        return now
+
+    def advance(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    original_start = agent_workflow.ExecutionBudget.start
+    monkeypatch.setattr(
+        agent_workflow.ExecutionBudget,
+        "start",
+        classmethod(lambda cls, total_seconds, **_: original_start(total_seconds, clock=clock)),
+    )
+
+    class BudgetAwareDecider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.feedback: list[str | None] = []
+
+        def decide(
+            self,
+            topic: str,
+            evidence: list[SelectedEvidence],
+            observations: list[AgentObservation],
+            timeout: float,
+            validation_feedback: str | None = None,
+        ):
+            self.calls += 1
+            self.feedback.append(validation_feedback)
+            advance(10)
+            if validation_feedback:
+                return _finish()
+            return SearchDecision(_plan(query=f"独立查询 {self.calls}"))
+
+    class AdvancingAnswerer(RecordingAnswerer):
+        def answer(self, plan: SearchPlan, timeout: float) -> SearchAnswer:
+            advance(10)
+            return super().answer(plan, timeout)
+
+    decider = BudgetAwareDecider()
+    answerer = AdvancingAnswerer()
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=decider,
+        answerer=answerer,
+        timeout_seconds=151,
+        max_steps=3,
+        max_attempts=1,
+    )
+
+    assert report.status is RunStatus.COMPLETED
+    assert decider.calls == 3
+    assert len(answerer.calls) == 2
+    assert decider.feedback[2] is not None
+    assert "必须输出 finish" in decider.feedback[2]
 
 
 def test_agent_and_planner_share_search_plan_contract() -> None:
@@ -821,6 +885,28 @@ def test_agent_retries_same_decision_and_tool_calls(tmp_path: Path) -> None:
         "search-1:attempt-2:error",
         "search-1:attempt-3:result",
     } <= artifact_keys
+
+
+def test_agent_does_not_retry_when_backoff_exceeds_remaining_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_path, run_id = _ingested_run(tmp_path)
+    answerer = RecordingAnswerer(failures=3)
+    monkeypatch.setattr(agent_workflow, "LLM_RETRY_DELAYS_SECONDS", (20.0,))
+
+    report = agent_run(
+        run_id,
+        database_path=database_path,
+        decider=SequenceDecider([SearchDecision(_plan())]),
+        answerer=answerer,
+        timeout_seconds=1,
+        max_attempts=3,
+        sleep=lambda _: None,
+    )
+
+    assert report.status is RunStatus.FAILED
+    assert report.stop_reason is AgentStopReason.ERROR
+    assert answerer.calls == [_plan()]
 
 
 def test_agent_does_not_retry_non_retryable_service_error(tmp_path: Path) -> None:

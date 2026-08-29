@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
+from information_agent.common import MAX_LLM_REQUEST_TIMEOUT_SECONDS
 from information_agent.investigation import QuestionKind, SearchPlan, SearchQuery
 from information_agent.search import HostedSearchAnswerer, HostedSearchConfig, SearchAnswerStatus
+from information_agent.search.client import create_search_client
 from information_agent.search.config import MAX_RESULT_COUNT
 from information_agent.search.hosted import (
     MAX_SOURCE_PUBLISHED_AT_CHARS,
@@ -110,6 +113,7 @@ def _config() -> HostedSearchConfig:
         model="search-model",
         base_url="https://api.example.com/v1",
         timeout_seconds=30,
+        adapter="openai_web_search",
     )
 
 
@@ -430,6 +434,25 @@ def test_hosted_search_answerer_creates_a_client_when_not_injected(monkeypatch) 
     assert observed_configs == [_config()]
 
 
+def test_search_client_disables_sdk_retries(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr("information_agent.search.client.OpenAI", FakeOpenAI)
+
+    client = create_search_client(_config())
+
+    assert isinstance(client, FakeOpenAI)
+    assert captured == {
+        "api_key": "secret",
+        "base_url": "https://api.example.com/v1",
+        "max_retries": 0,
+    }
+
+
 @pytest.mark.parametrize("timeout", [0, -1, math.nan, math.inf, -math.inf])
 def test_hosted_search_answerer_rejects_non_positive_or_non_finite_timeout(timeout) -> None:
     client = FakeClient(FakeResponse(answer=""))
@@ -446,6 +469,17 @@ def test_hosted_search_answerer_clamps_valid_timeout() -> None:
     HostedSearchAnswerer(_config(), client).answer(_plan(), timeout=60)
 
     assert client.requests[0]["timeout"] == 30
+
+
+def test_hosted_search_answerer_caps_single_request_timeout() -> None:
+    client = FakeResponsesClient(FakeResponsesResponse(output=[]))
+
+    HostedSearchAnswerer(
+        replace(_responses_config(), timeout_seconds=MAX_LLM_REQUEST_TIMEOUT_SECONDS + 30),
+        client,
+    ).answer(_plan(), timeout=MAX_LLM_REQUEST_TIMEOUT_SECONDS + 30)
+
+    assert client.requests[0]["timeout"] == MAX_LLM_REQUEST_TIMEOUT_SECONDS
 
 
 def test_parse_sources_normalizes_and_bounds_untrusted_text() -> None:

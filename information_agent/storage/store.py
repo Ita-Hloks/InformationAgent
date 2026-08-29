@@ -1473,11 +1473,6 @@ class SQLiteCollectionStore(
     def _migrate(connection: sqlite3.Connection) -> None:
         connection.executescript(
             """
-            CREATE TABLE IF NOT EXISTS information_agent_migrations (
-                migration_id TEXT PRIMARY KEY,
-                applied_at TEXT NOT NULL
-            );
-
             CREATE TABLE IF NOT EXISTS research_runs (
                 id TEXT PRIMARY KEY,
                 topic TEXT NOT NULL,
@@ -1886,21 +1881,6 @@ class SQLiteCollectionStore(
                 WHERE status IN ('queued', 'running');
             """
         )
-        migration_id = "20260824_remove_article_snapshot_normalizer_version"
-        applied = connection.execute(
-            "SELECT 1 FROM information_agent_migrations WHERE migration_id = ?",
-            (migration_id,),
-        ).fetchone()
-        columns = {
-            str(row[1]) for row in connection.execute("PRAGMA table_info(article_snapshots)")
-        }
-        if applied is None and "normalizer_version" in columns:
-            connection.execute("ALTER TABLE article_snapshots DROP COLUMN normalizer_version")
-        if applied is None:
-            connection.execute(
-                "INSERT INTO information_agent_migrations (migration_id, applied_at) VALUES (?, ?)",
-                (migration_id, _format_datetime(project_now())),
-            )
         connection.execute(
             """
             INSERT OR IGNORE INTO reader_automation_settings (

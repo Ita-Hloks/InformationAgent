@@ -23,6 +23,7 @@ from ..agent import (
 from ..common import (
     DEFAULT_LLM_TIMEOUT_SECONDS,
     LLM_RETRY_DELAYS_SECONDS,
+    MAX_LLM_REQUEST_TIMEOUT_SECONDS,
     is_retryable_llm_error,
 )
 from ..contracts import RunStatus
@@ -43,6 +44,7 @@ from .execution import ExecutionBudget
 
 DEFAULT_MAX_AGENT_STEPS = 3
 DEFAULT_MAX_ATTEMPTS = 3
+MIN_AGENT_DECISION_TIMEOUT_SECONDS = 30.0
 
 T = TypeVar("T")
 
@@ -96,6 +98,7 @@ class _AgentRunRecorder:
         *,
         max_attempts: int = 1,
         should_retry: Callable[[Exception], bool] | None = None,
+        can_retry: Callable[[float], bool] | None = None,
         result_kind: str,
         result_payload: Callable[[T], dict[str, Any]],
         allow_when_stopped: bool = False,
@@ -162,25 +165,29 @@ class _AgentRunRecorder:
                     AnalysisAttemptStatus.FAILED,
                     error=exc,
                 )
-                if attempt_no < max_attempts and should_retry is not None and should_retry(exc):
+                retryable = (
+                    attempt_no < max_attempts and should_retry is not None and should_retry(exc)
+                )
+                if retryable:
                     delay = LLM_RETRY_DELAYS_SECONDS[
                         min(attempt_no - 1, len(LLM_RETRY_DELAYS_SECONDS) - 1)
                     ]
-                    self._notify(
-                        step_key=step_key,
-                        phase=operation,
-                        status="retrying",
-                        attempt=attempt_no,
-                        max_attempts=max_attempts,
-                        retryable=True,
-                        retry_in_seconds=delay,
-                        error={"type": type(exc).__name__, "message": str(exc)},
-                    )
-                    if self._should_stop() and not allow_when_stopped:
-                        self._cancel_step(step.id, step_key, "用户请求停止 Agent")
-                        raise AgentCancellationRequested("用户请求停止 Agent") from exc
-                    self._sleep(delay)
-                    continue
+                    if can_retry is None or can_retry(delay):
+                        self._notify(
+                            step_key=step_key,
+                            phase=operation,
+                            status="retrying",
+                            attempt=attempt_no,
+                            max_attempts=max_attempts,
+                            retryable=True,
+                            retry_in_seconds=delay,
+                            error={"type": type(exc).__name__, "message": str(exc)},
+                        )
+                        if self._should_stop() and not allow_when_stopped:
+                            self._cancel_step(step.id, step_key, "用户请求停止 Agent")
+                            raise AgentCancellationRequested("用户请求停止 Agent") from exc
+                        self._sleep(delay)
+                        continue
                 self._store.set_analysis_step_status(
                     step.id,
                     AnalysisStepStatus.FAILED,
@@ -351,7 +358,16 @@ def agent_run(
             )
         if budget.remaining() <= 0:
             return recorder.finalize(
-                _failed_report(
+                _timeout_report(
+                    run_id,
+                    topic,
+                    evidence,
+                    plans,
+                    answers,
+                    steps=decision_count,
+                )
+                if answers
+                else _failed_report(
                     run_id,
                     topic,
                     evidence,
@@ -365,13 +381,17 @@ def agent_run(
             )
         decision_count += 1
         search_limit_reached = search_count >= max_steps
-        validation_feedback = [
-            (
+        validation_messages = []
+        if search_limit_reached:
+            validation_messages.append(
                 f"已达到最大搜索动作数 {max_steps}；本轮只能输出 finish，不能继续 search。"
-                if search_limit_reached
-                else None
             )
-        ]
+        if answers and _must_finish_before_search(budget):
+            validation_messages.append(
+                "当前剩余时间不足以再执行一次完整搜索并保留最终决策时间；"
+                "本轮必须输出 finish，不能继续 search。"
+            )
+        validation_feedback = ["\n".join(validation_messages) or None]
 
         def decide(feedback_state=validation_feedback) -> AgentDecision:
             remaining = budget.remaining()
@@ -406,6 +426,7 @@ def agent_run(
                 decide,
                 max_attempts=max_attempts,
                 should_retry=_should_retry_agent_decision,
+                can_retry=lambda delay: _can_retry_with_budget(budget, delay),
                 result_kind="agent_decision",
                 result_payload=_agent_decision_payload,
             )
@@ -423,15 +444,25 @@ def agent_run(
                 )
             )
         except Exception as exc:
+            failure_reason = _failure_reason(budget)
             return recorder.finalize(
-                _failed_report(
+                _timeout_report(
+                    run_id,
+                    topic,
+                    evidence,
+                    plans,
+                    answers,
+                    steps=decision_count,
+                )
+                if answers and (failure_reason is AgentStopReason.TIMEOUT or _is_timeout_error(exc))
+                else _failed_report(
                     run_id,
                     topic,
                     evidence,
                     plans,
                     answers,
                     observations,
-                    _failure_reason(budget),
+                    failure_reason,
                     f"Agent 决策失败：{exc}",
                     steps=decision_count,
                 )
@@ -487,6 +518,17 @@ def agent_run(
 
         if not isinstance(decision, SearchDecision):
             raise TypeError("Agent 决策类型不受支持")
+        if answers and _must_finish_before_search(budget):
+            return recorder.finalize(
+                _timeout_report(
+                    run_id,
+                    topic,
+                    evidence,
+                    plans,
+                    answers,
+                    steps=decision_count,
+                )
+            )
         normalized_queries = {_normalize_query(query.query) for query in decision.plan.queries}
         if normalized_queries & seen_queries:
             return recorder.finalize(
@@ -524,6 +566,7 @@ def agent_run(
                 answer_search,
                 max_attempts=max_attempts,
                 should_retry=is_retryable_llm_error,
+                can_retry=lambda delay: _can_retry_with_budget(budget, delay),
                 result_kind="search_answer",
                 result_payload=_search_answer_payload,
             )
@@ -541,15 +584,25 @@ def agent_run(
                 )
             )
         except Exception as exc:
+            failure_reason = _failure_reason(budget)
             return recorder.finalize(
-                _failed_report(
+                _timeout_report(
+                    run_id,
+                    topic,
+                    evidence,
+                    plans,
+                    answers,
+                    steps=decision_count,
+                )
+                if answers and (failure_reason is AgentStopReason.TIMEOUT or _is_timeout_error(exc))
+                else _failed_report(
                     run_id,
                     topic,
                     evidence,
                     plans,
                     answers,
                     observations,
-                    _failure_reason(budget),
+                    failure_reason,
                     f"Agent 搜索工具失败：{exc}",
                     steps=decision_count,
                 )
@@ -596,6 +649,31 @@ def _failed_report(
         len(observations) if steps is None else steps,
         stop_reason,
         [error],
+    )
+
+
+def _timeout_report(
+    run_id,
+    topic,
+    evidence,
+    plans,
+    answers,
+    *,
+    steps: int,
+) -> AgentReport:
+    return AgentReport(
+        run_id,
+        topic,
+        RunStatus.PARTIAL,
+        evidence,
+        plans,
+        answers,
+        None,
+        (),
+        ("Agent 未在剩余时限内生成最终结论，已保留此前的搜索结果。",),
+        steps,
+        AgentStopReason.TIMEOUT,
+        [],
     )
 
 
@@ -669,6 +747,30 @@ def _finish_report(
 
 def _failure_reason(budget: ExecutionBudget) -> AgentStopReason:
     return AgentStopReason.TIMEOUT if budget.remaining() <= 0 else AgentStopReason.ERROR
+
+
+def _must_finish_before_search(budget: ExecutionBudget) -> bool:
+    if budget.total_seconds <= MAX_LLM_REQUEST_TIMEOUT_SECONDS:
+        return False
+    return budget.remaining() <= (
+        MAX_LLM_REQUEST_TIMEOUT_SECONDS + MIN_AGENT_DECISION_TIMEOUT_SECONDS
+    )
+
+
+def _can_retry_with_budget(budget: ExecutionBudget, delay: float) -> bool:
+    if budget.total_seconds <= MAX_LLM_REQUEST_TIMEOUT_SECONDS:
+        return budget.remaining() > delay
+    return budget.remaining() > (
+        delay + MAX_LLM_REQUEST_TIMEOUT_SECONDS + MIN_AGENT_DECISION_TIMEOUT_SECONDS
+    )
+
+
+def _is_timeout_error(error: Exception) -> bool:
+    if isinstance(error, TimeoutError):
+        return True
+    if getattr(error, "status_code", None) == 524:
+        return True
+    return type(error).__name__ == "APITimeoutError" or "timed out" in str(error).casefold()
 
 
 def _normalize_query(value: str) -> str:

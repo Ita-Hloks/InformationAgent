@@ -326,60 +326,6 @@ def test_article_research_status_is_bound_to_current_snapshot(tmp_path: Path) ->
     assert current["research_mode"] is None
 
 
-def test_historical_snapshot_schema_is_migrated_once(tmp_path: Path) -> None:
-    database_path = tmp_path / "legacy.db"
-    with sqlite3.connect(database_path) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE articles (
-                id TEXT PRIMARY KEY,
-                source_url TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE article_snapshots (
-                id TEXT PRIMARY KEY,
-                article_id TEXT NOT NULL REFERENCES articles(id),
-                content_hash TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                collected_at TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                normalizer_version INTEGER NOT NULL,
-                UNIQUE(article_id, content_hash)
-            );
-            INSERT INTO articles VALUES (
-                'article-1', 'https://example.com/a', '2026-08-24T00:00:00+08:00'
-            );
-            INSERT INTO article_snapshots VALUES (
-                'snapshot-1', 'article-1', 'hash-1', '{}',
-                '2026-08-24T00:00:00+08:00', '2026-08-24T00:00:00+08:00', 1
-            );
-            """
-        )
-
-    SQLiteCollectionStore(database_path).list_subscriptions()
-    with sqlite3.connect(database_path) as connection:
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(article_snapshots)")}
-        assert "normalizer_version" not in columns
-        assert connection.execute("SELECT COUNT(*) FROM article_snapshots").fetchone()[0] == 1
-        assert (
-            connection.execute(
-                "SELECT COUNT(*) FROM information_agent_migrations WHERE migration_id = ?",
-                ("20260824_remove_article_snapshot_normalizer_version",),
-            ).fetchone()[0]
-            == 1
-        )
-
-    SQLiteCollectionStore(database_path).list_subscriptions()
-    with sqlite3.connect(database_path) as connection:
-        assert (
-            connection.execute(
-                "SELECT COUNT(*) FROM information_agent_migrations WHERE migration_id = ?",
-                ("20260824_remove_article_snapshot_normalizer_version",),
-            ).fetchone()[0]
-            == 1
-        )
-
-
 def test_reader_automation_settings_api_persists_and_rejects_strict_input(
     tmp_path: Path,
 ) -> None:

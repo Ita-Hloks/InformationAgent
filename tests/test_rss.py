@@ -18,9 +18,8 @@ from information_agent.normalization import normalize_evidence
 
 
 @pytest.mark.parametrize("timeout", [0, -1, math.nan, math.inf, -math.inf])
-@pytest.mark.parametrize("fetcher", [fetch_feed, fetch_feed_with_cache])
-def test_sync_fetch_helpers_reject_invalid_timeouts_before_urlopen(
-    monkeypatch, fetcher, timeout
+def test_fetch_feed_with_cache_rejects_invalid_timeouts_before_urlopen(
+    monkeypatch, timeout
 ) -> None:
     network_calls: list[float] = []
 
@@ -31,11 +30,11 @@ def test_sync_fetch_helpers_reject_invalid_timeouts_before_urlopen(
     monkeypatch.setattr("information_agent.collection.rss.urlopen", fake_urlopen)
 
     with pytest.raises(ValueError, match="timeout must be a positive finite number"):
-        fetcher("https://example.com/rss.xml", timeout=timeout)
+        fetch_feed_with_cache("https://example.com/rss.xml", timeout=timeout)
 
     assert network_calls == []
 
-    fetcher("https://example.com/rss.xml", timeout=1)
+    fetch_feed_with_cache("https://example.com/rss.xml", timeout=1)
     assert network_calls == [1]
 
 

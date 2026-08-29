@@ -12,7 +12,7 @@ DEFAULT_RESULT_COUNT = 5
 MAX_RESULT_COUNT = 50
 DEFAULT_CONTENT_SIZE = "medium"
 DEFAULT_TIMEOUT_SECONDS = DEFAULT_LLM_TIMEOUT_SECONDS
-DEFAULT_ADAPTER = "openai_web_search"
+DEFAULT_ADAPTER = "openai_responses_web_search"
 SUPPORTED_ADAPTERS = {"openai_web_search", "openai_responses_web_search"}
 
 SUPPORTED_CONTENT_SIZES = {"low", "medium", "high"}

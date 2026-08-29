@@ -8,6 +8,7 @@ from typing import Any
 from .call_log import CallBackup
 
 DEFAULT_LLM_TIMEOUT_SECONDS = 300.0
+MAX_LLM_REQUEST_TIMEOUT_SECONDS = 90.0
 DEFAULT_LLM_MAX_ATTEMPTS = 3
 LLM_RETRY_DELAYS_SECONDS = (5.0, 10.0)
 
@@ -49,6 +50,7 @@ def request_json_completion(
     if max_attempts <= 0:
         raise ValueError("max_attempts must be positive")
 
+    request_timeout = min(timeout, MAX_LLM_REQUEST_TIMEOUT_SECONDS)
     for attempt in range(1, max_attempts + 1):
         backup = CallBackup.start(
             stage=stage,
@@ -56,6 +58,7 @@ def request_json_completion(
                 "model": model,
                 "messages": messages,
                 "attempt": attempt,
+                "timeout": request_timeout,
                 **({"response_format": response_format} if response_format is not None else {}),
             },
             record_content=record_content,
@@ -68,9 +71,10 @@ def request_json_completion(
             }
             if response_format is not None:
                 request_kwargs["response_format"] = response_format
-            response = client.with_options(timeout=timeout).chat.completions.create(
-                **request_kwargs
-            )
+            response = client.with_options(
+                timeout=request_timeout,
+                max_retries=0,
+            ).chat.completions.create(**request_kwargs)
             content = response.choices[0].message.content or ""
         except Exception as exc:
             retryable = is_retryable_llm_error(exc)

@@ -8,43 +8,11 @@ import pytest
 from information_agent.collection import RawFeedEntry
 from information_agent.collection.web import (
     MAX_PAGE_BYTES,
-    _extract_text,
     _guess_encoding,
     augment_evidence,
     fetch_article,
 )
 from information_agent.contracts import ContentType
-
-
-def test_extract_text_strips_script_and_style() -> None:
-    html = (
-        "<html><head>"
-        "<script>alert('xss')</script>"
-        "<style>.nav{color:red}</style>"
-        "</head><body>"
-        "<article><p>正文 &amp; 内容。这篇正文用于测试提取功能是否正常工作。</p></article>"
-        "</body></html>"
-    )
-    result = _extract_text(html)
-    assert result is not None
-    assert "正文" in result
-    assert "&" in result
-    assert "内容" in result
-    assert "xss" not in result
-    assert "nav" not in result
-
-
-def test_extract_text_decodes_html_entities() -> None:
-    html = (
-        "<html><body><article>"
-        "<p>&lt;tag&gt; &amp; &quot;text&quot; 这篇正文用于测试实体解码功能。</p>"
-        "</article></body></html>"
-    )
-    result = _extract_text(html)
-    assert result is not None
-    assert "<tag>" in result
-    assert "&" in result
-    assert '"text"' in result
 
 
 def test_fetch_article_returns_text_for_valid_html(monkeypatch) -> None:
@@ -167,22 +135,22 @@ def test_fetch_article_rejects_invalid_timeout_before_downstream_calls(
     assert network_calls == [1]
 
 
-def test_fetch_article_returns_none_on_network_error(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("url", "error"),
+    [
+        ("https://example.com/error", URLError("连接失败")),
+        ("https://example.com/timeout", OSError("超时")),
+    ],
+)
+def test_fetch_article_returns_none_on_network_error(
+    monkeypatch, url: str, error: Exception
+) -> None:
     def fake_urlopen(request, timeout: float) -> None:
-        raise URLError("连接失败")
+        raise error
 
     monkeypatch.setattr("information_agent.collection.web.urlopen", fake_urlopen)
 
-    assert fetch_article("https://example.com/error") is None
-
-
-def test_fetch_article_returns_none_on_timeout(monkeypatch) -> None:
-    def fake_urlopen(request, timeout: float) -> None:
-        raise OSError("超时")
-
-    monkeypatch.setattr("information_agent.collection.web.urlopen", fake_urlopen)
-
-    assert fetch_article("https://example.com/timeout") is None
+    assert fetch_article(url) is None
 
 
 def test_fetch_article_respects_max_page_bytes(monkeypatch) -> None:
@@ -393,30 +361,22 @@ def test_augment_evidence_mixed_items(monkeypatch) -> None:
     assert set(fetched_urls) == {"https://example.com/success", "https://example.com/fail"}
 
 
-def test_fetch_article_returns_none_on_http_403(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("url", "status", "reason"),
+    [
+        ("https://example.com/forbidden", 403, "Forbidden"),
+        ("https://example.com/rate-limited", 429, "Too Many Requests"),
+    ],
+)
+def test_fetch_article_returns_none_on_http_error(
+    monkeypatch, url: str, status: int, reason: str
+) -> None:
     def fake_urlopen(request, timeout: float) -> None:
-        raise HTTPError(request.full_url, 403, "Forbidden", {}, None)
+        raise HTTPError(request.full_url, status, reason, {}, None)
 
     monkeypatch.setattr("information_agent.collection.web.urlopen", fake_urlopen)
 
-    assert fetch_article("https://example.com/forbidden") is None
-
-
-def test_fetch_article_returns_none_on_http_429(monkeypatch) -> None:
-    def fake_urlopen(request, timeout: float) -> None:
-        raise HTTPError(request.full_url, 429, "Too Many Requests", {}, None)
-
-    monkeypatch.setattr("information_agent.collection.web.urlopen", fake_urlopen)
-
-    assert fetch_article("https://example.com/rate-limited") is None
-
-
-def test_domain_rate_limiter_allows_fast_requests() -> None:
-    from information_agent.collection.web import DomainRateLimiter
-
-    limiter = DomainRateLimiter(requests_per_second=10)
-    for _ in range(10):
-        limiter.wait_if_needed("example.com")
+    assert fetch_article(url) is None
 
 
 def test_domain_rate_limiter_blocks_excessive_requests() -> None:

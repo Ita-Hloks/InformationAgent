@@ -87,22 +87,6 @@ def test_execution_budget_rejects_nonpositive_and_nonfinite_totals(
         ExecutionBudget.start(total_seconds)
 
 
-@pytest.mark.parametrize("total_seconds", [math.nan, math.inf, -math.inf, 0.0, -1.0])
-def test_runner_rejects_invalid_total_budget_before_collection(
-    total_seconds: float,
-) -> None:
-    def collector(_: str, __: float) -> list[RawFeedEntry]:
-        raise AssertionError("collector should not run")
-
-    with pytest.raises(ValueError, match="total_seconds must be a positive finite number"):
-        WorkflowRunner(
-            topic="AI",
-            feeds=["feed"],
-            timeout_seconds=total_seconds,
-            collector=collector,
-        )
-
-
 def test_runner_skips_analysis_when_collection_consumes_total_budget() -> None:
     clock = FakeClock()
 

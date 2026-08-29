@@ -7,7 +7,7 @@ import time
 from dataclasses import asdict
 from typing import Any
 
-from ..common import CallBackup, normalize_url
+from ..common import MAX_LLM_REQUEST_TIMEOUT_SECONDS, CallBackup, normalize_url
 from ..investigation import SearchPlan
 from .client import create_search_client
 from .config import MAX_RESULT_COUNT, HostedSearchConfig
@@ -41,7 +41,11 @@ class HostedSearchAnswerer:
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("搜索回答时限必须大于 0")
 
-        request_timeout = min(timeout, self.config.timeout_seconds)
+        request_timeout = min(
+            timeout,
+            self.config.timeout_seconds,
+            MAX_LLM_REQUEST_TIMEOUT_SECONDS,
+        )
         if self.config.adapter == "openai_responses_web_search":
             return self._answer_with_responses(plan, request_timeout)
 
