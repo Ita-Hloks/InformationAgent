@@ -6,6 +6,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,12 +24,14 @@ from information_agent.normalization import normalize_evidence
 from information_agent.opinion import (
     BilibiliComment,
     BilibiliCommentCollector,
+    BilibiliVideoCandidate,
     Classification,
     ClassificationStatus,
     OpinionAnalysisService,
     OpinionPoint,
     OpinionSnapshotMismatchError,
     OpinionStatus,
+    ReferenceDiscoveryStatus,
     aggregate_opinion_points,
     parse_bilibili_target,
     parse_comment_analysis,
@@ -495,6 +498,16 @@ class FakeCommentCollector:
         ]
 
 
+class FakeReferenceDiscovery:
+    def __init__(self, result) -> None:
+        self.result = result
+        self.calls: list[str] = []
+
+    def discover(self, article_id: str):
+        self.calls.append(article_id)
+        return self.result
+
+
 class NoControversyAnalyzer:
     def __init__(self) -> None:
         self.detect_calls = 0
@@ -587,6 +600,79 @@ def _reader_service(database_path: Path) -> ReaderService:
     service = ReaderService(database_path, fetcher=fetcher)
     service.subscribe("https://example.com/feed.xml")
     return service
+
+
+def _external_reader_service(database_path: Path) -> ReaderService:
+    def fetcher(feed_url: str, _timeout: float, **_: object) -> FeedFetchResult:
+        return FeedFetchResult(
+            feed_url=feed_url,
+            etag=None,
+            last_modified=None,
+            entries=[
+                RawFeedEntry(
+                    source_url="https://www.geekpark.net/news/369047",
+                    title="一篇有争议的文章",
+                    content="厂商称效果提升 70%，但没有说明完整测试条件。",
+                    feed_url=feed_url,
+                    published_at=project_now(),
+                )
+            ],
+        )
+
+    service = ReaderService(database_path, fetcher=fetcher)
+    service.subscribe("https://example.com/feed.xml")
+    return service
+
+
+def test_external_article_opinion_uses_searched_bilibili_video_comments(tmp_path: Path) -> None:
+    reader = _external_reader_service(tmp_path / "opinion-external.db")
+    article = reader.list_articles()[0].article
+    candidate = BilibiliVideoCandidate(
+        video_id="BV1candidate",
+        bvid="BV1candidate",
+        url="https://www.bilibili.com/video/BV1candidate",
+        title="相关视频",
+        search_query="效果提升 70%",
+    )
+    references = FakeReferenceDiscovery(
+        SimpleNamespace(
+            article_id=article.article_id,
+            snapshot_id=reader.list_articles()[0].snapshot_id,
+            content_hash=reader.list_articles()[0].content_hash,
+            plans=(
+                OpinionPlan(
+                    evidence_id=1,
+                    trigger_quote="厂商称效果提升 70%",
+                    question="效果提升的比较基线是否清楚？",
+                    queries=(SearchQuery("效果提升 70%", "寻找相关讨论"),),
+                ),
+            ),
+            candidates=(candidate,),
+            status=ReferenceDiscoveryStatus.COMPLETED,
+            status_reason="completed",
+            errors=(),
+        )
+    )
+    collector = FakeCommentCollector()
+    service = OpinionAnalysisService(
+        store=reader.store,
+        analyzer=FakeOpinionAnalyzer(),
+        collector=collector,
+        reference_discovery_service=references,
+        comment_limit=10,
+    )
+
+    report = service.request(article.article_id)
+
+    assert report.status is OpinionStatus.COMPLETED
+    assert references.calls == [article.article_id]
+    assert collector.calls == 1
+    assert report.source_url == "https://www.geekpark.net/news/369047"
+    assert {item.source_url.split("#", 1)[0] for item in report.comments} == {candidate.url}
+    assert [item.comment_id for item in report.comments] == [
+        "BV1candidate:reply-1",
+        "BV1candidate:reply-2",
+    ]
 
 
 def test_opinion_analysis_is_explicit_and_reuses_completed_result(tmp_path: Path) -> None:

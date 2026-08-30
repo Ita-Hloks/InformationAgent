@@ -6,7 +6,7 @@ import os
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from ..contracts import project_now
 from ..investigation import OPINION_WINDOW_HOURS, ArticleSnapshotIdentity, OpinionPlan
@@ -40,6 +40,9 @@ from .runtime import (
     error_summary,
     remaining_time,
 )
+
+if TYPE_CHECKING:
+    from .references import BilibiliVideoCandidate, ReferenceDiscoveryService
 
 Clock = Callable[[], float]
 STALE_RUNNING_GRACE_SECONDS = 30.0
@@ -78,6 +81,7 @@ class OpinionAnalysisService:
         store: SQLiteCollectionStore | None = None,
         analyzer: OpinionAnalyzer | None = None,
         collector: CommentCollector | None = None,
+        reference_discovery_service: ReferenceDiscoveryService | None = None,
         timeout_seconds: float = 300,
         comment_limit: int = 100,
         clock: Clock = time.monotonic,
@@ -95,6 +99,7 @@ class OpinionAnalysisService:
             cookie=os.getenv("BILIBILI_COOKIE"),
             clock=clock,
         )
+        self.reference_discovery_service = reference_discovery_service
         self.timeout_seconds = timeout_seconds
         self.comment_limit = comment_limit
         self.clock = clock
@@ -127,8 +132,6 @@ class OpinionAnalysisService:
         identity = _article_identity(
             article.article.article_id, article.snapshot_id, article.content_hash
         )
-
-        parse_bilibili_target(article.article.source_url)
 
         latest = self.store.get_latest_opinion_run(article_id)
         if latest is not None and latest.status in {
@@ -164,6 +167,8 @@ class OpinionAnalysisService:
 
         deadline = self.clock() + self.timeout_seconds
         controversy_points: list[OpinionPlan] = list(stored_plans)
+        discovered_candidates: list[BilibiliVideoCandidate] = []
+        use_reference_discovery = not _is_bilibili_source(article.article.source_url)
         comments: list[BilibiliComment] = []
         points: list[OpinionPoint] = []
         classifications: list[Classification] = []
@@ -179,7 +184,21 @@ class OpinionAnalysisService:
         try:
             self._heartbeat(run.id, attempts)
             analyzer = self.analyzer
-            if not controversy_points:
+            if use_reference_discovery:
+                current_stage = "opinion_planning"
+                reference_result = self._discover_references(article_id, analyzer)
+                _validate_reference_result(reference_result, identity)
+                controversy_points = list(reference_result.plans)
+                discovered_candidates = list(reference_result.candidates)
+                if reference_result.errors:
+                    uncertainties.extend(reference_result.errors)
+                if reference_result.status.value == "partial" and not controversy_points:
+                    raise OpinionResponseError(
+                        "文章舆情关键词或视频搜索失败",
+                        "",
+                        code="planning_response_invalid",
+                    )
+            elif not controversy_points:
                 current_stage = "opinion_planning"
                 if self.analyzer is None:
                     analyzer = LLMOpinionAnalyzer(clock=self.clock)
@@ -199,20 +218,37 @@ class OpinionAnalysisService:
                 status_reason = "no_controversy_points"
             else:
                 current_stage = "comment_collection"
-                comments = _collect_comments(
-                    self.collector,
-                    article.article.source_url,
-                    window_hours=OPINION_WINDOW_HOURS,
-                    limit=self.comment_limit,
-                    timeout=self._remaining(deadline),
-                    deadline=deadline,
-                    clock=self.clock,
-                    heartbeat=lambda: self._heartbeat(run.id, attempts),
-                    attempts=attempts,
-                )
+                if discovered_candidates:
+                    comments = _collect_discovered_comments(
+                        self.collector,
+                        discovered_candidates,
+                        window_hours=OPINION_WINDOW_HOURS,
+                        limit=self.comment_limit,
+                        timeout=self._remaining(deadline),
+                        deadline=deadline,
+                        clock=self.clock,
+                        heartbeat=lambda: self._heartbeat(run.id, attempts),
+                        attempts=attempts,
+                    )
+                elif not use_reference_discovery:
+                    comments = _collect_comments(
+                        self.collector,
+                        article.article.source_url,
+                        window_hours=OPINION_WINDOW_HOURS,
+                        limit=self.comment_limit,
+                        timeout=self._remaining(deadline),
+                        deadline=deadline,
+                        clock=self.clock,
+                        heartbeat=lambda: self._heartbeat(run.id, attempts),
+                        attempts=attempts,
+                    )
                 if not comments:
-                    summary = "最近 72 小时未获取到可分析的哔哩哔哩评论。"
-                    uncertainties.append("样本为空，不能代表总体民意。")
+                    if use_reference_discovery:
+                        summary = "未找到可用于采集评论的哔哩哔哩视频。"
+                        uncertainties.append("未找到匹配视频，无法形成评论样本。")
+                    else:
+                        summary = "最近 72 小时未获取到可分析的哔哩哔哩评论。"
+                        uncertainties.append("样本为空，不能代表总体民意。")
                     status_reason = "sample_empty"
                 else:
                     current_stage = "opinion_analysis"
@@ -303,6 +339,24 @@ class OpinionAnalysisService:
             raise OpinionTimeoutError("opinion")
         return remaining
 
+    def _discover_references(self, article_id: str, analyzer: OpinionAnalyzer | None):
+        discovery = self.reference_discovery_service
+        if discovery is None:
+            from .references import ReferenceDiscoveryService
+
+            planner = (
+                analyzer
+                if analyzer is not None and hasattr(analyzer, "detect_controversies")
+                else None
+            )
+            discovery = ReferenceDiscoveryService(
+                store=self.store,
+                planner=planner,
+                timeout_seconds=self.timeout_seconds,
+                clock=self.clock,
+            )
+        return discovery.discover(article_id)
+
     def _heartbeat(self, run_id: str, attempts: list[Attempt]) -> None:
         self.store.heartbeat_opinion_run(
             run_id,
@@ -385,11 +439,17 @@ class OpinionAnalysisService:
             plan.trigger_quote not in article.article.content for plan in report.controversy_points
         ):
             raise OpinionSnapshotMismatchError("舆情结果的争议锚点不属于当前文章")
-        if any(
-            comment.source_url.split("#", 1)[0] != article.article.source_url
+        if _is_bilibili_source(article.article.source_url):
+            if any(
+                comment.source_url.split("#", 1)[0] != article.article.source_url
+                for comment in report.comments
+            ):
+                raise OpinionSnapshotMismatchError("舆情结果的评论不属于当前文章")
+        elif any(
+            not _is_bilibili_source(comment.source_url.split("#", 1)[0])
             for comment in report.comments
         ):
-            raise OpinionSnapshotMismatchError("舆情结果的评论不属于当前文章")
+            raise OpinionSnapshotMismatchError("舆情结果的评论来源不是哔哩哔哩内容")
         return report
 
 
@@ -526,6 +586,107 @@ def _collect_comments(
             **kwargs,
         ),
     )
+
+
+def _collect_discovered_comments(
+    collector: CommentCollector,
+    candidates: list[BilibiliVideoCandidate],
+    *,
+    window_hours: int,
+    limit: int,
+    timeout: float,
+    deadline: float,
+    clock: Clock,
+    heartbeat: Callable[[], None],
+    attempts: list[Attempt],
+) -> list[BilibiliComment]:
+    comments: list[BilibiliComment] = []
+    seen_video_ids: set[str] = set()
+    seen_comment_ids: set[str] = set()
+    for candidate in candidates:
+        if len(comments) >= limit:
+            break
+        if candidate.video_id in seen_video_ids:
+            continue
+        seen_video_ids.add(candidate.video_id)
+        remaining = remaining_time(deadline, clock=clock)
+        if remaining <= 0:
+            raise OpinionTimeoutError("comment_collection")
+        collected = _collect_comments(
+            collector,
+            candidate.url,
+            window_hours=window_hours,
+            limit=limit - len(comments),
+            timeout=min(timeout, remaining),
+            deadline=deadline,
+            clock=clock,
+            heartbeat=heartbeat,
+            attempts=attempts,
+        )
+        for comment in collected:
+            comment_id = f"{candidate.video_id}:{comment.comment_id}"
+            if comment_id in seen_comment_ids:
+                continue
+            seen_comment_ids.add(comment_id)
+            comments.append(
+                BilibiliComment(
+                    comment_id=comment_id,
+                    source_url=f"{candidate.url}#{comment_id}",
+                    author=comment.author,
+                    content=comment.content,
+                    likes=comment.likes,
+                    published_at=comment.published_at,
+                )
+            )
+            if len(comments) >= limit:
+                break
+    return comments
+
+
+def _validate_reference_result(
+    result: object,
+    identity: ArticleSnapshotIdentity,
+) -> None:
+    from .references import BilibiliVideoCandidate, ReferenceDiscoveryStatus
+
+    if (
+        getattr(result, "article_id", None) != identity.article_id
+        or getattr(result, "snapshot_id", None) != identity.article_snapshot_id
+        or getattr(result, "content_hash", None) != identity.content_hash
+    ):
+        raise OpinionSnapshotMismatchError("候选视频与当前文章快照不一致")
+    plans = getattr(result, "plans", None)
+    candidates = getattr(result, "candidates", None)
+    status = getattr(result, "status", None)
+    errors = getattr(result, "errors", None)
+    if (
+        not isinstance(plans, tuple)
+        or not all(isinstance(plan, OpinionPlan) for plan in plans)
+        or not isinstance(candidates, tuple)
+        or not all(isinstance(candidate, BilibiliVideoCandidate) for candidate in candidates)
+        or not isinstance(status, ReferenceDiscoveryStatus)
+        or not isinstance(errors, tuple)
+        or not all(isinstance(error, str) for error in errors)
+    ):
+        raise OpinionResponseError(
+            "候选视频发现结果无效",
+            "",
+            code="planning_response_invalid",
+        )
+    if any(not _is_bilibili_source(candidate.url) for candidate in candidates):
+        raise OpinionResponseError(
+            "候选评论来源不是哔哩哔哩内容",
+            "",
+            code="planning_response_invalid",
+        )
+
+
+def _is_bilibili_source(source_url: str) -> bool:
+    try:
+        parse_bilibili_target(source_url)
+    except Exception:
+        return False
+    return True
 
 
 def _analyze_comments(

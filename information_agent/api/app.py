@@ -84,8 +84,11 @@ def create_app(
 ) -> FastAPI:
     load_dotenv()
     reader = service or ReaderService()
-    opinion = opinion_service or OpinionAnalysisService(store=reader.store)
     references = reference_discovery_service or ReferenceDiscoveryService(store=reader.store)
+    opinion = opinion_service or OpinionAnalysisService(
+        store=reader.store,
+        reference_discovery_service=references,
+    )
     assistant = article_assistant or ArticleAssistant()
     agent_tasks = AgentTaskManager(reader.store.database_path, runner=agent_run)
     summary_tasks = summary_task_manager or SummaryTaskManager(
