@@ -14,11 +14,11 @@ import {
   Trash2,
 } from "lucide-react";
 
-import type { Article } from "../../types";
-import type { ArticleResearchRun } from "../../types";
+import type { Article, ArticleResearchRun, OpinionReport } from "../../types";
 import { formatArticleFullDate } from "../../utils/date";
 import { useClickOutside } from "../../hooks/useClickOutside";
 import { ArticleImage } from "./articleImage";
+import { OpinionAnalysisSection } from "./opinionAnalysisSection";
 
 type ReaderPaneProps = {
   article: Article | null;
@@ -46,6 +46,11 @@ type ReaderPaneProps = {
   researchLoading?: boolean;
   researchError?: string | null;
   deletingResearchRunId?: string | null;
+  opinionReport?: OpinionReport | null;
+  opinionLoading?: boolean;
+  opinionStarting?: boolean;
+  opinionError?: string | null;
+  onRunOpinion?: () => void;
 };
 
 export function ReaderPane({
@@ -74,6 +79,11 @@ export function ReaderPane({
   researchLoading = false,
   researchError = null,
   deletingResearchRunId = null,
+  opinionReport = null,
+  opinionLoading = false,
+  opinionStarting = false,
+  opinionError = null,
+  onRunOpinion,
 }: ReaderPaneProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const articleKey = article ? `${article.id}:${article.snapshotId}` : null;
@@ -359,6 +369,16 @@ export function ReaderPane({
               );
             })}
           </div>
+
+          {onRunOpinion && (
+            <OpinionAnalysisSection
+              report={opinionReport}
+              loading={opinionLoading}
+              starting={opinionStarting}
+              error={opinionError}
+              onRun={onRunOpinion}
+            />
+          )}
 
           <ArticleResearchSection
             snapshotId={article.snapshotId}

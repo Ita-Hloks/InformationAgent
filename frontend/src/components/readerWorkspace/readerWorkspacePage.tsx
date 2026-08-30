@@ -7,6 +7,7 @@ import {
   deleteArticle,
   deleteArticleResearch,
   getArticles,
+  getArticleOpinion,
   getArticleResearch,
   getArticleResearchRun,
   getReaderAutomationSettings,
@@ -14,13 +15,20 @@ import {
   refreshFeed,
   removeFeed,
   retryArticleSummary,
+  runArticleOpinion,
   runArticleResearch,
   stopArticleResearch,
   type ArticleStateUpdate,
   updateArticleStates,
 } from "../../api/client";
 import { initialArticles, initialFeeds } from "../../data/localState";
-import type { Feed, LibraryView, ArticleResearchRun, ReaderAutomationSettings } from "../../types";
+import type {
+  Feed,
+  LibraryView,
+  ArticleResearchRun,
+  OpinionReport,
+  ReaderAutomationSettings,
+} from "../../types";
 import { isArticleToday } from "../../utils/date";
 import { AppSidebar } from "../appShell";
 import { AddFeedDialog } from "./addFeedDialog";
@@ -63,6 +71,10 @@ export function ReaderWorkspacePage() {
   const [articleResearchError, setArticleResearchError] = useState<string | null>(null);
   const [articleResearchDeleteId, setArticleResearchDeleteId] = useState<string | null>(null);
   const [articleResearchStoppingId, setArticleResearchStoppingId] = useState<string | null>(null);
+  const [opinionReport, setOpinionReport] = useState<OpinionReport | null>(null);
+  const [opinionLoading, setOpinionLoading] = useState(false);
+  const [opinionStarting, setOpinionStarting] = useState(false);
+  const [opinionError, setOpinionError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [savedIds, setSavedIds] = useState(
     () => new Set(initialArticles.filter(article => article.starred).map(article => article.id)),
@@ -225,7 +237,78 @@ export function ReaderWorkspacePage() {
     setArticleResearchError(null);
     setArticleDeleteError(null);
     setArticleResearchStoppingId(null);
+    setOpinionReport(null);
+    setOpinionLoading(false);
+    setOpinionStarting(false);
+    setOpinionError(null);
   }, [selectedArticleKey]);
+
+  const loadArticleOpinion = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!selectedArticleId) return;
+      const report = await getArticleOpinion(selectedArticleId, signal);
+      if (signal?.aborted) return report;
+      setOpinionReport(report);
+      setOpinionError(null);
+      return report;
+    },
+    [selectedArticleId],
+  );
+
+  useEffect(() => {
+    if (!selectedArticleKey || !selectedArticleId) {
+      setOpinionLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    let active = true;
+    setOpinionLoading(true);
+    void loadArticleOpinion(controller.signal)
+      .then(() => {
+        if (active) setApiStatus("connected");
+      })
+      .catch(error => {
+        if (active && !(error instanceof DOMException && error.name === "AbortError")) {
+          setOpinionError(error instanceof Error ? error.message : "舆情状态读取失败");
+          setApiStatus("unavailable");
+        }
+      })
+      .finally(() => {
+        if (active) setOpinionLoading(false);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [loadArticleOpinion, selectedArticleId, selectedArticleKey]);
+
+  const opinionActive = opinionReport?.status === "running";
+
+  useEffect(() => {
+    if (!selectedArticleId || !opinionActive) return;
+    const timer = window.setInterval(() => {
+      void loadArticleOpinion().catch(error => {
+        setOpinionError(error instanceof Error ? error.message : "舆情状态读取失败");
+        setApiStatus("unavailable");
+      });
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [loadArticleOpinion, opinionActive, selectedArticleId]);
+
+  const runArticleOpinionForSelected = useCallback(async () => {
+    if (!selectedArticleId || opinionStarting || opinionReport?.status === "running") return;
+    setOpinionError(null);
+    setOpinionStarting(true);
+    try {
+      setOpinionReport(await runArticleOpinion(selectedArticleId));
+      setApiStatus("connected");
+    } catch (error) {
+      setOpinionError(error instanceof Error ? error.message : "舆情分析启动失败");
+      setApiStatus("unavailable");
+    } finally {
+      setOpinionStarting(false);
+    }
+  }, [opinionReport?.status, opinionStarting, selectedArticleId]);
 
   const syncArticleResearchStatus = useCallback((run: ArticleResearchRun) => {
     setArticles(current =>
@@ -838,6 +921,11 @@ export function ReaderWorkspacePage() {
                 researchLoading={articleResearchLoading}
                 researchError={articleResearchError}
                 deletingResearchRunId={articleResearchDeleteId}
+                opinionReport={opinionReport}
+                opinionLoading={opinionLoading}
+                opinionStarting={opinionStarting}
+                opinionError={opinionError}
+                onRunOpinion={() => void runArticleOpinionForSelected()}
               />
             </div>
           </>

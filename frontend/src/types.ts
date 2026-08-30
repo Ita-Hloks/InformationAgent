@@ -126,6 +126,53 @@ export type ArticleResearchHistory = {
   runs: ArticleResearchRun[];
 };
 
+export type OpinionStatus = "not_requested" | "running" | "completed" | "partial" | "failed";
+
+export type OpinionPoint = {
+  evidenceId: number;
+  question: string;
+  summary: string;
+  stanceCounts: Record<string, number>;
+  representativeCommentIds: string[];
+};
+
+export type OpinionReport = {
+  productName: string;
+  articleId: string;
+  articleSnapshotId: string | null;
+  contentHash: string | null;
+  sourceUrl: string;
+  status: OpinionStatus;
+  platform: string;
+  windowHours: number;
+  requestedLimit: number | null;
+  collectedCount: number;
+  analyzedCount: number;
+  classificationTotal: number;
+  classifiedCount: number;
+  unclassifiedCount: number;
+  statusReason: string;
+  runId: string | null;
+  requestedAt: string | null;
+  finishedAt: string | null;
+  lastHeartbeatAt: string | null;
+  controversyPoints: Array<{
+    evidenceId: number;
+    triggerQuote: string;
+    question: string;
+  }>;
+  summary: string;
+  points: OpinionPoint[];
+  uncertainties: string[];
+  errors: Array<{
+    code: string;
+    stage: string;
+    message: string;
+    retryable: boolean;
+    attempt: number | null;
+  }>;
+};
+
 export type AgentReport = {
   run_id: string;
   analysis_run_id: string | null;
