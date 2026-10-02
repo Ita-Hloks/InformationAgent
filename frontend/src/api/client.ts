@@ -5,6 +5,7 @@ import type {
   ArticleAnswerHistory,
   ArticleResearchHistory,
   ArticleResearchRun,
+  OpinionReport,
   Feed,
   AgentTaskSnapshot,
   LLMSettings,
@@ -123,6 +124,38 @@ type ArticleResearchRunPayload = {
 type ArticleResearchHistoryPayload = {
   article_id: string;
   runs: ArticleResearchRunPayload[];
+};
+type OpinionReportPayload = {
+  product_name: string;
+  article_id: string;
+  article_snapshot_id: string | null;
+  content_hash: string | null;
+  source_url: string;
+  status: OpinionReport["status"];
+  platform: string;
+  window_hours: number;
+  requested_limit: number | null;
+  collected_count: number;
+  analyzed_count: number;
+  classification_total: number;
+  classified_count: number;
+  unclassified_count: number;
+  status_reason: string;
+  run_id: string | null;
+  requested_at: string | null;
+  finished_at: string | null;
+  last_heartbeat_at: string | null;
+  controversy_points: Array<{ evidence_id: number; trigger_quote: string; question: string }>;
+  summary: string;
+  points: Array<{
+    evidence_id: number;
+    question: string;
+    summary: string;
+    stance_counts: Record<string, number>;
+    representative_comment_ids: string[];
+  }>;
+  uncertainties: string[];
+  errors: OpinionReport["errors"];
 };
 
 type ApiErrorDetail = {
@@ -303,6 +336,67 @@ function toArticleResearchRun(payload: ArticleResearchRunPayload): ArticleResear
     error: payload.error,
     agent: payload.agent ?? null,
   };
+}
+
+function toOpinionReport(payload: OpinionReportPayload): OpinionReport {
+  return {
+    productName: payload.product_name,
+    articleId: payload.article_id,
+    articleSnapshotId: payload.article_snapshot_id,
+    contentHash: payload.content_hash,
+    sourceUrl: payload.source_url,
+    status: payload.status,
+    platform: payload.platform,
+    windowHours: payload.window_hours,
+    requestedLimit: payload.requested_limit,
+    collectedCount: payload.collected_count,
+    analyzedCount: payload.analyzed_count,
+    classificationTotal: payload.classification_total,
+    classifiedCount: payload.classified_count,
+    unclassifiedCount: payload.unclassified_count,
+    statusReason: payload.status_reason,
+    runId: payload.run_id,
+    requestedAt: payload.requested_at,
+    finishedAt: payload.finished_at,
+    lastHeartbeatAt: payload.last_heartbeat_at,
+    controversyPoints: payload.controversy_points.map(item => ({
+      evidenceId: item.evidence_id,
+      triggerQuote: item.trigger_quote,
+      question: item.question,
+    })),
+    summary: payload.summary,
+    points: payload.points.map(item => ({
+      evidenceId: item.evidence_id,
+      question: item.question,
+      summary: item.summary,
+      stanceCounts: item.stance_counts,
+      representativeCommentIds: item.representative_comment_ids,
+    })),
+    uncertainties: payload.uncertainties,
+    errors: payload.errors,
+  };
+}
+
+export async function getArticleOpinion(
+  articleId: string,
+  signal?: AbortSignal,
+): Promise<OpinionReport> {
+  const payload = await request<OpinionReportPayload>(
+    "/api/articles/" + encodeURIComponent(articleId) + "/opinion",
+    { signal },
+  );
+  return toOpinionReport(payload);
+}
+
+export async function runArticleOpinion(
+  articleId: string,
+  forceRefresh = false,
+): Promise<OpinionReport> {
+  const payload = await request<OpinionReportPayload>(
+    "/api/articles/" + encodeURIComponent(articleId) + "/opinion",
+    { method: "POST", body: JSON.stringify({ force_refresh: forceRefresh }) },
+  );
+  return toOpinionReport(payload);
 }
 
 export async function getReaderAutomationSettings(): Promise<ReaderAutomationSettings> {

@@ -252,6 +252,14 @@ class OpinionReferenceCandidateResponse(BaseModel):
     tag: str | None
 
 
+class OpinionVideoSelectionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    video_id: str
+    decision: Literal["selected", "rejected", "uncertain"]
+    reason: str
+
+
 class OpinionReferencesResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -262,6 +270,8 @@ class OpinionReferencesResponse(BaseModel):
     status_reason: str
     queries: list[OpinionReferenceQueryResponse]
     candidates: list[OpinionReferenceCandidateResponse]
+    selections: list[OpinionVideoSelectionResponse]
+    selected_video_ids: list[str]
     errors: list[str]
 
 

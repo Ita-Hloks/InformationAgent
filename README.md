@@ -91,7 +91,35 @@ flowchart LR
 
 ## 舆情分析
 
-舆情分析的后端、API、服务、CLI 和持久化主体保持独立。它只在用户显式调用 `opinion-run` 或 `POST /api/articles/{article_id}/opinion` 时运行；`GET` 接口只读状态。首版只处理直接关联的哔哩哔哩视频或专栏 URL，分析最近 72 小时的公开评论样本，不代表总体民意，也不证明文章主张为真。
+当前后端最小 MVP 使用 `POST /api/articles/{article_id}/opinion/references`：
+
+```text
+文章全文 → 提取 1～2 组检索关键词 → B站视频搜索 → Agent相关性筛选 → 返回列表
+```
+
+关键词提取围绕文章核心对象、事件和主题，不要求文章具有争议。复用已有查询计划契约，`queries` 返回原文依据、目标问题、关键词组合和检索目的。每组查询最多取 5 个候选，按视频标识和 URL 去重。Agent 根据正文及候选标题、简介、标签等元数据逐个判断，不读取评论、字幕或视频内容。
+
+响应包含 `article_id`、`snapshot_id`、`content_hash`，以及：
+
+- `queries`：查询词及原文依据
+- `candidates`：全部候选视频及元数据
+- `selections`：逐个候选的 `video_id`、`decision` 和中文 `reason`
+- `selected_video_ids`：程序从 `selected` 决策计算出的选中列表
+- `status`、`status_reason`、`errors`：执行结果与失败信息
+
+`decision` 为 `selected`（内容接近）、`rejected`（无关）或 `uncertain`（信息不足）。允许没有选中视频；正常筛选后无人选中为 `completed/no_matches`。筛选失败为 `partial/selection_failed`，保留候选但不默认选中。部分搜索失败时保留可用候选并筛选，返回 `partial/partial_search`。关键词生成、搜索、筛选共享一次请求的 300 秒预算，单次模型请求仍受公共调用层时限约束。
+
+调用方式（将 `<article_id>` 替换为 `GET /api/articles` 返回的文章 ID）：
+
+```powershell
+Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8001/api/articles/<article_id>/opinion/references' |
+    ConvertTo-Json -Depth 12 |
+    Set-Content -Encoding UTF8 'log/video-references.json'
+```
+
+此接口到候选筛选结果为止，不创建评论分析任务，也不写入舆情运行表；需要保留验收结果时保存返回 JSON。LLM 调用沿用项目现有日志配置。
+
+已有评论分析是另一项显式操作：`opinion-run` 或 `POST /api/articles/{article_id}/opinion`。普通文章只采集筛选通过的视频；B站视频或专栏来源可直接采集。它分析最近 72 小时的公开评论样本，不代表总体民意，也不证明文章主张为真。
 
 ## 配置
 

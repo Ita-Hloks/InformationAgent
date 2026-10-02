@@ -132,6 +132,11 @@ def opinion_references_to_payload(result: ReferenceDiscoveryResult) -> dict[str,
             }
             for candidate in result.candidates
         ],
+        "selections": [
+            {"video_id": item.video_id, "decision": item.decision, "reason": item.reason}
+            for item in result.selections
+        ],
+        "selected_video_ids": [item.video_id for item in result.selected_candidates],
         "errors": list(result.errors),
     }
 

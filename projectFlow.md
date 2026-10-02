@@ -71,6 +71,19 @@ queued -> running -> completed
 
 ## 6. HTTP API
 
+舆情视频发现的最小流程：
+
+```text
+POST /api/articles/{article_id}/opinion/references
+  → 读取当前文章快照
+  → 从全文生成关键词组合（复用查询计划解析）
+  → bilibili-api-python 搜索视频并去重
+  → Agent依据文章与候选元数据逐个筛选
+  → 返回 queries、candidates、selections、selected_video_ids 和执行状态
+```
+
+该入口不触发评论采集或评论分析，不创建 `opinion_runs`。筛选输出只能引用完整候选集合，每个候选恰好一次；信息不足为 `uncertain`，不会被选中。筛选失败保留候选并返回 `partial/selection_failed`。原有评论分析服务复用此链路时仅接收选中的视频。
+
 阅读器相关接口位于 `information_agent/api/app.py`。核心文章研究接口如下：
 
 | 方法 | 路径 | 作用 |
