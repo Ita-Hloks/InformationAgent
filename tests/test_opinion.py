@@ -648,6 +648,7 @@ def test_external_article_opinion_uses_searched_bilibili_video_comments(tmp_path
                 ),
             ),
             candidates=(candidate,),
+            selected_candidates=(candidate,),
             status=ReferenceDiscoveryStatus.COMPLETED,
             status_reason="completed",
             errors=(),

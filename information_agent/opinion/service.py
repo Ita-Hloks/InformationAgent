@@ -186,10 +186,12 @@ class OpinionAnalysisService:
             analyzer = self.analyzer
             if use_reference_discovery:
                 current_stage = "opinion_planning"
-                reference_result = self._discover_references(article_id, analyzer)
+                reference_result = self._discover_references(article_id)
                 _validate_reference_result(reference_result, identity)
                 controversy_points = list(reference_result.plans)
-                discovered_candidates = list(reference_result.candidates)
+                discovered_candidates = list(reference_result.selected_candidates)
+                if reference_result.status_reason == "selection_failed":
+                    raise OpinionResponseError("视频相关性筛选失败", "", code="selection_failed")
                 if reference_result.errors:
                     uncertainties.extend(reference_result.errors)
                 if reference_result.status.value == "partial" and not controversy_points:
@@ -339,19 +341,13 @@ class OpinionAnalysisService:
             raise OpinionTimeoutError("opinion")
         return remaining
 
-    def _discover_references(self, article_id: str, analyzer: OpinionAnalyzer | None):
+    def _discover_references(self, article_id: str):
         discovery = self.reference_discovery_service
         if discovery is None:
             from .references import ReferenceDiscoveryService
 
-            planner = (
-                analyzer
-                if analyzer is not None and hasattr(analyzer, "detect_controversies")
-                else None
-            )
             discovery = ReferenceDiscoveryService(
                 store=self.store,
-                planner=planner,
                 timeout_seconds=self.timeout_seconds,
                 clock=self.clock,
             )

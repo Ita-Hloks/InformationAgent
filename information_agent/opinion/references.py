@@ -18,6 +18,7 @@ from ..search import SearchSource
 from ..storage import SQLiteCollectionStore, default_database_path
 from .bilibili import BilibiliTargetError, parse_bilibili_target
 from .llm import LLMOpinionAnalyzer
+from .reference_selection import LLMVideoSelector, VideoSelection
 from .service import OpinionArticleNotFoundError, OpinionSnapshotMismatchError
 
 MAX_REFERENCE_PLANS = 1
@@ -58,10 +59,16 @@ class ReferenceDiscoveryResult:
     status: ReferenceDiscoveryStatus
     status_reason: str
     errors: tuple[str, ...] = field(default_factory=tuple)
+    selections: tuple[VideoSelection, ...] = field(default_factory=tuple)
+
+    @property
+    def selected_candidates(self) -> tuple[BilibiliVideoCandidate, ...]:
+        selected_ids = {item.video_id for item in self.selections if item.decision == "selected"}
+        return tuple(item for item in self.candidates if item.video_id in selected_ids)
 
 
-class ControversyPlanner(Protocol):
-    def detect_controversies(
+class KeywordPlanner(Protocol):
+    def extract_video_queries(
         self,
         article: NormalizedArticle,
         timeout: float,
@@ -70,6 +77,16 @@ class ControversyPlanner(Protocol):
 
 class VideoSearcher(Protocol):
     def search(self, query: str, timeout: float) -> object: ...
+
+
+class VideoSelector(Protocol):
+    def select(
+        self,
+        article: NormalizedArticle,
+        plans: tuple[OpinionPlan, ...],
+        candidates: tuple[BilibiliVideoCandidate, ...],
+        timeout: float,
+    ) -> tuple[VideoSelection, ...]: ...
 
 
 SearchByType = Callable[..., Awaitable[object]]
@@ -108,15 +125,16 @@ class BilibiliVideoSearcher:
 
 
 class ReferenceDiscoveryService:
-    """Generate Bilibili queries and discover video sources without reading comments."""
+    """从文章提取查询、搜索视频并筛选相关候选，到列表结果为止。"""
 
     def __init__(
         self,
         database_path: str | Path | None = None,
         *,
         store: SQLiteCollectionStore | None = None,
-        planner: ControversyPlanner | None = None,
+        planner: KeywordPlanner | None = None,
         video_searcher: VideoSearcher | None = None,
+        selector: VideoSelector | None = None,
         timeout_seconds: float = 300,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -125,6 +143,7 @@ class ReferenceDiscoveryService:
         self.store = store or SQLiteCollectionStore(database_path or default_database_path())
         self.planner = planner
         self.video_searcher = video_searcher
+        self.selector = selector
         self.timeout_seconds = timeout_seconds
         self.clock = clock
 
@@ -140,7 +159,7 @@ class ReferenceDiscoveryService:
         deadline = self.clock() + self.timeout_seconds
         try:
             planner = self.planner or LLMOpinionAnalyzer()
-            plans = tuple(planner.detect_controversies(article.article, self._remaining(deadline)))
+            plans = tuple(planner.extract_video_queries(article.article, self._remaining(deadline)))
             _validate_plans(article.article, plans)
         except Exception as exc:
             return ReferenceDiscoveryResult(
@@ -211,6 +230,20 @@ class ReferenceDiscoveryService:
         else:
             status = ReferenceDiscoveryStatus.COMPLETED
             status_reason = "completed" if candidates else "no_candidates"
+        selections: tuple[VideoSelection, ...] = ()
+        if candidates:
+            try:
+                remaining = self._remaining(deadline)
+                if remaining <= 0:
+                    raise TimeoutError("视频筛选在任务时限内未完成")
+                selector = self.selector or LLMVideoSelector()
+                selections = selector.select(article.article, plans, tuple(candidates), remaining)
+                if not errors and not any(item.decision == "selected" for item in selections):
+                    status_reason = "no_matches"
+            except Exception as exc:
+                status = ReferenceDiscoveryStatus.PARTIAL
+                status_reason = "selection_failed"
+                errors.append(f"视频筛选失败：{exc}")
         return ReferenceDiscoveryResult(
             article_id=article_id,
             snapshot_id=snapshot_id,
@@ -220,6 +253,7 @@ class ReferenceDiscoveryService:
             status=status,
             status_reason=status_reason,
             errors=tuple(errors),
+            selections=selections,
         )
 
     def _remaining(self, deadline: float) -> float:
