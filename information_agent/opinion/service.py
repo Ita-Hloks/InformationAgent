@@ -4,7 +4,7 @@ import inspect
 import math
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, replace
 from itertools import zip_longest
 from pathlib import Path
@@ -524,6 +524,7 @@ class OpinionAnalysisService:
         payload.setdefault("points", [])
         payload.setdefault("uncertainties", [])
         payload.setdefault("errors", _record_error_payloads(record))
+        _normalize_legacy_planning_failure(payload, record)
         report = parse_persisted_opinion_report(payload)
         if any(
             plan.trigger_quote not in article.article.content for plan in report.controversy_points
@@ -1138,6 +1139,44 @@ def _reference_failure_message(status_reason: str, errors: tuple[str, ...]) -> s
     if status_reason == "selection_failed":
         return f"B站视频相关性筛选失败：{detail or '未返回具体原因'}。评论采集未开始。"
     return detail or "舆情检索阶段失败。"
+
+
+def _normalize_legacy_planning_failure(
+    payload: dict[str, object], record: OpinionRunRecord
+) -> None:
+    """只在读取历史记录时明确旧版规划失败反馈，不改写持久化数据。"""
+    if record.status != OpinionStatus.FAILED.value or record.status_reason != "failed":
+        return
+    uncertainties = payload.get("uncertainties")
+    if not isinstance(uncertainties, list) or not any(
+        isinstance(item, str) and ("trigger_quote" in item or "原文锚点" in item)
+        for item in uncertainties
+    ):
+        return
+
+    raw_errors = payload.get("errors")
+    if not isinstance(raw_errors, list) or not raw_errors:
+        raw_errors = _record_error_payloads(record)
+    normalized_errors: list[object] = []
+    matched = False
+    for item in raw_errors:
+        if not isinstance(item, Mapping):
+            normalized_errors.append(item)
+            continue
+        error = dict(item)
+        if (
+            error.get("stage") == "opinion_planning"
+            and error.get("message") == "文章舆情关键词或视频搜索失败"
+        ):
+            error["message"] = (
+                "文章检索计划校验失败：生成的原文引句无法与当前文章正文精确匹配。"
+                "视频搜索和评论采集未开始。"
+            )
+            matched = True
+        normalized_errors.append(error)
+    if matched:
+        payload["status_reason"] = "planning_failed"
+        payload["errors"] = normalized_errors
 
 
 def _record_error_payloads(record: OpinionRunRecord) -> list[dict[str, object]]:

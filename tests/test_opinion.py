@@ -1283,6 +1283,69 @@ def test_reference_planning_failure_reports_unstarted_stages(tmp_path: Path) -> 
     assert service.get_status(article.article.article_id).errors == report.errors
 
 
+def test_get_status_normalizes_legacy_reference_planning_failure(tmp_path: Path) -> None:
+    reader = _external_reader_service(tmp_path / "opinion-legacy-reference-error.db")
+    reader_article = reader.list_articles()[0]
+    article = reader_article.article
+    run = reader.store.start_opinion_run(
+        article.article_id,
+        article_snapshot_id=reader_article.snapshot_id,
+        content_hash=reader_article.content_hash,
+        requested_limit=10,
+    )
+    legacy_error = {
+        "code": "planning_response_invalid",
+        "stage": "opinion_planning",
+        "message": "文章舆情关键词或视频搜索失败",
+        "retryable": False,
+        "attempt": None,
+    }
+    reader.store.complete_opinion_run(
+        run.id,
+        status="failed",
+        result_payload={
+            "article_id": article.article_id,
+            "article_snapshot_id": reader_article.snapshot_id,
+            "content_hash": reader_article.content_hash,
+            "source_url": article.source_url,
+            "requested_limit": 10,
+            "status": "failed",
+            "status_reason": "failed",
+            "controversy_points": [],
+            "comments": [],
+            "classifications": [],
+            "points": [],
+            "summary": "",
+            "uncertainties": [
+                "关键词生成失败：舆情提示的 trigger_quote 未出现在对应文章正文中",
+                "本次运行未形成完整的评论分析结论。",
+            ],
+            "errors": [legacy_error],
+            "attempts": [],
+        },
+        comments=[],
+        errors=[legacy_error],
+    )
+
+    report = OpinionAnalysisService(store=reader.store, comment_limit=10).get_status(
+        article.article_id
+    )
+
+    assert report.status is OpinionStatus.FAILED
+    assert report.status_reason == "planning_failed"
+    assert report.errors[0].stage == "opinion_planning"
+    assert report.errors[0].message == (
+        "文章检索计划校验失败：生成的原文引句无法与当前文章正文精确匹配。视频搜索和评论采集未开始。"
+    )
+
+    stored = reader.store.get_latest_opinion_run(article.article_id)
+    assert stored is not None
+    assert stored.status_reason == "failed"
+    assert stored.result_payload is not None
+    assert stored.result_payload["status_reason"] == "failed"
+    assert stored.result_payload["errors"][0]["message"] == "文章舆情关键词或视频搜索失败"
+
+
 def test_completed_opinion_run_requires_a_summary(tmp_path: Path) -> None:
     reader = _reader_service(tmp_path / "opinion-missing-summary.db")
     reader_article = reader.list_articles()[0]
