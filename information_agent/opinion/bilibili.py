@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import re
@@ -7,8 +8,9 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from http.cookies import SimpleCookie
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from ..contracts import PROJECT_TIMEZONE, project_now
@@ -41,6 +43,10 @@ class BilibiliSourceError(RuntimeError):
 
 class BilibiliTargetError(BilibiliSourceError):
     code = "unsupported_target"
+
+
+class BilibiliAuthenticationError(BilibiliSourceError):
+    code = "bilibili_login_required"
 
 
 class BilibiliRetryExhaustedError(BilibiliSourceError):
@@ -109,6 +115,7 @@ class BilibiliCommentCollector:
         self.sleep = sleep
         self.last_attempts = []
         self.last_comments = []
+        self.last_scan: dict[str, object] | None = None
 
     def collect(
         self,
@@ -131,6 +138,7 @@ class BilibiliCommentCollector:
         run_deadline = validate_deadline(timeout, clock=self.clock, deadline=deadline)
         self.last_attempts = []
         self.last_comments = []
+        self.last_scan = None
         oid = target.oid
         if oid is None:
             if target.bvid is None:
@@ -138,14 +146,20 @@ class BilibiliCommentCollector:
             oid = self._resolve_video_aid(target.bvid, source_url, run_deadline, heartbeat)
 
         since = project_now() - timedelta(hours=window_hours)
+        self.last_scan = {
+            "source_url": source_url,
+            "window_start_at": since.isoformat(),
+            "visible_reply_count": 0,
+            "latest_visible_comment_at": None,
+            "collection_status": "no_visible_comments",
+        }
         comments: list[BilibiliComment] = []
         seen_ids: set[str] = set()
-        for page in range(1, min(MAX_COMMENT_PAGES, math.ceil(limit / PAGE_SIZE)) + 1):
-            query = urlencode(
-                {"type": target.comment_type, "oid": oid, "sort": 2, "pn": page, "ps": PAGE_SIZE}
-            )
+        offset = ""
+        for _ in range(MAX_COMMENT_PAGES):
+            query = urlencode({"type": target.comment_type, "oid": oid, "offset": offset})
             data = self._request_data(
-                f"https://api.bilibili.com/x/v2/reply?{query}",
+                f"https://api.bilibili.com/x/v2/reply/wbi/main?{query}",
                 source_url,
                 stage="comment_collection",
                 deadline=run_deadline,
@@ -157,15 +171,30 @@ class BilibiliCommentCollector:
                 break
 
             page_comments: list[BilibiliComment] = []
+            parsed_times: list[datetime] = []
             for raw in replies:
                 comment = parse_bilibili_comment(raw, source_url)
                 if comment is None or comment.comment_id in seen_ids:
                     continue
                 seen_ids.add(comment.comment_id)
+                self.last_scan["visible_reply_count"] += 1
+                if comment.published_at is not None:
+                    parsed_times.append(comment.published_at)
+                    latest = self.last_scan["latest_visible_comment_at"]
+                    if latest is None or comment.published_at.isoformat() > latest:
+                        self.last_scan["latest_visible_comment_at"] = (
+                            comment.published_at.isoformat()
+                        )
                 if comment.published_at is not None and comment.published_at >= since:
                     page_comments.append(comment)
 
             comments.extend(page_comments)
+            if comments:
+                self.last_scan["collection_status"] = "collected"
+            elif self.last_scan["visible_reply_count"]:
+                self.last_scan["collection_status"] = "outside_window"
+            elif replies:
+                self.last_scan["collection_status"] = "no_parseable_comments"
             self.last_comments = list(comments)
             comments.sort(
                 key=lambda item: (
@@ -176,21 +205,52 @@ class BilibiliCommentCollector:
                 reverse=True,
             )
             if len(comments) >= limit:
-                return comments[:limit]
-            if not replies or len(replies) < PAGE_SIZE:
+                self.last_comments = list(comments[:limit])
+                return self.last_comments
+            cursor = data["cursor"]
+            if not replies or cursor["is_end"]:
                 break
-            parsed_times = [
-                item.published_at
-                for item in page_comments
-                if isinstance(item.published_at, datetime)
-            ]
-            if parsed_times and min(parsed_times) < since:
+            if parsed_times and max(parsed_times) < since:
                 break
+            offset = cursor["pagination_reply"]["next_offset"]
         self.last_comments = list(comments[:limit])
         return self.last_comments
 
     def _request_json(self, url: str, timeout: float, referer: str) -> object:
+        if urlsplit(url).path == "/x/v2/reply/wbi/main":
+            params = parse_qs(urlsplit(url).query, keep_blank_values=True)
+            return asyncio.run(self._request_comments(params, timeout))
         return _request_json(url, timeout, referer, cookie=self.cookie)
+
+    async def _request_comments(self, params: dict[str, list[str]], timeout: float) -> object:
+        from bilibili_api import Credential, comment
+
+        cookies = SimpleCookie()
+        cookies.load(self.cookie or "")
+        cookie_names = {
+            "sessdata": "SESSDATA",
+            "bili_jct": "bili_jct",
+            "buvid3": "buvid3",
+            "buvid4": "buvid4",
+            "dedeuserid": "DedeUserID",
+        }
+        credential = Credential(
+            **{key: cookies[name].value for key, name in cookie_names.items() if name in cookies}
+        )
+        async with asyncio.timeout(timeout):
+            if not params["offset"][0] and not await credential.check_valid():
+                raise BilibiliAuthenticationError(
+                    "BILIBILI_COOKIE 缺失或登录已失效，请更新本地凭据后重试；"
+                    "无法使用受限预览作为评论样本。"
+                )
+            data = await comment.get_comments_lazy(
+                int(params["oid"][0]),
+                comment.CommentResourceType(int(params["type"][0])),
+                offset=params["offset"][0],
+                order=comment.OrderType.TIME,
+                credential=credential,
+            )
+        return {"code": 0, "data": data}
 
     def _resolve_video_aid(
         self,
@@ -240,7 +300,7 @@ class BilibiliCommentCollector:
                 if not isinstance(parsed, dict):
                     raise BilibiliSourceError("哔哩哔哩接口 data 必须是对象")
                 return parsed
-            except OpinionTimeoutError:
+            except (OpinionTimeoutError, BilibiliAuthenticationError):
                 raise
             except Exception as exc:
                 last_error = exc
@@ -295,6 +355,17 @@ def _parse_comment_data(payload: object) -> dict[str, object]:
     replies = data.get("replies")
     if replies is not None and not isinstance(replies, list):
         raise BilibiliSourceError("哔哩哔哩评论接口返回了无效的 replies")
+    cursor = data.get("cursor")
+    if not isinstance(cursor, dict) or type(cursor.get("is_end")) is not bool:
+        raise BilibiliSourceError("哔哩哔哩评论接口缺少分页状态")
+    if not cursor["is_end"]:
+        pagination = cursor.get("pagination_reply")
+        if (
+            not isinstance(pagination, dict)
+            or not isinstance(pagination.get("next_offset"), str)
+            or not pagination["next_offset"]
+        ):
+            raise BilibiliSourceError("哔哩哔哩评论接口缺少下一页游标")
     return data
 
 

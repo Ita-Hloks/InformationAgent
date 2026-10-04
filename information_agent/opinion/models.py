@@ -56,7 +56,17 @@ _STATUS_REASONS: dict[OpinionStatus, frozenset[str]] = {
     OpinionStatus.PARTIAL: frozenset(
         {"partial_collection", "partial_classification", "timeout", "retry_exhausted"}
     ),
-    OpinionStatus.FAILED: frozenset({"timeout", "retry_exhausted", "stale_running", "failed"}),
+    OpinionStatus.FAILED: frozenset(
+        {
+            "timeout",
+            "retry_exhausted",
+            "stale_running",
+            "failed",
+            "planning_failed",
+            "search_failed",
+            "selection_failed",
+        }
+    ),
 }
 
 
@@ -78,6 +88,20 @@ class BilibiliComment:
             raise ValueError("likes 必须是非负整数")
         if self.published_at is not None and self.published_at.tzinfo is None:
             raise ValueError("published_at 必须包含时区")
+
+
+@dataclass(frozen=True, slots=True)
+class OpinionSource:
+    url: str
+    title: str
+    decision: str
+    selection_reason: str = ""
+    collection_status: str = "not_attempted"
+    collected_count: int = 0
+    visible_reply_count: int = 0
+    latest_visible_comment_at: str | None = None
+    window_start_at: str | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +267,9 @@ class OpinionReport:
     finished_at: str | None = None
     last_heartbeat_at: str | None = None
     controversy_points: tuple[OpinionPlan, ...] = field(default_factory=tuple)
+    reference_status_reason: str | None = None
+    candidate_count: int = 0
+    sources: tuple[OpinionSource, ...] = field(default_factory=tuple)
     comments: tuple[BilibiliComment, ...] = field(default_factory=tuple)
     classifications: tuple[Classification, ...] = field(default_factory=tuple)
     summary: str = ""
@@ -299,6 +326,8 @@ class OpinionReport:
             raise ValueError("classified_count 与逐条分类不一致")
         if len(self.comments) != self.collected_count:
             raise ValueError("collected_count 必须等于 comments 长度")
+        if type(self.candidate_count) is not int or self.candidate_count < 0:
+            raise ValueError("candidate_count 必须是非负整数")
         comment_ids = [item.comment_id for item in self.comments]
         if len(set(comment_ids)) != len(comment_ids):
             raise ValueError("同一运行内 comment_id 不能重复")

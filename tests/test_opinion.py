@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -38,7 +38,11 @@ from information_agent.opinion import (
 )
 from information_agent.opinion import llm as opinion_llm
 from information_agent.opinion.llm import LLMOpinionAnalyzer
+from information_agent.opinion.models import OpinionSource
 from information_agent.opinion.parsing import parse_persisted_opinion_report
+from information_agent.opinion.reference_selection import VideoSelection
+from information_agent.opinion.references import ReferenceDiscoveryResult
+from information_agent.opinion.runtime import OpinionTimeoutError
 from information_agent.orchestration.database_planning import plan_run
 from information_agent.reader import ReaderService
 from information_agent.selection import SelectedEvidence
@@ -54,6 +58,137 @@ class FakeClock:
 
     def advance(self, seconds: float) -> None:
         self.now += seconds
+
+
+def test_comment_collection_rejects_invalid_login_before_reading_preview(monkeypatch):
+    import bilibili_api
+
+    class InvalidCredential:
+        def __init__(self, **kwargs):
+            pass
+
+        async def check_valid(self):
+            return False
+
+    async def preview(*args, **kwargs):
+        pytest.fail("无效登录不应读取受限的评论预览")
+
+    monkeypatch.setattr(bilibili_api, "Credential", InvalidCredential)
+    monkeypatch.setattr(bilibili_api.comment, "get_comments_lazy", preview)
+    collector = BilibiliCommentCollector(cookie="SESSDATA=expired", max_attempts=1)
+    with pytest.raises(RuntimeError, match="BILIBILI_COOKIE.*失效"):
+        asyncio.run(collector._request_comments({"oid": ["456"], "type": ["1"], "offset": [""]}, 5))
+
+
+@pytest.mark.parametrize("fail_second", [False, True])
+def test_multi_video_collection_balances_samples_and_preserves_partial_results(fail_second):
+    from information_agent.opinion.service import _collect_discovered_comments
+
+    candidates = [
+        BilibiliVideoCandidate(
+            video_id=f"BV{i}",
+            bvid=f"BV{i}",
+            url=f"https://www.bilibili.com/video/BV{i}",
+            title=f"视频{i}",
+            search_query="讨论",
+        )
+        for i in range(3)
+    ]
+    calls = []
+
+    class Collector:
+        last_comments = []
+
+        def collect(self, url, *, limit, timeout, **kwargs):
+            calls.append((url, limit, timeout))
+            self.last_comments = []
+            if fail_second and url == candidates[1].url:
+                raise RuntimeError("目标视频请求失败")
+            return [
+                BilibiliComment(str(i), f"{url}#reply{i}", "用户", "观点", 1, project_now())
+                for i in range(limit)
+            ]
+
+    errors = []
+    sources = [
+        OpinionSource(url=item.url, title=item.title, decision="selected") for item in candidates
+    ]
+    comments = _collect_discovered_comments(
+        Collector(),
+        candidates,
+        window_hours=72,
+        limit=6,
+        timeout=90,
+        deadline=90,
+        clock=lambda: 0,
+        heartbeat=lambda: None,
+        attempts=[],
+        errors=errors,
+        sources=sources,
+    )
+    assert len(calls) == 3
+    assert calls[0][1] == 2
+    assert all(item[2] < 90 for item in calls)
+    assert len(comments) == 6
+    assert comments[0].comment_id == "BV0:0"
+    assert comments[1].comment_id == ("BV2:0" if fail_second else "BV1:0")
+    assert comments[0].source_url.endswith("#reply0")
+    assert len(errors) == int(fail_second)
+    if fail_second:
+        assert candidates[1].url in errors[0]["message"]
+        assert sources[1].collection_status == "failed"
+        assert "请求失败" in sources[1].error
+
+
+def test_no_relevant_comments_keeps_explanation_with_zero_stances(tmp_path, monkeypatch):
+    reader = _reader_service(tmp_path / "no-related.db")
+
+    def completion(**kwargs):
+        if kwargs["stage"] == "opinion_planning":
+            return json.dumps(
+                {
+                    "opinion_plans": [
+                        {
+                            "evidence_id": 1,
+                            "trigger_quote": "厂商称效果提升 70%",
+                            "question": "效果提升是否可信？",
+                            "queries": [{"query": "效果提升", "purpose": "寻找讨论"}],
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        assert "来源：" in kwargs["messages"][1]["content"]
+        return json.dumps(
+            {
+                "summary": "样本没有直接讨论该主张，不能形成支持或反对结论。",
+                "classifications": [],
+                "points": [
+                    {
+                        "evidence_id": 1,
+                        "summary": "没有相关观点样本。",
+                        "representative_comment_ids": [],
+                    }
+                ],
+                "uncertainties": ["样本不足"],
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(opinion_llm, "request_json_completion", completion)
+    service = OpinionAnalysisService(
+        store=reader.store,
+        analyzer=LLMOpinionAnalyzer(client=object(), model="test"),
+        collector=FakeCommentCollector(),
+        comment_limit=10,
+    )
+    report = service.request(reader.list_articles()[0].article.article_id)
+    assert report.status is OpinionStatus.COMPLETED
+    assert report.collected_count == 2
+    assert report.classification_total == 0
+    assert report.points[0].summary == "没有相关观点样本。"
+    assert not any(report.points[0].stance_counts.values())
+    assert service.get_status(report.article_id).summary == report.summary
 
 
 def test_parse_bilibili_target_supports_video_and_article_urls() -> None:
@@ -77,6 +212,7 @@ def test_bilibili_comment_collector_resolves_bvid_and_filters_window() -> None:
         return {
             "code": 0,
             "data": {
+                "cursor": {"is_end": True},
                 "replies": [
                     {
                         "rpid": 1,
@@ -92,7 +228,7 @@ def test_bilibili_comment_collector_resolves_bvid_and_filters_window() -> None:
                         "ctime": int((now - timedelta(hours=80)).timestamp()),
                         "like": 1,
                     },
-                ]
+                ],
             },
         }
 
@@ -106,6 +242,72 @@ def test_bilibili_comment_collector_resolves_bvid_and_filters_window() -> None:
     assert [comment.comment_id for comment in comments] == ["1"]
     assert len(calls) == 2
     assert "oid=456" in calls[1]
+    assert "/reply/wbi/main?" in calls[1]
+
+
+@pytest.mark.parametrize(
+    ("replies", "expected_status"),
+    [([], "no_visible_comments"), ("older", "outside_window")],
+)
+def test_bilibili_collector_records_why_window_sample_is_empty(replies, expected_status) -> None:
+    if replies == "older":
+        replies = [
+            {
+                "rpid": 5,
+                "content": {"message": "旧评论"},
+                "member": {"uname": "用户"},
+                "ctime": int((project_now() - timedelta(hours=80)).timestamp()),
+            }
+        ]
+    collector = BilibiliCommentCollector(
+        request_json=lambda *_: {
+            "code": 0,
+            "data": {"cursor": {"is_end": True}, "replies": replies},
+        }
+    )
+
+    assert collector.collect("https://www.bilibili.com/video/av456") == []
+    assert collector.last_scan["collection_status"] == expected_status
+    assert collector.last_scan["visible_reply_count"] == len(replies)
+    assert collector.last_scan["window_start_at"] is not None
+
+
+def test_bilibili_comment_collector_follows_cursor_for_short_pages() -> None:
+    from urllib.parse import parse_qs, urlsplit
+
+    offsets = []
+
+    def fetch(url, _timeout, _referer):
+        offsets.append(parse_qs(urlsplit(url).query, keep_blank_values=True)["offset"][0])
+        index = len(offsets)
+        return {
+            "code": 0,
+            "data": {
+                "cursor": {"is_end": index == 2, "pagination_reply": {"next_offset": "next-page"}},
+                "replies": [
+                    {
+                        "rpid": index,
+                        "content": {"message": "观点"},
+                        "member": {"uname": "用户"},
+                        "ctime": int(project_now().timestamp()),
+                    }
+                ],
+            },
+        }
+
+    comments = BilibiliCommentCollector(request_json=fetch).collect(
+        "https://www.bilibili.com/video/av456", limit=2
+    )
+    assert offsets == ["", "next-page"]
+    assert {item.comment_id for item in comments} == {"1", "2"}
+
+
+def test_bilibili_comment_collector_rejects_missing_cursor() -> None:
+    collector = BilibiliCommentCollector(
+        request_json=lambda *_: {"code": 0, "data": {"replies": []}}, max_attempts=1
+    )
+    with pytest.raises(RuntimeError, match="缺少分页状态"):
+        collector.collect("https://www.bilibili.com/video/av456")
 
 
 def test_bilibili_comment_collector_retries_only_with_remaining_deadline() -> None:
@@ -372,6 +574,89 @@ def test_llm_opinion_analyzer_parses_controversy_and_comment_result(
     assert uncertainties == []
 
 
+@pytest.mark.parametrize("fail_last_batch", [False, True])
+def test_comment_analysis_batches_all_comments_and_aggregates_relationships(
+    monkeypatch, fail_last_batch
+):
+    import re
+
+    article = normalize_evidence(
+        [
+            RawFeedEntry(
+                "https://www.bilibili.com/video/BV1xx",
+                "一篇有争议的文章",
+                "厂商称效果提升 70%，但没有说明完整测试条件。",
+            )
+        ]
+    )[0]
+    plan = OpinionPlan(
+        evidence_id=1,
+        trigger_quote="效果提升 70%",
+        question="评论如何看待提升幅度？",
+        queries=(SearchQuery("效果提升", "寻找讨论"),),
+    )
+    comments = [
+        BilibiliComment(
+            str(index),
+            "https://www.bilibili.com/video/BV1xx#reply" + str(index),
+            "用户",
+            "支持提升",
+            1,
+            project_now(),
+        )
+        for index in range(21)
+    ]
+    batch_sizes = []
+
+    def completion(**kwargs):
+        content = kwargs["messages"][1]["content"]
+        ids = re.findall(r'<comment id="([^"]+)">', content)
+        batch_sizes.append(len(ids))
+        if fail_last_batch and "20" in ids:
+            raise TimeoutError("模型批次超时")
+        return json.dumps(
+            {
+                "summary": f"本批次有 {len(ids)} 条支持评论",
+                "classifications": [
+                    {
+                        "run_id": "batched-run",
+                        "evidence_id": 1,
+                        "comment_id": comment_id,
+                        "classification_status": "classified",
+                        "stance": "support",
+                        "error_code": None,
+                    }
+                    for comment_id in ids
+                ],
+                "points": [
+                    {
+                        "evidence_id": 1,
+                        "summary": "评论认可提升幅度",
+                        "representative_comment_ids": ids[:2],
+                    }
+                ],
+                "uncertainties": [],
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(opinion_llm, "request_json_completion", completion)
+    analyzer = LLMOpinionAnalyzer(client=object(), max_attempts=1)
+    summary, points, _ = analyzer.analyze_comments(
+        article, [plan], comments, 10, run_id="batched-run"
+    )
+    assert sorted(batch_sizes) == [1, 10, 10]
+    expected = 20 if fail_last_batch else 21
+    assert len(analyzer.last_classifications) == expected
+    assert len(analyzer.last_analyzed_comment_ids) == expected
+    assert len(analyzer.last_analysis_errors) == int(fail_last_batch)
+    assert points[0].stance_counts["support"] == expected
+    assert set(points[0].representative_comment_ids) == (
+        {"0", "1", "10", "11"} if fail_last_batch else {"0", "1", "10", "11", "20"}
+    )
+    assert "10 条" in summary
+
+
 class FakeOpinionAnalyzer:
     def __init__(self) -> None:
         self.detect_calls = 0
@@ -635,7 +920,7 @@ def test_external_article_opinion_uses_searched_bilibili_video_comments(tmp_path
         search_query="效果提升 70%",
     )
     references = FakeReferenceDiscovery(
-        SimpleNamespace(
+        ReferenceDiscoveryResult(
             article_id=article.article_id,
             snapshot_id=reader.list_articles()[0].snapshot_id,
             content_hash=reader.list_articles()[0].content_hash,
@@ -648,7 +933,7 @@ def test_external_article_opinion_uses_searched_bilibili_video_comments(tmp_path
                 ),
             ),
             candidates=(candidate,),
-            selected_candidates=(candidate,),
+            selections=(VideoSelection("BV1candidate", "selected", "讨论相同主张"),),
             status=ReferenceDiscoveryStatus.COMPLETED,
             status_reason="completed",
             errors=(),
@@ -674,6 +959,60 @@ def test_external_article_opinion_uses_searched_bilibili_video_comments(tmp_path
         "BV1candidate:reply-1",
         "BV1candidate:reply-2",
     ]
+    assert report.sources[0].collection_status == "collected"
+    assert report.sources[0].collected_count == 2
+    assert service.get_status(article.article_id).sources == report.sources
+    api_report = TestClient(create_app(reader, opinion_service=service)).get(
+        f"/api/articles/{article.article_id}/opinion"
+    )
+    assert api_report.status_code == 200
+    assert api_report.json()["sources"][0]["collected_count"] == 2
+
+
+def test_external_opinion_records_rejected_video_without_collecting(tmp_path: Path) -> None:
+    reader = _external_reader_service(tmp_path / "opinion-no-match.db")
+    article = reader.list_articles()[0]
+    candidate = BilibiliVideoCandidate(
+        video_id="BV1unrelated",
+        bvid="BV1unrelated",
+        url="https://www.bilibili.com/video/BV1unrelated",
+        title="不相关视频",
+        search_query="效果提升 70%",
+    )
+    references = FakeReferenceDiscovery(
+        ReferenceDiscoveryResult(
+            article_id=article.article.article_id,
+            snapshot_id=article.snapshot_id,
+            content_hash=article.content_hash,
+            plans=(
+                OpinionPlan(
+                    evidence_id=1,
+                    trigger_quote="厂商称效果提升 70%",
+                    question="效果提升是否可信？",
+                    queries=(SearchQuery("效果提升 70%", "寻找讨论"),),
+                ),
+            ),
+            candidates=(candidate,),
+            selections=(VideoSelection(candidate.video_id, "rejected", "只共享关键词"),),
+            status=ReferenceDiscoveryStatus.COMPLETED,
+            status_reason="no_matches",
+        )
+    )
+    collector = FakeCommentCollector()
+    service = OpinionAnalysisService(
+        store=reader.store,
+        analyzer=FakeOpinionAnalyzer(),
+        collector=collector,
+        reference_discovery_service=references,
+    )
+
+    report = service.request(article.article.article_id)
+    assert report.status_reason == "sample_empty"
+    assert report.reference_status_reason == "no_matches"
+    assert report.candidate_count == 1
+    assert report.sources[0].selection_reason == "只共享关键词"
+    assert collector.calls == 0
+    assert service.get_status(article.article.article_id).sources == report.sources
 
 
 def test_opinion_analysis_is_explicit_and_reuses_completed_result(tmp_path: Path) -> None:
@@ -774,6 +1113,43 @@ def test_opinion_request_returns_completed_empty_sample_without_analysis(tmp_pat
     assert collector.calls == 1
 
 
+def test_opinion_request_persists_successful_batches_after_analysis_timeout(tmp_path: Path):
+    class PartialBatchAnalyzer(FakeOpinionAnalyzer):
+        def analyze_comments(self, article, controversy_points, comments, timeout, *, run_id=None):
+            summary, _, uncertainties = super().analyze_comments(
+                article, controversy_points, comments, timeout, run_id=run_id
+            )
+            self.last_classifications = self.last_classifications[:1]
+            self.last_analyzed_comment_ids = [comments[0].comment_id]
+            self.last_analysis_errors = [OpinionTimeoutError("opinion_analysis")]
+            points = aggregate_opinion_points(
+                controversy_points,
+                self.last_classifications,
+                point_summaries={1: "已完成批次认可提升"},
+                representative_comment_ids={1: (comments[0].comment_id,)},
+            )
+            return summary, list(points), uncertainties
+
+    reader = _reader_service(tmp_path / "opinion-partial-batches.db")
+    article_id = reader.list_articles()[0].article.article_id
+    service = OpinionAnalysisService(
+        store=reader.store,
+        analyzer=PartialBatchAnalyzer(),
+        collector=FakeCommentCollector(),
+        comment_limit=10,
+    )
+    report = service.request(article_id)
+    persisted = service.get_status(article_id)
+    assert report == persisted
+    assert report.status is OpinionStatus.PARTIAL
+    assert report.status_reason == "timeout"
+    assert report.collected_count == 2
+    assert report.analyzed_count == 1
+    assert report.classified_count == 1
+    assert report.points[0].stance_counts["support"] == 1
+    assert report.errors[0].stage == "opinion_analysis"
+
+
 def test_opinion_request_persists_partial_classification_counts_from_relationships(
     tmp_path: Path,
 ) -> None:
@@ -872,6 +1248,41 @@ def test_unknown_planning_error_keeps_the_planning_stage(tmp_path: Path) -> None
     assert "规划器连接断开" in report.errors[0].message
 
 
+def test_reference_planning_failure_reports_unstarted_stages(tmp_path: Path) -> None:
+    reader = _external_reader_service(tmp_path / "opinion-reference-planning-error.db")
+    article = reader.list_articles()[0]
+    references = FakeReferenceDiscovery(
+        ReferenceDiscoveryResult(
+            article_id=article.article.article_id,
+            snapshot_id=article.snapshot_id,
+            content_hash=article.content_hash,
+            plans=(),
+            candidates=(),
+            status=ReferenceDiscoveryStatus.PARTIAL,
+            status_reason="planning_failed",
+            errors=("关键词生成失败：舆情提示的 trigger_quote 未出现在对应文章正文中",),
+        )
+    )
+    service = OpinionAnalysisService(
+        store=reader.store,
+        analyzer=FakeOpinionAnalyzer(),
+        collector=FakeCommentCollector(),
+        reference_discovery_service=references,
+        comment_limit=10,
+    )
+
+    report = service.request(article.article.article_id)
+
+    assert report.status is OpinionStatus.FAILED
+    assert report.status_reason == "planning_failed"
+    assert report.reference_status_reason == "planning_failed"
+    assert report.errors[0].stage == "opinion_planning"
+    assert report.errors[0].message == (
+        "文章检索计划校验失败：生成的原文引句无法与当前文章正文精确匹配。视频搜索和评论采集未开始。"
+    )
+    assert service.get_status(article.article.article_id).errors == report.errors
+
+
 def test_completed_opinion_run_requires_a_summary(tmp_path: Path) -> None:
     reader = _reader_service(tmp_path / "opinion-missing-summary.db")
     reader_article = reader.list_articles()[0]
@@ -964,7 +1375,8 @@ def test_persisted_points_without_relationships_do_not_supply_stance_counts() ->
         }
     )
 
-    assert report.points == ()
+    assert report.points[0].stance_counts == {"support": 0, "oppose": 0, "mixed": 0, "unclear": 0}
+    assert report.points[0].representative_comment_ids == ()
 
 
 def test_latest_empty_planning_result_supersedes_older_opinion_plan(tmp_path: Path) -> None:
@@ -1185,6 +1597,95 @@ def test_parse_comment_analysis_rejects_missing_point_summary() -> None:
             comments,
             run_id="run-1",
         )
+
+
+def test_parse_comment_analysis_merges_repeated_point_rows_from_model() -> None:
+    plan, comments = _classification_context()
+    comment_id = comments[0].comment_id
+    payload = {
+        "summary": "讨论了比较基线",
+        "classifications": [
+            {
+                "run_id": "run-1",
+                "evidence_id": 1,
+                "comment_id": comment_id,
+                "classification_status": "classified",
+                "stance": "oppose",
+                "error_code": None,
+            }
+        ],
+        "points": [
+            {
+                "evidence_id": 1,
+                "summary": "指出基线不明",
+                "representative_comment_ids": [comment_id],
+            },
+            {
+                "evidence_id": 1,
+                "summary": "要求补充测试条件",
+                "representative_comment_ids": [comment_id],
+            },
+        ],
+        "uncertainties": [],
+    }
+    result = parse_comment_analysis(
+        json.dumps(payload, ensure_ascii=False), [plan], comments, run_id="run-1"
+    )
+    assert result.point_summaries[1] == "指出基线不明；要求补充测试条件"
+    assert result.representative_comment_ids[1] == (comment_id,)
+
+
+def test_parse_comment_analysis_explains_empty_relationship_batch() -> None:
+    plan, comments = _classification_context()
+    result = parse_comment_analysis(
+        json.dumps(
+            {"summary": "无相关评论", "classifications": [], "points": [], "uncertainties": []},
+            ensure_ascii=False,
+        ),
+        [plan],
+        comments,
+        run_id="run-1",
+    )
+    assert result.point_summaries[1] == "本批评论未讨论该问题，无法判断立场。"
+
+
+def test_parse_comment_analysis_limits_model_representatives_to_five() -> None:
+    plan, sample = _classification_context()
+    comments = [
+        BilibiliComment(
+            f"reply-{index}",
+            sample[0].source_url,
+            "用户",
+            "讨论比较基线",
+            0,
+            project_now(),
+        )
+        for index in range(6)
+    ]
+    ids = [comment.comment_id for comment in comments]
+    payload = {
+        "summary": "讨论比较基线",
+        "classifications": [
+            {
+                "run_id": "run-1",
+                "evidence_id": 1,
+                "comment_id": comment_id,
+                "classification_status": "classified",
+                "stance": "oppose",
+                "error_code": None,
+            }
+            for comment_id in ids
+        ],
+        "points": [
+            {"evidence_id": 1, "summary": "质疑比较条件", "representative_comment_ids": ids}
+        ],
+        "uncertainties": [],
+    }
+    result = parse_comment_analysis(
+        json.dumps(payload, ensure_ascii=False), [plan], comments, run_id="run-1"
+    )
+    assert result.representative_comment_ids[1] == tuple(ids[:5])
+    assert len(result.classifications) == 6
 
 
 def test_request_rejects_a_run_from_an_old_article_snapshot(tmp_path: Path) -> None:

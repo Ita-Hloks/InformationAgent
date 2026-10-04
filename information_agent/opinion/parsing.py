@@ -12,6 +12,7 @@ from .models import (
     OpinionError,
     OpinionPoint,
     OpinionReport,
+    OpinionSource,
     OpinionStatus,
     aggregate_opinion_points,
 )
@@ -42,12 +43,16 @@ def parse_persisted_opinion_report(
         raise ValueError("舆情结果的 status 无效") from exc
 
     plans = tuple(_parse_plan(item) for item in _required_list(payload, "controversy_points"))
+    source_items = payload.get("sources", [])
+    if not isinstance(source_items, list):
+        raise ValueError("sources 必须是数组")
+    sources = tuple(_parse_source(item) for item in source_items)
     comments = tuple(_parse_comment(item) for item in _required_list(payload, "comments"))
     classifications = tuple(
         _parse_classification(item) for item in _required_list(payload, "classifications")
     )
     raw_points = tuple(_parse_point(item) for item in _required_list(payload, "points"))
-    if classifications:
+    if raw_points:
         point_summaries = {item.evidence_id: item.summary for item in raw_points}
         representative_comment_ids = {
             item.evidence_id: item.representative_comment_ids for item in raw_points
@@ -57,12 +62,12 @@ def parse_persisted_opinion_report(
                 plans,
                 classifications,
                 point_summaries=point_summaries,
-                representative_comment_ids=representative_comment_ids,
+                representative_comment_ids=representative_comment_ids if classifications else {},
             )
         except ValueError as exc:
             raise ValueError(f"持久化争议点聚合结果无效：{exc}") from exc
     else:
-        # 没有关系行时不保留模型提供的立场数量或代表评论。
+        # 尚未生成观点摘要的运行不构造空观点。
         points = ()
     errors = tuple(_parse_error(item) for item in _required_list(payload, "errors"))
     attempts = tuple(_parse_attempt(item) for item in _required_list(payload, "attempts"))
@@ -112,6 +117,9 @@ def parse_persisted_opinion_report(
         finished_at=_optional_string(payload.get("finished_at", finished_at)),
         last_heartbeat_at=_optional_string(payload.get("last_heartbeat_at")),
         controversy_points=plans,
+        reference_status_reason=_optional_string(payload.get("reference_status_reason")),
+        candidate_count=_nonnegative_int(payload.get("candidate_count", 0), "candidate_count"),
+        sources=sources,
         comments=comments,
         classifications=classifications,
         summary=summary,
@@ -119,6 +127,30 @@ def parse_persisted_opinion_report(
         uncertainties=uncertainties,
         errors=errors,
         attempts=attempts,
+    )
+
+
+def _parse_source(value: object) -> OpinionSource:
+    if not isinstance(value, Mapping):
+        raise ValueError("sources 中存在无效项目")
+    selection_reason = value.get("selection_reason", "")
+    if not isinstance(selection_reason, str):
+        raise ValueError("source.selection_reason 必须是字符串")
+    return OpinionSource(
+        url=_required_string(value.get("url"), "source.url"),
+        title=_required_string(value.get("title"), "source.title"),
+        decision=_required_string(value.get("decision"), "source.decision"),
+        selection_reason=selection_reason,
+        collection_status=_required_string(
+            value.get("collection_status"), "source.collection_status"
+        ),
+        collected_count=_nonnegative_int(value.get("collected_count"), "source.collected_count"),
+        visible_reply_count=_nonnegative_int(
+            value.get("visible_reply_count"), "source.visible_reply_count"
+        ),
+        latest_visible_comment_at=_optional_string(value.get("latest_visible_comment_at")),
+        window_start_at=_optional_string(value.get("window_start_at")),
+        error=_optional_string(value.get("error")),
     )
 
 

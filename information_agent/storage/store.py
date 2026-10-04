@@ -52,7 +52,15 @@ from .reader_automation import ReaderAutomationPersistenceMixin, _summary_error_
 _OPINION_STATUS_REASONS = {
     "completed": {"completed", "no_controversy_points", "sample_empty"},
     "partial": {"partial_collection", "partial_classification", "timeout", "retry_exhausted"},
-    "failed": {"timeout", "retry_exhausted", "stale_running", "failed"},
+    "failed": {
+        "timeout",
+        "retry_exhausted",
+        "stale_running",
+        "failed",
+        "planning_failed",
+        "search_failed",
+        "selection_failed",
+    },
 }
 _OPINION_STANCES = {"support", "oppose", "mixed", "unclear"}
 _OPINION_CLASSIFICATION_STATUSES = {"classified", "unclassified"}

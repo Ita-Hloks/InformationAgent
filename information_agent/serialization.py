@@ -165,6 +165,23 @@ def opinion_report_to_payload(report: Any) -> dict[str, Any]:
         "controversy_points": [
             _opinion_plan_to_payload(item) for item in report.controversy_points
         ],
+        "reference_status_reason": report.reference_status_reason,
+        "candidate_count": report.candidate_count,
+        "sources": [
+            {
+                "url": item.url,
+                "title": item.title,
+                "decision": item.decision,
+                "selection_reason": item.selection_reason,
+                "collection_status": item.collection_status,
+                "collected_count": item.collected_count,
+                "visible_reply_count": item.visible_reply_count,
+                "latest_visible_comment_at": item.latest_visible_comment_at,
+                "window_start_at": item.window_start_at,
+                "error": item.error,
+            }
+            for item in report.sources
+        ],
         "comments": [
             {
                 "comment_id": item.comment_id,

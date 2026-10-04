@@ -146,6 +146,28 @@ type OpinionReportPayload = {
   finished_at: string | null;
   last_heartbeat_at: string | null;
   controversy_points: Array<{ evidence_id: number; trigger_quote: string; question: string }>;
+  reference_status_reason: string | null;
+  candidate_count: number;
+  sources: Array<{
+    url: string;
+    title: string;
+    decision: string;
+    selection_reason: string;
+    collection_status: string;
+    collected_count: number;
+    visible_reply_count: number;
+    latest_visible_comment_at: string | null;
+    window_start_at: string | null;
+    error: string | null;
+  }>;
+  comments: Array<{
+    comment_id: string;
+    source_url: string;
+    author: string;
+    content: string;
+    likes: number;
+    published_at: string | null;
+  }>;
   summary: string;
   points: Array<{
     evidence_id: number;
@@ -363,6 +385,28 @@ function toOpinionReport(payload: OpinionReportPayload): OpinionReport {
       evidenceId: item.evidence_id,
       triggerQuote: item.trigger_quote,
       question: item.question,
+    })),
+    referenceStatusReason: payload.reference_status_reason,
+    candidateCount: payload.candidate_count,
+    sources: payload.sources.map(item => ({
+      url: item.url,
+      title: item.title,
+      decision: item.decision,
+      selectionReason: item.selection_reason,
+      collectionStatus: item.collection_status,
+      collectedCount: item.collected_count,
+      visibleReplyCount: item.visible_reply_count,
+      latestVisibleCommentAt: item.latest_visible_comment_at,
+      windowStartAt: item.window_start_at,
+      error: item.error,
+    })),
+    comments: payload.comments.map(item => ({
+      commentId: item.comment_id,
+      sourceUrl: item.source_url,
+      author: item.author,
+      content: item.content,
+      likes: item.likes,
+      publishedAt: item.published_at,
     })),
     summary: payload.summary,
     points: payload.points.map(item => ({

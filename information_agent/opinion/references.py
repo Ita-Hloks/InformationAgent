@@ -147,7 +147,9 @@ class ReferenceDiscoveryService:
         self.timeout_seconds = timeout_seconds
         self.clock = clock
 
-    def discover(self, article_id: str) -> ReferenceDiscoveryResult:
+    def discover(
+        self, article_id: str, *, deadline: float | None = None
+    ) -> ReferenceDiscoveryResult:
         article = self.store.get_reader_article(article_id)
         if article is None:
             raise OpinionArticleNotFoundError(f"不存在的文章：{article_id}")
@@ -156,7 +158,11 @@ class ReferenceDiscoveryService:
 
         snapshot_id = article.snapshot_id
         content_hash = article.content_hash
-        deadline = self.clock() + self.timeout_seconds
+        deadline = (
+            min(deadline, self.clock() + self.timeout_seconds)
+            if deadline is not None
+            else (self.clock() + self.timeout_seconds)
+        )
         try:
             planner = self.planner or LLMOpinionAnalyzer()
             plans = tuple(planner.extract_video_queries(article.article, self._remaining(deadline)))

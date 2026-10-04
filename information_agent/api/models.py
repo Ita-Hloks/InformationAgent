@@ -296,6 +296,9 @@ class OpinionResponse(BaseModel):
     finished_at: str | None
     last_heartbeat_at: str | None
     controversy_points: list[dict[str, object]]
+    reference_status_reason: str | None
+    candidate_count: int
+    sources: list[dict[str, object]]
     comments: list[dict[str, object]]
     classifications: list[dict[str, object]]
     summary: str

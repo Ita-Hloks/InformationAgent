@@ -136,6 +136,15 @@ export type OpinionPoint = {
   representativeCommentIds: string[];
 };
 
+export type OpinionComment = {
+  commentId: string;
+  sourceUrl: string;
+  author: string;
+  content: string;
+  likes: number;
+  publishedAt: string | null;
+};
+
 export type OpinionReport = {
   productName: string;
   articleId: string;
@@ -161,6 +170,21 @@ export type OpinionReport = {
     triggerQuote: string;
     question: string;
   }>;
+  referenceStatusReason: string | null;
+  candidateCount: number;
+  sources: Array<{
+    url: string;
+    title: string;
+    decision: string;
+    selectionReason: string;
+    collectionStatus: string;
+    collectedCount: number;
+    visibleReplyCount: number;
+    latestVisibleCommentAt: string | null;
+    windowStartAt: string | null;
+    error: string | null;
+  }>;
+  comments: OpinionComment[];
   summary: string;
   points: OpinionPoint[];
   uncertainties: string[];

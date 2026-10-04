@@ -300,7 +300,12 @@ export function ReaderWorkspacePage() {
     setOpinionError(null);
     setOpinionStarting(true);
     try {
-      setOpinionReport(await runArticleOpinion(selectedArticleId));
+      setOpinionReport(
+        await runArticleOpinion(
+          selectedArticleId,
+          opinionReport !== null && opinionReport.status !== "not_requested",
+        ),
+      );
       setApiStatus("connected");
     } catch (error) {
       setOpinionError(error instanceof Error ? error.message : "舆情分析启动失败");
@@ -308,7 +313,7 @@ export function ReaderWorkspacePage() {
     } finally {
       setOpinionStarting(false);
     }
-  }, [opinionReport?.status, opinionStarting, selectedArticleId]);
+  }, [opinionReport, opinionStarting, selectedArticleId]);
 
   const syncArticleResearchStatus = useCallback((run: ArticleResearchRun) => {
     setArticles(current =>

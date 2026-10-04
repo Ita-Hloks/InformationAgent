@@ -5,6 +5,8 @@ import math
 import os
 import time
 from collections.abc import Callable
+from dataclasses import asdict, replace
+from itertools import zip_longest
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -30,6 +32,7 @@ from .models import (
     ClassificationStatus,
     OpinionPoint,
     OpinionReport,
+    OpinionSource,
     OpinionStatus,
     aggregate_opinion_points,
 )
@@ -168,6 +171,9 @@ class OpinionAnalysisService:
         deadline = self.clock() + self.timeout_seconds
         controversy_points: list[OpinionPlan] = list(stored_plans)
         discovered_candidates: list[BilibiliVideoCandidate] = []
+        reference_status_reason: str | None = None
+        candidate_count = 0
+        sources: list[OpinionSource] = []
         use_reference_discovery = not _is_bilibili_source(article.article.source_url)
         comments: list[BilibiliComment] = []
         points: list[OpinionPoint] = []
@@ -186,19 +192,56 @@ class OpinionAnalysisService:
             analyzer = self.analyzer
             if use_reference_discovery:
                 current_stage = "opinion_planning"
-                reference_result = self._discover_references(article_id)
+                reference_result = self._discover_references(article_id, deadline)
                 _validate_reference_result(reference_result, identity)
+                reference_status_reason = reference_result.status_reason
+                candidate_count = len(reference_result.candidates)
+                selections = {item.video_id: item for item in reference_result.selections}
+                sources = []
+                for item in reference_result.candidates:
+                    selection = selections.get(item.video_id)
+                    sources.append(
+                        OpinionSource(
+                            url=item.url,
+                            title=item.title,
+                            decision=(
+                                selection.decision
+                                if selection
+                                else "selection_failed"
+                                if reference_result.status_reason == "selection_failed"
+                                else "not_selected"
+                            ),
+                            selection_reason=selection.reason if selection else "",
+                        )
+                    )
                 controversy_points = list(reference_result.plans)
                 discovered_candidates = list(reference_result.selected_candidates)
-                if reference_result.status_reason == "selection_failed":
-                    raise OpinionResponseError("视频相关性筛选失败", "", code="selection_failed")
-                if reference_result.errors:
-                    uncertainties.extend(reference_result.errors)
-                if reference_result.status.value == "partial" and not controversy_points:
+                if reference_result.status_reason in {
+                    "planning_failed",
+                    "search_failed",
+                    "selection_failed",
+                }:
                     raise OpinionResponseError(
-                        "文章舆情关键词或视频搜索失败",
+                        _reference_failure_message(
+                            reference_result.status_reason,
+                            reference_result.errors,
+                        ),
                         "",
                         code="planning_response_invalid",
+                        stage=_reference_failure_stage(reference_result.status_reason),
+                        status_reason=reference_result.status_reason,
+                    )
+                if reference_result.errors:
+                    uncertainties.extend(reference_result.errors)
+                    status = OpinionStatus.PARTIAL
+                    status_reason = "partial_collection"
+                if reference_result.status.value == "partial" and not controversy_points:
+                    raise OpinionResponseError(
+                        "文章检索计划未形成可执行结果。视频搜索和评论采集未开始。",
+                        "",
+                        code="planning_response_invalid",
+                        stage="opinion_planning",
+                        status_reason="planning_failed",
                     )
             elif not controversy_points:
                 current_stage = "opinion_planning"
@@ -231,31 +274,53 @@ class OpinionAnalysisService:
                         clock=self.clock,
                         heartbeat=lambda: self._heartbeat(run.id, attempts),
                         attempts=attempts,
+                        errors=errors,
+                        sources=sources,
                     )
                 elif not use_reference_discovery:
-                    comments = _collect_comments(
-                        self.collector,
-                        article.article.source_url,
-                        window_hours=OPINION_WINDOW_HOURS,
-                        limit=self.comment_limit,
-                        timeout=self._remaining(deadline),
-                        deadline=deadline,
-                        clock=self.clock,
-                        heartbeat=lambda: self._heartbeat(run.id, attempts),
-                        attempts=attempts,
-                    )
+                    sources = [
+                        OpinionSource(
+                            url=article.article.source_url,
+                            title=article.article.title,
+                            decision="direct",
+                        )
+                    ]
+                    try:
+                        comments = _collect_comments(
+                            self.collector,
+                            article.article.source_url,
+                            window_hours=OPINION_WINDOW_HOURS,
+                            limit=self.comment_limit,
+                            timeout=self._remaining(deadline),
+                            deadline=deadline,
+                            clock=self.clock,
+                            heartbeat=lambda: self._heartbeat(run.id, attempts),
+                            attempts=attempts,
+                        )
+                    except Exception as exc:
+                        sources[0] = replace(sources[0], collection_status="failed", error=str(exc))
+                        raise
+                    sources[0] = _source_after_collection(sources[0], self.collector, comments)
                 if not comments:
-                    if use_reference_discovery:
+                    if errors:
+                        summary = "评论采集失败，未取得可分析的样本。"
+                        status = OpinionStatus.FAILED
+                        status_reason = "failed"
+                    elif use_reference_discovery and not discovered_candidates:
                         summary = "未找到可用于采集评论的哔哩哔哩视频。"
                         uncertainties.append("未找到匹配视频，无法形成评论样本。")
                     else:
                         summary = "最近 72 小时未获取到可分析的哔哩哔哩评论。"
                         uncertainties.append("样本为空，不能代表总体民意。")
-                    status_reason = "sample_empty"
+                    if not errors and status is OpinionStatus.COMPLETED:
+                        status_reason = "sample_empty"
                 else:
+                    if errors:
+                        status = OpinionStatus.PARTIAL
+                        status_reason = "partial_collection"
+                        uncertainties.append("部分视频采集失败，结论仅覆盖已取得的评论样本。")
                     current_stage = "opinion_analysis"
                     analyzable_comments = comments[:MAX_OPINION_COMMENTS]
-                    analyzed_count = len(analyzable_comments)
                     if self.analyzer is None:
                         analyzer = LLMOpinionAnalyzer(clock=self.clock)
                     summary, points, analyzer_uncertainties = _analyze_comments(
@@ -269,8 +334,32 @@ class OpinionAnalysisService:
                         clock=self.clock,
                         heartbeat=lambda: self._heartbeat(run.id, attempts),
                         attempts=attempts,
+                        video_context=[
+                            {"url": item.url, "title": item.title, "description": item.snippet}
+                            for item in discovered_candidates
+                        ],
+                    )
+                    analyzed_count = len(
+                        getattr(
+                            analyzer,
+                            "last_analyzed_comment_ids",
+                            [item.comment_id for item in analyzable_comments],
+                        )
                     )
                     uncertainties.extend(analyzer_uncertainties)
+                    analysis_errors = getattr(analyzer, "last_analysis_errors", ())
+                    if analysis_errors:
+                        errors.extend(
+                            _error_payload_from_exception(exc, fallback_stage="opinion_analysis")
+                            for exc in analysis_errors
+                        )
+                        status = OpinionStatus.PARTIAL
+                        status_reason = (
+                            "timeout"
+                            if any(isinstance(exc, OpinionTimeoutError) for exc in analysis_errors)
+                            else "partial_classification"
+                        )
+                        uncertainties.append("部分评论批次分析失败，统计仅覆盖已分析样本。")
                     maybe_classifications = getattr(analyzer, "last_classifications", ())
                     classifications = list(maybe_classifications)
                     _validate_analysis_result(
@@ -291,7 +380,7 @@ class OpinionAnalysisService:
             error_stage = str(getattr(exc, "stage", "") or current_stage or "unknown")
             errors.append(_error_payload_from_exception(exc, fallback_stage=error_stage))
             collector_comments = getattr(self.collector, "last_comments", ())
-            if not comments and collector_comments:
+            if not use_reference_discovery and not comments and collector_comments:
                 comments = list(collector_comments)
             has_partial_result = bool(comments or classifications)
             status_reason = _status_reason_from_exception(
@@ -317,6 +406,9 @@ class OpinionAnalysisService:
             summary=summary,
             controversy_points=controversy_points,
             comments=comments,
+            reference_status_reason=reference_status_reason,
+            candidate_count=candidate_count,
+            sources=sources,
             analyzed_count=analyzed_count,
             classifications=classifications,
             points=points,
@@ -341,7 +433,7 @@ class OpinionAnalysisService:
             raise OpinionTimeoutError("opinion")
         return remaining
 
-    def _discover_references(self, article_id: str):
+    def _discover_references(self, article_id: str, deadline: float):
         discovery = self.reference_discovery_service
         if discovery is None:
             from .references import ReferenceDiscoveryService
@@ -351,7 +443,9 @@ class OpinionAnalysisService:
                 timeout_seconds=self.timeout_seconds,
                 clock=self.clock,
             )
-        return discovery.discover(article_id)
+        return discovery.discover(
+            article_id, **_supported_keywords(discovery.discover, deadline=deadline)
+        )
 
     def _heartbeat(self, run_id: str, attempts: list[Attempt]) -> None:
         self.store.heartbeat_opinion_run(
@@ -459,7 +553,7 @@ def _validate_analysis_result(
 ) -> None:
     if not isinstance(summary, str) or not summary.strip():
         raise OpinionResponseError("评论分析缺少摘要", "", code="analysis_response_invalid")
-    if not isinstance(classifications, (list, tuple)) or not classifications:
+    if not isinstance(classifications, (list, tuple)):
         raise OpinionResponseError(
             "评论分析未返回任何争议点-评论关系",
             "",
@@ -595,48 +689,102 @@ def _collect_discovered_comments(
     clock: Clock,
     heartbeat: Callable[[], None],
     attempts: list[Attempt],
+    errors: list[dict[str, object]],
+    sources: list[OpinionSource] | None = None,
 ) -> list[BilibiliComment]:
-    comments: list[BilibiliComment] = []
-    seen_video_ids: set[str] = set()
+    if sources is None:
+        sources = [
+            OpinionSource(url=item.url, title=item.title, decision="selected")
+            for item in candidates
+        ]
+    batches: list[list[BilibiliComment]] = []
     seen_comment_ids: set[str] = set()
-    for candidate in candidates:
-        if len(comments) >= limit:
+    collected_count = 0
+    for index, candidate in enumerate(candidates):
+        if collected_count >= limit:
             break
-        if candidate.video_id in seen_video_ids:
-            continue
-        seen_video_ids.add(candidate.video_id)
+        quota = math.ceil((limit - collected_count) / (len(candidates) - index))
         remaining = remaining_time(deadline, clock=clock)
         if remaining <= 0:
-            raise OpinionTimeoutError("comment_collection")
-        collected = _collect_comments(
-            collector,
-            candidate.url,
-            window_hours=window_hours,
-            limit=limit - len(comments),
-            timeout=min(timeout, remaining),
-            deadline=deadline,
-            clock=clock,
-            heartbeat=heartbeat,
-            attempts=attempts,
-        )
-        for comment in collected:
+            source_index = next(i for i, item in enumerate(sources) if item.url == candidate.url)
+            sources[source_index] = replace(
+                sources[source_index], collection_status="failed", error="评论采集超时"
+            )
+            errors.append(
+                _error_payload_from_exception(
+                    OpinionTimeoutError("comment_collection"), fallback_stage="comment_collection"
+                )
+            )
+            break
+        # 为其余视频和观点分析保留预算，避免一个目标耗尽整个运行。
+        stage_timeout = min(timeout, remaining / (len(candidates) - index + 1))
+        try:
+            collected = _collect_comments(
+                collector,
+                candidate.url,
+                window_hours=window_hours,
+                limit=quota,
+                timeout=stage_timeout,
+                deadline=clock() + stage_timeout,
+                clock=clock,
+                heartbeat=heartbeat,
+                attempts=attempts,
+            )
+        except Exception as exc:
+            error = _error_payload_from_exception(exc, fallback_stage="comment_collection")
+            error["message"] = f"{candidate.url}：{error['message']}"
+            errors.append(error)
+            collected = [
+                item
+                for item in getattr(collector, "last_comments", ())
+                if item.source_url.split("#", 1)[0] == candidate.url
+            ]
+            collection_error = str(exc)
+        else:
+            collection_error = None
+        batch: list[BilibiliComment] = []
+        for comment in collected[:quota]:
             comment_id = f"{candidate.video_id}:{comment.comment_id}"
             if comment_id in seen_comment_ids:
                 continue
             seen_comment_ids.add(comment_id)
-            comments.append(
-                BilibiliComment(
+            batch.append(
+                replace(
+                    comment,
                     comment_id=comment_id,
-                    source_url=f"{candidate.url}#{comment_id}",
-                    author=comment.author,
-                    content=comment.content,
-                    likes=comment.likes,
-                    published_at=comment.published_at,
                 )
             )
-            if len(comments) >= limit:
-                break
-    return comments
+        collected_count += len(batch)
+        batches.append(batch)
+        source_index = next(i for i, item in enumerate(sources) if item.url == candidate.url)
+        sources[source_index] = _source_after_collection(
+            sources[source_index], collector, batch, error=collection_error
+        )
+    # 交错排列，后续100条分析上限不会只覆盖第一个视频。
+    return [item for row in zip_longest(*batches) for item in row if item is not None]
+
+
+def _source_after_collection(
+    source: OpinionSource,
+    collector: CommentCollector,
+    comments: list[BilibiliComment],
+    *,
+    error: str | None = None,
+) -> OpinionSource:
+    scan = getattr(collector, "last_scan", None)
+    observed = scan if isinstance(scan, dict) and scan.get("source_url") == source.url else {}
+    status = observed.get("collection_status") or (
+        "collected" if comments else "no_sample_observed"
+    )
+    return replace(
+        source,
+        collection_status="failed" if error else str(status),
+        collected_count=len(comments),
+        visible_reply_count=int(observed.get("visible_reply_count") or 0),
+        latest_visible_comment_at=observed.get("latest_visible_comment_at"),
+        window_start_at=observed.get("window_start_at"),
+        error=error,
+    )
 
 
 def _validate_reference_result(
@@ -697,6 +845,7 @@ def _analyze_comments(
     clock: Clock,
     heartbeat: Callable[[], None],
     attempts: list[Attempt],
+    video_context: list[dict[str, object]],
 ) -> tuple[str, list[OpinionPoint], list[str]]:
     method = analyzer.analyze_comments
     kwargs = _supported_keywords(
@@ -704,6 +853,7 @@ def _analyze_comments(
         run_id=run_id,
         deadline=deadline,
         heartbeat=heartbeat,
+        video_context=video_context,
     )
     return _invoke_stage(
         analyzer,
@@ -807,6 +957,9 @@ def _result_payload(
     summary: str,
     controversy_points: list[OpinionPlan],
     comments: list[BilibiliComment],
+    reference_status_reason: str | None,
+    candidate_count: int,
+    sources: list[OpinionSource],
     analyzed_count: int,
     classifications: list[Classification],
     points: list[OpinionPoint],
@@ -838,6 +991,9 @@ def _result_payload(
         "finished_at": None,
         "last_heartbeat_at": None,
         "controversy_points": [_plan_payload(item) for item in controversy_points],
+        "reference_status_reason": reference_status_reason,
+        "candidate_count": candidate_count,
+        "sources": [asdict(item) for item in sources],
         "comments": [_comment_payload(item) for item in comments],
         "classifications": [_classification_payload(item) for item in classifications],
         "summary": summary,
@@ -941,6 +1097,9 @@ def _status_reason_from_exception(
     has_partial_result: bool,
     fallback_stage: str = "unknown",
 ) -> str:
+    explicit_reason = getattr(error, "status_reason", None)
+    if explicit_reason in {"planning_failed", "search_failed", "selection_failed"}:
+        return explicit_reason
     code = str(getattr(error, "code", "failed"))
     if isinstance(error, TimeoutError) or code == "timeout":
         return "timeout"
@@ -954,6 +1113,31 @@ def _status_reason_from_exception(
     if stage in {"opinion_planning", "opinion_analysis", "classification"}:
         return "partial_classification"
     return "failed"
+
+
+def _reference_failure_stage(status_reason: str) -> str:
+    return {
+        "planning_failed": "opinion_planning",
+        "search_failed": "video_search",
+        "selection_failed": "video_selection",
+    }.get(status_reason, "opinion_planning")
+
+
+def _reference_failure_message(status_reason: str, errors: tuple[str, ...]) -> str:
+    detail = "；".join(error for error in errors if error).strip()
+    for prefix in ("关键词生成失败：", "视频搜索失败：", "视频筛选失败："):
+        if detail.startswith(prefix):
+            detail = detail[len(prefix) :].strip()
+            break
+    if status_reason == "planning_failed":
+        if "trigger_quote" in detail or "原文锚点" in detail:
+            detail = "生成的原文引句无法与当前文章正文精确匹配"
+        return f"文章检索计划校验失败：{detail or '未返回具体原因'}。视频搜索和评论采集未开始。"
+    if status_reason == "search_failed":
+        return f"B站视频搜索失败：{detail or '未返回具体原因'}。视频筛选和评论采集未开始。"
+    if status_reason == "selection_failed":
+        return f"B站视频相关性筛选失败：{detail or '未返回具体原因'}。评论采集未开始。"
+    return detail or "舆情检索阶段失败。"
 
 
 def _record_error_payloads(record: OpinionRunRecord) -> list[dict[str, object]]:
